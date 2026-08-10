@@ -1,0 +1,102 @@
+import Foundation
+
+/// 図面ドキュメント。エンティティとレイヤを保持する。
+/// スレッド安全性はM1では「メインスレッドからのみ触る」規約で担保する。
+public final class Document {
+    public private(set) var layers: [Layer]
+    public private(set) var entities: [Entity]
+    public var currentLayerID: LayerID
+
+    /// 変更通知(再描画トリガ用)。UIが差し替える。
+    public var onChange: (() -> Void)?
+
+    public init() {
+        let set = DefaultLayers.standardSet()
+        self.layers = set
+        self.entities = []
+        // 既定カレントは「基本作図」
+        self.currentLayerID = set.first(where: { $0.name == "基本作図" })?.id ?? set[0].id
+    }
+
+    // MARK: - 参照
+
+    public func layer(id: LayerID) -> Layer? {
+        layers.first(where: { $0.id == id })
+    }
+
+    public func entity(id: EntityID) -> Entity? {
+        entities.first(where: { $0.id == id })
+    }
+
+    public var bounds: BBox {
+        var box = BBox.empty
+        for e in entities { box.union(e.bounds) }
+        return box
+    }
+
+    // MARK: - 変更(CommandStack経由で呼ばれる想定。直接呼んでも動く)
+
+    public func add(_ entity: Entity) {
+        entities.append(entity)
+        onChange?()
+    }
+
+    public func remove(id: EntityID) -> Entity? {
+        guard let idx = entities.firstIndex(where: { $0.id == id }) else { return nil }
+        let removed = entities.remove(at: idx)
+        onChange?()
+        return removed
+    }
+
+    public func replace(_ entity: Entity) {
+        guard let idx = entities.firstIndex(where: { $0.id == entity.id }) else { return }
+        entities[idx] = entity
+        onChange?()
+    }
+
+    public func updateLayer(_ layer: Layer) {
+        guard let idx = layers.firstIndex(where: { $0.id == layer.id }) else { return }
+        layers[idx] = layer
+        onChange?()
+    }
+
+    // MARK: - デモ用サンプル(M1動作確認)
+
+    /// 機械室風のサンプル図形を配置する(10m×8mの部屋+機器+配管ライン)
+    public func loadDemoContent() {
+        guard let base = layers.first(where: { $0.name == "基本作図" }),
+              let pipe = layers.first(where: { $0.name == "空調配管" }) else { return }
+
+        func line(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double, _ layer: Layer) {
+            entities.append(Entity(layerID: layer.id,
+                                   kind: .line(a: Vec2(x1, y1), b: Vec2(x2, y2))))
+        }
+
+        // 部屋の外形 10,000×8,000
+        line(0, 0, 10000, 0, base)
+        line(10000, 0, 10000, 8000, base)
+        line(10000, 8000, 0, 8000, base)
+        line(0, 8000, 0, 0, base)
+        // 間仕切り
+        line(6000, 0, 6000, 8000, base)
+        // 機器(AC-1) 1,500×900 @ (1000, 5500)
+        line(1000, 5500, 2500, 5500, base)
+        line(2500, 5500, 2500, 6400, base)
+        line(2500, 6400, 1000, 6400, base)
+        line(1000, 6400, 1000, 5500, base)
+        // 冷温水配管(往復)
+        line(2500, 6100, 8000, 6100, pipe)
+        line(8000, 6100, 8000, 2000, pipe)
+        line(2500, 5800, 7700, 5800, pipe)
+        line(7700, 5800, 7700, 2000, pipe)
+        // バルブ位置の円
+        entities.append(Entity(layerID: pipe.id, kind: .circle(center: Vec2(4000, 6100), radius: 60)))
+        entities.append(Entity(layerID: pipe.id, kind: .circle(center: Vec2(4000, 5800), radius: 60)))
+        // 注記
+        entities.append(Entity(layerID: base.id,
+                               kind: .text(position: Vec2(1100, 6600), content: "AC-1", height: 3.5, angle: 0)))
+        entities.append(Entity(layerID: pipe.id,
+                               kind: .text(position: Vec2(4300, 6350), content: "50A 冷温水(往)", height: 3.0, angle: 0)))
+        onChange?()
+    }
+}

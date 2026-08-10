@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MepCad 画面モックアップ v0.4 — 右クリックメニュー</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+    background: linear-gradient(135deg, #5b7fb9 0%, #8aa8d8 30%, #d9a8b8 65%, #e8c9a0 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px; gap: 12px;
+  }
+  .caption { color: rgba(255,255,255,.85); font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.2); }
+
+  /* ===== macOS window ===== */
+  .window {
+    width: min(1280px, 100%); height: min(800px, calc(100vh - 90px));
+    border-radius: 14px; overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,.4), 0 0 0 .5px rgba(255,255,255,.4) inset;
+    display: flex; flex-direction: column;
+    background: rgba(245,246,248,.68);
+    backdrop-filter: blur(28px) saturate(1.5);
+  }
+
+  /* ===== toolbar ===== */
+  .toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px;
+    background: rgba(255,255,255,.42);
+    backdrop-filter: blur(30px) saturate(1.6);
+    border-bottom: .5px solid rgba(0,0,0,.12);
+    flex-shrink: 0;
+  }
+  .traffic { display: flex; gap: 8px; margin-right: 6px; }
+  .traffic span { width: 12px; height: 12px; border-radius: 50%; display: block; box-shadow: inset 0 0 1px rgba(0,0,0,.25); }
+  .t-close { background: #ff5f57; } .t-min { background: #febc2e; } .t-max { background: #28c840; }
+  .tb-group {
+    display: flex; gap: 2px; padding: 3px;
+    background: rgba(255,255,255,.5); border-radius: 9px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08), inset 0 0 0 .5px rgba(255,255,255,.6);
+  }
+  .tb-btn {
+    min-width: 34px; height: 30px; padding: 0 8px; border: none; border-radius: 7px;
+    background: transparent; font-size: 15px; color: #333; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 4px;
+  }
+  .tb-btn:hover { background: rgba(0,0,0,.07); }
+  .tb-btn.small { font-size: 12px; }
+  .win-title { margin-left: auto; margin-right: auto; font-size: 13px; font-weight: 600; color: #444;
+    position: absolute; left: 50%; transform: translateX(-50%); pointer-events: none; }
+  .toolbar { position: relative; }
+  .spacer { flex: 1; }
+
+  /* ===== drawing tabs ===== */
+  .doc-tabs {
+    display: flex; gap: 6px; padding: 5px 12px 0;
+    background: rgba(235,237,240,.55); border-bottom: .5px solid rgba(0,0,0,.1); flex-shrink: 0;
+  }
+  .doc-tab {
+    padding: 5px 16px 6px; font-size: 12px; color: #666;
+    border-radius: 8px 8px 0 0; background: rgba(255,255,255,.25); cursor: pointer;
+    border: .5px solid rgba(0,0,0,.06); border-bottom: none;
+  }
+  .doc-tab.active { background: rgba(255,255,255,.85); color: #1a1a1a; font-weight: 600; }
+
+  /* ===== main layout ===== */
+  .main { flex: 1; display: flex; min-height: 0; position: relative; }
+
+  /* ===== auto-hide panels (Dock-style) ===== */
+  .panel {
+    position: absolute; top: 10px; bottom: 10px; z-index: 40;
+    border-radius: 14px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.22), 0 0 0 .5px rgba(255,255,255,.5) inset;
+    transition: transform .28s cubic-bezier(.32,.72,.35,1), opacity .28s;
+  }
+  .panel.left { left: 10px; }
+  .panel.right { right: 10px; }
+  .panel.left.hidden { transform: translateX(calc(-100% - 14px)); opacity: 0; }
+  .panel.right.hidden { transform: translateX(calc(100% + 14px)); opacity: 0; }
+  .edge-zone { position: absolute; top: 0; bottom: 0; width: 16px; z-index: 39; }
+  .edge-zone.left { left: 0; } .edge-zone.right { right: 0; }
+  .edge-hint {
+    position: absolute; top: 50%; transform: translateY(-50%); z-index: 38;
+    width: 5px; height: 72px; border-radius: 999px;
+    background: rgba(0,0,0,.18); backdrop-filter: blur(8px);
+    transition: opacity .3s; pointer-events: none;
+  }
+  .edge-hint.left { left: 4px; } .edge-hint.right { right: 4px; }
+  .edge-hint.off { opacity: 0; }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px 0;
+  }
+  .panel-head .ttl { font-size: 11px; font-weight: 700; color: #555; }
+  .pin {
+    width: 24px; height: 24px; border: none; border-radius: 6px; cursor: pointer;
+    background: transparent; font-size: 12px; color: #999;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pin:hover { background: rgba(0,0,0,.07); }
+  .pin.on { color: #0055c0; background: rgba(0,102,214,.13); }
+
+  /* ===== tool palette (left) ===== */
+  .palette {
+    width: 208px; display: flex; flex-direction: column;
+    background: rgba(250,250,252,.72); backdrop-filter: blur(28px) saturate(1.4);
+    overflow: hidden;
+  }
+  .cat-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; padding: 8px 8px 4px; }
+  .cat {
+    padding: 6px 0 4px; text-align: center; font-size: 10px; color: #555; cursor: pointer;
+    border-radius: 8px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  .cat .ic { font-size: 15px; }
+  .cat.active { background: rgba(0,102,214,.14); color: #0055c0; font-weight: 700; }
+  .cat:hover:not(.active) { background: rgba(0,0,0,.05); }
+  .tool-list { flex: 1; overflow-y: auto; padding: 6px 10px 10px; }
+  .tool-sec { font-size: 10px; font-weight: 700; color: #888; margin: 10px 2px 5px; letter-spacing: .05em; }
+  .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .tool {
+    padding: 8px 6px; font-size: 11px; color: #333; text-align: center; cursor: pointer;
+    background: rgba(255,255,255,.65); border-radius: 8px;
+    border: .5px solid rgba(0,0,0,.06); box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .tool .ic { font-size: 16px; }
+  .tool:hover { background: rgba(255,255,255,.95); }
+  .tool.active { background: rgba(0,102,214,.9); color: #fff; border-color: transparent; }
+
+  /* ===== canvas ===== */
+  .canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #fdfdfd; cursor: none; }
+  svg.drawing { position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* crosshair */
+  .xhair-h, .xhair-v { position: absolute; pointer-events: none; background: rgba(20,20,20,.75); z-index: 20; }
+  .xhair-h { height: 1px; left: 0; right: 0; }
+  .xhair-v { width: 1px; top: 0; bottom: 0; }
+  .pickbox {
+    position: absolute; width: 10px; height: 10px; pointer-events: none; z-index: 21;
+    border: 1.5px solid rgba(20,20,20,.9); background: transparent;
+    transform: translate(-50%, -50%);
+  }
+  .snapmark {
+    position: absolute; width: 14px; height: 14px; pointer-events: none; z-index: 19;
+    border: 2px solid #e8a000; transform: translate(-50%, -50%) rotate(45deg);
+    display: none;
+  }
+  .coach {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(30,30,34,.72); color: #fff; backdrop-filter: blur(16px);
+    font-size: 11.5px; padding: 7px 16px; border-radius: 999px; z-index: 30; pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  }
+  .coach b { color: #ffd479; font-weight: 600; }
+
+  /* ===== property panel (right) ===== */
+  .props {
+    width: 236px; overflow-y: auto;
+    background: rgba(250,250,252,.72); backdrop-filter: blur(28px) saturate(1.4);
+    padding: 0 12px 12px;
+  }
+  .props h3 { font-size: 12px; color: #1a1a1a; margin-bottom: 2px; }
+  .props .sub { font-size: 10px; color: #888; margin-bottom: 10px; }
+  .card {
+    background: rgba(255,255,255,.72); border-radius: 10px; padding: 10px;
+    border: .5px solid rgba(0,0,0,.06); box-shadow: 0 1px 3px rgba(0,0,0,.05); margin-bottom: 10px;
+  }
+  .card h4 { font-size: 10px; color: #888; font-weight: 700; margin-bottom: 7px; letter-spacing: .04em; }
+  .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .row:last-child { margin-bottom: 0; }
+  .row label { font-size: 11px; color: #444; }
+  .val {
+    font-size: 11px; color: #111; background: rgba(0,0,0,.05); padding: 3px 10px;
+    border-radius: 6px; min-width: 74px; text-align: center;
+  }
+  .val.link { color: #0055c0; }
+  .seg { display: flex; background: rgba(0,0,0,.06); border-radius: 7px; padding: 2px; }
+  .seg span { font-size: 10.5px; padding: 3px 10px; border-radius: 5px; color: #555; cursor: pointer; }
+  .seg span.on { background: #fff; color: #111; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+
+  /* ===== color swatches ===== */
+  .swatches { display: flex; gap: 4px; align-items: center; }
+  .sw {
+    width: 16px; height: 16px; border-radius: 5px; cursor: pointer;
+    box-shadow: inset 0 0 0 .5px rgba(0,0,0,.2);
+  }
+  .sw.on { outline: 2px solid #0055c0; outline-offset: 1.5px; }
+  .sw.more { background: rgba(0,0,0,.06); color: #666; font-size: 11px; display: flex; align-items: center; justify-content: center; }
+
+  /* ===== settings modal ===== */
+  .modal-ov {
+    position: absolute; inset: 0; z-index: 100; display: none;
+    background: rgba(0,0,0,.18); align-items: center; justify-content: center;
+  }
+  .modal-ov.open { display: flex; }
+  .settings {
+    width: 620px; max-width: 92%; height: 430px; max-height: 86%;
+    border-radius: 14px; overflow: hidden; display: flex; flex-direction: column;
+    background: rgba(246,247,249,.88); backdrop-filter: blur(40px) saturate(1.5);
+    box-shadow: 0 24px 70px rgba(0,0,0,.35), 0 0 0 .5px rgba(255,255,255,.5) inset;
+  }
+  .settings-title {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border-bottom: .5px solid rgba(0,0,0,.1); flex-shrink: 0;
+  }
+  .settings-title .traffic span { width: 11px; height: 11px; }
+  .settings-title b { font-size: 13px; color: #333; position: absolute; left: 50%; transform: translateX(-50%); }
+  .settings-title { position: relative; }
+  .settings-body { flex: 1; display: flex; min-height: 0; }
+  .set-side {
+    width: 148px; flex-shrink: 0; padding: 10px 8px; overflow-y: auto;
+    border-right: .5px solid rgba(0,0,0,.1); background: rgba(240,241,244,.5);
+  }
+  .set-item {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px;
+    font-size: 12px; color: #333; cursor: pointer; margin-bottom: 2px;
+  }
+  .set-item .ic { font-size: 14px; width: 18px; text-align: center; }
+  .set-item.active { background: rgba(0,102,214,.9); color: #fff; }
+  .set-item:hover:not(.active) { background: rgba(0,0,0,.06); }
+  .set-content { flex: 1; padding: 18px 22px; overflow-y: auto; }
+  .set-content h3 { font-size: 13px; color: #222; margin-bottom: 14px; }
+  .set-group {
+    background: rgba(255,255,255,.75); border-radius: 10px; padding: 4px 14px;
+    border: .5px solid rgba(0,0,0,.06); margin-bottom: 14px;
+  }
+  .set-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 0; font-size: 12px; color: #333;
+    border-bottom: .5px solid rgba(0,0,0,.07);
+  }
+  .set-row:last-child { border-bottom: none; }
+  .set-note { font-size: 10.5px; color: #999; margin: -6px 2px 12px; }
+  .bg-sw { width: 26px; height: 26px; border-radius: 8px; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
+  .bg-sw.on { outline: 2px solid #0055c0; outline-offset: 2px; }
+
+  /* ===== context menu ===== */
+  .ctx {
+    position: absolute; z-index: 60; min-width: 216px; display: none;
+    background: rgba(246,247,249,.86); backdrop-filter: blur(36px) saturate(1.5);
+    border-radius: 11px; padding: 5px;
+    box-shadow: 0 14px 44px rgba(0,0,0,.28), 0 0 0 .5px rgba(255,255,255,.55) inset, 0 0 0 .5px rgba(0,0,0,.12);
+    font-size: 12.5px; color: #222;
+  }
+  .ctx .mi {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 5px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+  }
+  .ctx .mi .kbd { font-size: 11px; color: #999; margin-left: 24px; }
+  .ctx .mi:hover { background: #0a63e0; color: #fff; }
+  .ctx .mi:hover .kbd { color: rgba(255,255,255,.75); }
+  .ctx .mi.dim { color: #aaa; pointer-events: none; }
+  .ctx .sep { height: .5px; background: rgba(0,0,0,.14); margin: 4px 10px; }
+  .ctx .hd { font-size: 10px; color: #999; padding: 3px 12px 2px; }
+
+  /* selection handles */
+  .selhandle { fill: #d81b9e; stroke: #fff; stroke-width: .8; }
+
+  /* ===== status bar ===== */
+  .statusbar {
+    display: flex; align-items: center; gap: 4px; padding: 5px 12px;
+    background: rgba(255,255,255,.5); backdrop-filter: blur(24px);
+    border-top: .5px solid rgba(0,0,0,.1); flex-shrink: 0; font-size: 11px; color: #444;
+  }
+  .st { padding: 3px 10px; border-radius: 6px; cursor: pointer; }
+  .st:hover { background: rgba(0,0,0,.06); }
+  .st.on { background: rgba(0,102,214,.13); color: #0055c0; font-weight: 600; }
+  .st.coords { font-variant-numeric: tabular-nums; min-width: 150px; color: #222; }
+</style>
+</head>
+<body>
+
+<div class="window">
+  <!-- toolbar -->
+  <div class="toolbar">
+    <div class="traffic"><span class="t-close"></span><span class="t-min"></span><span class="t-max"></span></div>
+    <div class="tb-group">
+      <button class="tb-btn" title="新規作成">📄</button>
+      <button class="tb-btn" title="開く">📂</button>
+      <button class="tb-btn" title="保存">💾</button>
+    </div>
+    <div class="tb-group">
+      <button class="tb-btn" title="取り消し">↩︎</button>
+      <button class="tb-btn" title="やり直し">↪︎</button>
+    </div>
+    <div class="tb-group">
+      <button class="tb-btn" title="印刷">🖨</button>
+      <button class="tb-btn small" title="材料集計">Σ 拾い</button>
+    </div>
+    <div class="win-title">MepCad — 1F空調配管図.mepcad</div>
+    <div class="spacer"></div>
+    <div class="tb-group">
+      <button class="tb-btn small">🔍 −</button>
+      <button class="tb-btn small">100%</button>
+      <button class="tb-btn small">🔍 +</button>
+    </div>
+    <div class="tb-group">
+      <button class="tb-btn" id="btnSettings" title="環境設定">⚙︎</button>
+    </div>
+  </div>
+
+  <!-- document tabs -->
+  <div class="doc-tabs">
+    <div class="doc-tab active">1F空調配管図</div>
+    <div class="doc-tab">1F衛生配管図</div>
+    <div class="doc-tab">B1F機械室詳細</div>
+  </div>
+
+  <div class="main">
+    <!-- edge hot zones & hints -->
+    <div class="edge-zone left" id="ezL"></div>
+    <div class="edge-zone right" id="ezR"></div>
+    <div class="edge-hint left" id="ehL"></div>
+    <div class="edge-hint right" id="ehR"></div>
+
+    <!-- left palette (auto-hide) -->
+    <div class="panel left hidden" id="panelL">
+    <div class="palette">
+      <div class="panel-head"><span class="ttl">ツール</span><button class="pin" id="pinL" title="ピン留め(常に表示)">📌</button></div>
+      <div class="cat-tabs" id="cats">
+        <div class="cat" data-cat="basic"><span class="ic">✏️</span>基本</div>
+        <div class="cat" data-cat="eisei"><span class="ic">🚰</span>衛生</div>
+        <div class="cat active" data-cat="kucho"><span class="ic">❄️</span>空調</div>
+        <div class="cat" data-cat="duct"><span class="ic">🌀</span>ダクト</div>
+        <div class="cat" data-cat="boki"><span class="ic">🏷</span>傍記</div>
+      </div>
+      <div class="tool-list" id="toolList"></div>
+    </div>
+    </div>
+
+    <!-- canvas -->
+    <div class="canvas-wrap" id="cv">
+      <svg class="drawing" id="dwg" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="grid" width="25" height="25" patternUnits="userSpaceOnUse">
+            <path d="M 25 0 L 0 0 0 25" fill="none" stroke="rgba(0,0,0,.055)" stroke-width="1"/>
+          </pattern>
+          <pattern id="grid2" width="125" height="125" patternUnits="userSpaceOnUse">
+            <path d="M 125 0 L 0 0 0 125" fill="none" stroke="rgba(0,0,0,.10)" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grid)"/>
+        <rect width="100%" height="100%" fill="url(#grid2)"/>
+
+        <!-- 下敷き(建築図PDF風・薄グレー) -->
+        <g stroke="#b9bec6" stroke-width="1.2" fill="none" opacity=".8">
+          <rect x="120" y="90" width="620" height="420"/>
+          <line x1="120" y1="300" x2="740" y2="300"/>
+          <line x1="430" y1="90" x2="430" y2="510"/>
+          <rect x="120" y="90" width="14" height="14" fill="#e6e8ec"/>
+          <rect x="726" y="90" width="14" height="14" fill="#e6e8ec"/>
+          <rect x="120" y="496" width="14" height="14" fill="#e6e8ec"/>
+          <rect x="726" y="496" width="14" height="14" fill="#e6e8ec"/>
+          <rect x="423" y="293" width="14" height="14" fill="#e6e8ec"/>
+        </g>
+        <text x="128" y="82" font-size="10" fill="#a8adb5">下敷き: 建築平面図.pdf (1/50)</text>
+
+        <!-- 空調機 -->
+        <g>
+          <rect x="180" y="150" width="90" height="60" fill="#eef4ff" stroke="#0055c0" stroke-width="1.5"/>
+          <text x="196" y="184" font-size="11" fill="#0055c0" font-weight="600">AC-1</text>
+        </g>
+
+        <!-- 冷温水配管(往) 赤 -->
+        <g stroke="#d0342c" stroke-width="2" fill="none">
+          <polyline points="270,170 560,170 560,390 680,390" id="pipe1"/>
+        </g>
+        <!-- 冷温水配管(還) 青 -->
+        <g stroke="#0055c0" stroke-width="2" fill="none">
+          <polyline points="270,190 540,190 540,410 680,410"/>
+        </g>
+        <!-- バルブ記号 -->
+        <g stroke="#d0342c" stroke-width="1.6" fill="none">
+          <path d="M 320 162 L 336 178 M 336 162 L 320 178"/>
+        </g>
+        <g stroke="#0055c0" stroke-width="1.6" fill="none">
+          <path d="M 320 182 L 336 198 M 336 182 L 320 198"/>
+        </g>
+
+        <!-- 傍記 -->
+        <g font-size="11" fill="#333">
+          <line x1="470" y1="170" x2="500" y2="135" stroke="#333" stroke-width=".8"/>
+          <text x="503" y="132">50A 冷温水(往)</text>
+          <line x1="450" y1="190" x2="480" y2="230" stroke="#333" stroke-width=".8"/>
+          <text x="483" y="243">50A 冷温水(還)</text>
+        </g>
+
+        <!-- ダクト(参考・薄表示) -->
+        <g stroke="#3d8b40" stroke-width="1.4" fill="none" opacity=".9">
+          <rect x="180" y="330" width="200" height="34"/>
+          <line x1="180" y1="330" x2="380" y2="364"/>
+          <line x1="180" y1="364" x2="380" y2="330"/>
+        </g>
+        <text x="182" y="322" font-size="10" fill="#3d8b40">SA 400×250</text>
+
+        <!-- 作図中のラバーバンド(マウス追従) -->
+        <line id="rubber" x1="680" y1="390" x2="680" y2="390" stroke="#d0342c" stroke-width="2" stroke-dasharray="6 4" opacity="0"/>
+
+        <!-- クリック選択用の当たり判定(不可視・太線) -->
+        <polyline id="hit-pipe1" points="270,170 560,170 560,390 680,390" stroke="rgba(0,0,0,0)" stroke-width="14" fill="none" style="cursor:none"/>
+        <rect id="hit-ac1" x="180" y="150" width="90" height="60" fill="rgba(0,0,0,0)" style="cursor:none"/>
+
+        <!-- 選択ハイライト・ハンドル -->
+        <g id="selGlow" style="display:none"></g>
+        <g id="selHandles" style="display:none"></g>
+      </svg>
+
+      <div class="coach" id="coach">図形をクリックで選択 / 右クリックでメニュー <b>選択中と未選択で内容が変わります</b></div>
+
+      <!-- 右クリックメニュー: ニュートラル時 -->
+      <div class="ctx" id="ctxNeutral">
+        <div class="mi">直前のコマンドを繰り返す<span class="kbd">⏎</span></div>
+        <div class="mi">貼り付け<span class="kbd">⌘V</span></div>
+        <div class="sep"></div>
+        <div class="mi">全選択<span class="kbd">⌘A</span></div>
+        <div class="mi">前回の選択を復活</div>
+        <div class="sep"></div>
+        <div class="mi">全体表示<span class="kbd">⇧Z</span></div>
+        <div class="mi">選択範囲へズーム</div>
+        <div class="sep"></div>
+        <div class="mi">非表示の解除</div>
+        <div class="mi">下敷きの表示/非表示</div>
+      </div>
+
+      <!-- 右クリックメニュー: 図形選択時 -->
+      <div class="ctx" id="ctxSel">
+        <div class="hd" id="ctxSelHead">配管: 冷温水(往) 50A</div>
+        <div class="mi">複写<span class="kbd">⌘C→⌘V</span></div>
+        <div class="mi">移動<span class="kbd">M</span></div>
+        <div class="sep"></div>
+        <div class="mi">削除<span class="kbd">⌫</span></div>
+        <div class="mi">ストレッチ</div>
+        <div class="mi">回転</div>
+        <div class="sep"></div>
+        <div class="mi">サイズ変更…</div>
+        <div class="mi">用途変更…</div>
+        <div class="mi">バルブ・継手を挿入</div>
+        <div class="mi">この配管に傍記を付ける</div>
+        <div class="sep"></div>
+        <div class="mi">同じ属性を選択(同用途・同サイズ)</div>
+        <div class="mi">レイヤへ移動 ▸</div>
+        <div class="mi">グループ解除</div>
+        <div class="sep"></div>
+        <div class="mi">プロパティを表示<span class="kbd">⌘I</span></div>
+      </div>
+      <div class="xhair-h" id="xh"></div>
+      <div class="xhair-v" id="xv"></div>
+      <div class="pickbox" id="pb"></div>
+      <div class="snapmark" id="snap"></div>
+    </div>
+
+    <!-- right props (auto-hide) -->
+    <div class="panel right hidden" id="panelR">
+    <div class="props">
+      <div class="panel-head" style="padding:8px 0 0;"><span class="ttl">プロパティ</span><button class="pin" id="pinR" title="ピン留め(常に表示)">📌</button></div>
+      <h3 style="margin-top:6px;">空調配管の作図</h3>
+      <div class="sub">冷温水(往) 50A</div>
+      <div class="card">
+        <h4>配管</h4>
+        <div class="row"><label>用途</label><span class="val link">冷温水(往) ▾</span></div>
+        <div class="row"><label>サイズ</label><span class="val link">50A ▾</span></div>
+        <div class="row"><label>材質</label><span class="val link">SGP(白) ▾</span></div>
+        <div class="row"><label>表現</label>
+          <span class="seg"><span class="on">単線</span><span>複線</span></span>
+        </div>
+      </div>
+      <div class="card">
+        <h4>作図</h4>
+        <div class="row"><label>角度拘束</label>
+          <span class="seg"><span class="on">90°</span><span>45°</span><span>自由</span></span>
+        </div>
+        <div class="row"><label>高さ(FL+)</label><span class="val">2,800</span></div>
+        <div class="row"><label>レイヤ</label><span class="val link">空調配管 ▾</span></div>
+      </div>
+      <div class="card">
+        <h4>線</h4>
+        <div class="row"><label>線種</label><span class="val link">─── 実線 ▾</span></div>
+        <div class="row"><label>線の太さ</label><span class="val link">0.5 mm ▾</span></div>
+        <div class="row"><label>線の色</label>
+          <span class="swatches">
+            <span class="sw on" style="background:#d0342c"></span>
+            <span class="sw" style="background:#0055c0"></span>
+            <span class="sw" style="background:#3d8b40"></span>
+            <span class="sw" style="background:#e8a000"></span>
+            <span class="sw" style="background:#8e44ad"></span>
+            <span class="sw" style="background:#222"></span>
+            <span class="sw more">+</span>
+          </span>
+        </div>
+        <div class="row"><label>用途色に連動</label>
+          <span class="seg"><span class="on">ON</span><span>OFF</span></span>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- settings modal -->
+  <div class="modal-ov" id="modalOv">
+    <div class="settings">
+      <div class="settings-title">
+        <div class="traffic"><span class="t-close" id="setClose" style="cursor:pointer"></span><span class="t-min"></span><span class="t-max"></span></div>
+        <b>環境設定</b>
+      </div>
+      <div class="settings-body">
+        <div class="set-side" id="setSide">
+          <div class="set-item active" data-pane="general"><span class="ic">🖥</span>一般</div>
+          <div class="set-item" data-pane="cursor"><span class="ic">✛</span>カーソル</div>
+          <div class="set-item" data-pane="panel"><span class="ic">◫</span>パネル</div>
+          <div class="set-item" data-pane="snap"><span class="ic">◇</span>スナップ既定</div>
+          <div class="set-item" data-pane="unit"><span class="ic">📐</span>単位・グリッド</div>
+        </div>
+        <div class="set-content">
+          <!-- 一般 -->
+          <div class="pane" id="pane-general">
+            <h3>一般</h3>
+            <div class="set-group">
+              <div class="set-row"><span>画面背景色</span>
+                <span class="swatches">
+                  <span class="bg-sw on" data-bg="#fdfdfd" style="background:#fdfdfd"></span>
+                  <span class="bg-sw" data-bg="#eceff1" style="background:#eceff1"></span>
+                  <span class="bg-sw" data-bg="#263238" style="background:#263238"></span>
+                  <span class="bg-sw" data-bg="#000000" style="background:#000"></span>
+                </span>
+              </div>
+              <div class="set-row"><span>外観</span>
+                <span class="seg"><span class="on">システムに合わせる</span><span>ライト</span><span>ダーク</span></span>
+              </div>
+              <div class="set-row"><span>自動保存</span>
+                <span class="seg"><span class="on">5分</span><span>10分</span><span>OFF</span></span>
+              </div>
+            </div>
+            <div class="set-note">背景色を変えると図面の線色が見やすいように自動調整されます(黒背景時は白線)。</div>
+          </div>
+          <!-- カーソル -->
+          <div class="pane" id="pane-cursor" style="display:none">
+            <h3>カーソル</h3>
+            <div class="set-group">
+              <div class="set-row"><span>形状</span>
+                <span class="seg" id="segShape"><span class="on">十字</span><span>矢印</span></span>
+              </div>
+              <div class="set-row"><span>ピックボックスの大きさ</span>
+                <span class="seg" id="segPick"><span data-px="8">小</span><span class="on" data-px="10">中</span><span data-px="14">大</span></span>
+              </div>
+              <div class="set-row"><span>十字の長さ</span>
+                <span class="seg" id="segLen"><span class="on" data-len="full">全画面</span><span data-len="short">短</span></span>
+              </div>
+              <div class="set-row"><span>十字の色</span>
+                <span class="swatches">
+                  <span class="sw on" style="background:#222"></span>
+                  <span class="sw" style="background:#d0342c"></span>
+                  <span class="sw" style="background:#0055c0"></span>
+                  <span class="sw more">+</span>
+                </span>
+              </div>
+            </div>
+            <div class="set-note">変更はこのモックアップの作図領域にすぐ反映されます。試してみてください。</div>
+          </div>
+          <!-- パネル -->
+          <div class="pane" id="pane-panel" style="display:none">
+            <h3>パネル</h3>
+            <div class="set-group">
+              <div class="set-row"><span>パネルの自動格納(Dock風)</span>
+                <span class="seg"><span class="on">ON</span><span>OFF</span></span>
+              </div>
+              <div class="set-row"><span>表示までの間</span>
+                <span class="seg"><span class="on">0.1秒</span><span>0.3秒</span><span>0.5秒</span></span>
+              </div>
+              <div class="set-row"><span>格納までの間</span>
+                <span class="seg"><span>0.3秒</span><span class="on">0.5秒</span><span>1秒</span></span>
+              </div>
+            </div>
+          </div>
+          <!-- スナップ既定 -->
+          <div class="pane" id="pane-snap" style="display:none">
+            <h3>スナップ既定</h3>
+            <div class="set-group">
+              <div class="set-row"><span>端点</span><span class="seg"><span class="on">ON</span><span>OFF</span></span></div>
+              <div class="set-row"><span>交点</span><span class="seg"><span class="on">ON</span><span>OFF</span></span></div>
+              <div class="set-row"><span>中点</span><span class="seg"><span>ON</span><span class="on">OFF</span></span></div>
+              <div class="set-row"><span>配管・ダクト上</span><span class="seg"><span>ON</span><span class="on">OFF</span></span></div>
+            </div>
+            <div class="set-note">作図中の一時切替はステータスバーから行います。ここでは起動時の既定値を設定します。</div>
+          </div>
+          <!-- 単位・グリッド -->
+          <div class="pane" id="pane-unit" style="display:none">
+            <h3>単位・グリッド</h3>
+            <div class="set-group">
+              <div class="set-row"><span>単位</span><span class="seg"><span class="on">mm</span><span>m</span></span></div>
+              <div class="set-row"><span>グリッド間隔</span><span class="val link">250 mm ▾</span></div>
+              <div class="set-row"><span>既定縮尺</span><span class="val link">1/50 ▾</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- status bar -->
+  <div class="statusbar">
+    <span class="st coords" id="coords">X: 0.0  Y: 0.0</span>
+    <span class="st on">グリッド 25</span>
+    <span class="st on">スナップ</span>
+    <span class="st">直交</span>
+    <span class="st on">レイヤ: 空調配管</span>
+    <span class="st">縮尺 1/50</span>
+    <span class="st on" id="stPanel">パネル自動格納</span>
+    <span class="st" style="margin-left:auto; color:#888;">1F空調配管図 — 図形数 128</span>
+  </div>
+</div>
+
+<div class="caption">MepCad 画面モックアップ v0.4 — 右クリックでコンテキストメニュー(未選択=ニュートラル / 赤配管・AC-1をクリック選択してからだと内容が変化、複写・移動が最上段)</div>
+
+<script>
+  // ===== tool palettes per category =====
+  const palettes = {
+    basic: [
+      ['作図', [['／','線分'],['○','円'],['◠','円弧'],['▭','矩形'],['A','文字'],['⌀','点']]],
+      ['編集', [['✥','移動'],['⧉','複写'],['⌫','削除'],['⟳','回転'],['⇔','ストレッチ'],['📏','計測']]],
+    ],
+    eisei: [
+      ['作図', [['━','給水'],['━','給湯'],['┅','排水'],['┃','通気'],['🚿','器具配置'],['⊕','継手']]],
+      ['編集', [['✥','移動'],['⇔','ストレッチ'],['⌀','サイズ変更'],['⌫','削除']]],
+    ],
+    kucho: [
+      ['作図', [['━','冷温水(往)'],['━','冷温水(還)'],['┅','冷媒'],['┃','ドレン'],['▣','機器配置'],['⊗','バルブ']]],
+      ['編集', [['✥','移動'],['⇔','ストレッチ'],['⌀','サイズ変更'],['⌫','削除']]],
+    ],
+    duct: [
+      ['作図', [['▭','角ダクト'],['○','丸ダクト'],['▱','ホッパー'],['▤','制気口'],['◫','ダンパー'],['▣','機器接続']]],
+      ['編集', [['✥','移動'],['⇔','ストレッチ'],['⌀','サイズ変更'],['⌫','削除']]],
+    ],
+    boki: [
+      ['傍記', [['↖','引出線'],['A','注記'],['⌀','サイズ記入'],['≡','系統名']]],
+      ['記号', [['⊗','バルブ記号'],['◫','ダンパー記号'],['▤','制気口記号'],['⊕','継手記号']]],
+    ],
+  };
+  const toolList = document.getElementById('toolList');
+  function renderTools(cat, activeName) {
+    toolList.innerHTML = '';
+    palettes[cat].forEach(([sec, tools]) => {
+      const h = document.createElement('div'); h.className = 'tool-sec'; h.textContent = sec;
+      toolList.appendChild(h);
+      const grid = document.createElement('div'); grid.className = 'tools';
+      tools.forEach(([ic, name]) => {
+        const d = document.createElement('div');
+        d.className = 'tool' + (name === activeName ? ' active' : '');
+        d.innerHTML = `<span class="ic">${ic}</span>${name}`;
+        d.onclick = () => { grid.parentElement.parentElement.querySelectorAll('.tool').forEach(t=>t.classList.remove('active')); d.classList.add('active'); };
+        grid.appendChild(d);
+      });
+      toolList.appendChild(grid);
+    });
+  }
+  renderTools('kucho', '冷温水(往)');
+  document.querySelectorAll('.cat').forEach(c => {
+    c.onclick = () => {
+      document.querySelectorAll('.cat').forEach(x => x.classList.remove('active'));
+      c.classList.add('active');
+      renderTools(c.dataset.cat);
+    };
+  });
+
+  // ===== crosshair cursor + pickbox =====
+  const cv = document.getElementById('cv'),
+        xh = document.getElementById('xh'), xv = document.getElementById('xv'),
+        pb = document.getElementById('pb'), snap = document.getElementById('snap'),
+        coords = document.getElementById('coords'),
+        rubber = document.getElementById('rubber');
+  // snap targets: endpoints of pipes (svg coords)
+  const snapPts = [[270,170],[560,170],[560,390],[680,390],[270,190],[540,190],[540,410],[680,410],[320,170],[336,190]];
+  cv.addEventListener('mousemove', e => {
+    const r = cv.getBoundingClientRect();
+    let x = e.clientX - r.left, y = e.clientY - r.top;
+    // snap detection (12px)
+    let snapped = null;
+    for (const [sx, sy] of snapPts) {
+      if (Math.abs(x - sx) < 12 && Math.abs(y - sy) < 12) { snapped = [sx, sy]; break; }
+    }
+    if (snapped) { [x, y] = snapped; snap.style.display = 'block'; snap.style.left = x + 'px'; snap.style.top = y + 'px'; }
+    else snap.style.display = 'none';
+    xh.style.top = y + 'px'; xv.style.left = x + 'px';
+    if (cursorCfg.len === 'short') {
+      xh.style.left = (x - 60) + 'px'; xh.style.right = 'auto'; xh.style.width = '120px';
+      xv.style.top = (y - 60) + 'px'; xv.style.bottom = 'auto'; xv.style.height = '120px';
+    } else {
+      xh.style.left = '0'; xh.style.right = '0'; xh.style.width = 'auto';
+      xv.style.top = '0'; xv.style.bottom = '0'; xv.style.height = 'auto';
+    }
+    pb.style.left = x + 'px'; pb.style.top = y + 'px';
+    // rubber band from last pipe end
+    rubber.setAttribute('opacity', '.7');
+    rubber.setAttribute('x2', x); rubber.setAttribute('y2', y);
+    // mm coords (1px = 10mm @1/50相当のダミー換算)
+    coords.textContent = `X: ${(x*10).toLocaleString()}  Y: ${((cv.clientHeight - y)*10).toLocaleString()}`;
+  });
+  cv.addEventListener('mouseleave', () => {
+    [xh, xv, pb, snap].forEach(el => el.style.display = 'none');
+    rubber.setAttribute('opacity', '0');
+  });
+  cv.addEventListener('mouseenter', () => {
+    xh.style.display = 'block'; xv.style.display = 'block'; pb.style.display = 'block';
+  });
+
+  // ===== Dock-style auto-hide panels =====
+  const panelL = document.getElementById('panelL'), panelR = document.getElementById('panelR');
+  const ezL = document.getElementById('ezL'), ezR = document.getElementById('ezR');
+  const ehL = document.getElementById('ehL'), ehR = document.getElementById('ehR');
+  const pinL = document.getElementById('pinL'), pinR = document.getElementById('pinR');
+  const state = { L: { pinned: false, timer: null }, R: { pinned: false, timer: null } };
+
+  function show(side) {
+    const p = side === 'L' ? panelL : panelR;
+    clearTimeout(state[side].timer);
+    p.classList.remove('hidden');
+    (side === 'L' ? ehL : ehR).classList.add('off');
+  }
+  function scheduleHide(side, delay = 500) {
+    if (state[side].pinned) return;
+    const p = side === 'L' ? panelL : panelR;
+    clearTimeout(state[side].timer);
+    state[side].timer = setTimeout(() => {
+      p.classList.add('hidden');
+      (side === 'L' ? ehL : ehR).classList.remove('off');
+    }, delay);
+  }
+  // edge hover → show (Dock-like slight delay)
+  let edgeTimer = null;
+  ezL.addEventListener('mouseenter', () => { edgeTimer = setTimeout(() => show('L'), 100); });
+  ezR.addEventListener('mouseenter', () => { edgeTimer = setTimeout(() => show('R'), 100); });
+  ezL.addEventListener('mouseleave', () => clearTimeout(edgeTimer));
+  ezR.addEventListener('mouseleave', () => clearTimeout(edgeTimer));
+  // leaving the panel → hide
+  panelL.addEventListener('mouseenter', () => show('L'));
+  panelR.addEventListener('mouseenter', () => show('R'));
+  panelL.addEventListener('mouseleave', () => scheduleHide('L'));
+  panelR.addEventListener('mouseleave', () => scheduleHide('R'));
+  // moving in the canvas also hides (safety)
+  cv.addEventListener('mouseenter', () => { scheduleHide('L', 800); scheduleHide('R', 800); });
+  // pin toggles
+  function bindPin(btn, side) {
+    btn.addEventListener('click', () => {
+      state[side].pinned = !state[side].pinned;
+      btn.classList.toggle('on', state[side].pinned);
+      if (state[side].pinned) show(side); else scheduleHide(side, 300);
+    });
+  }
+  bindPin(pinL, 'L'); bindPin(pinR, 'R');
+  // intro: briefly show both panels so the user notices them, then tuck away
+  setTimeout(() => { show('L'); show('R'); }, 300);
+  setTimeout(() => { scheduleHide('L', 0); scheduleHide('R', 0); }, 2200);
+
+  // ===== settings modal =====
+  const cursorCfg = { len: 'full' };
+  const modalOv = document.getElementById('modalOv');
+  document.getElementById('btnSettings').onclick = () => modalOv.classList.add('open');
+  document.getElementById('setClose').onclick = () => modalOv.classList.remove('open');
+  modalOv.addEventListener('click', e => { if (e.target === modalOv) modalOv.classList.remove('open'); });
+  // sidebar switching
+  document.querySelectorAll('.set-item').forEach(it => {
+    it.onclick = () => {
+      document.querySelectorAll('.set-item').forEach(x => x.classList.remove('active'));
+      it.classList.add('active');
+      document.querySelectorAll('.pane').forEach(p => p.style.display = 'none');
+      document.getElementById('pane-' + it.dataset.pane).style.display = 'block';
+    };
+  });
+  // background color (applies live)
+  document.querySelectorAll('.bg-sw').forEach(sw => {
+    sw.onclick = () => {
+      document.querySelectorAll('.bg-sw').forEach(x => x.classList.remove('on'));
+      sw.classList.add('on');
+      const c = sw.dataset.bg;
+      cv.style.background = c;
+      const dark = (c === '#263238' || c === '#000000');
+      const line = dark ? 'rgba(255,255,255,.85)' : 'rgba(20,20,20,.75)';
+      xh.style.background = line; xv.style.background = line;
+      pb.style.borderColor = dark ? 'rgba(255,255,255,.95)' : 'rgba(20,20,20,.9)';
+      document.querySelectorAll('#grid path').forEach(p => p.setAttribute('stroke', dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.055)'));
+      document.querySelectorAll('#grid2 path').forEach(p => p.setAttribute('stroke', dark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.10)'));
+    };
+  });
+  // pickbox size (applies live)
+  document.querySelectorAll('#segPick span').forEach(s => {
+    s.onclick = () => {
+      document.querySelectorAll('#segPick span').forEach(x => x.classList.remove('on'));
+      s.classList.add('on');
+      pb.style.width = s.dataset.px + 'px'; pb.style.height = s.dataset.px + 'px';
+    };
+  });
+  // crosshair length (applies live)
+  document.querySelectorAll('#segLen span').forEach(s => {
+    s.onclick = () => {
+      document.querySelectorAll('#segLen span').forEach(x => x.classList.remove('on'));
+      s.classList.add('on');
+      cursorCfg.len = s.dataset.len;
+    };
+  });
+
+  // ===== click-select + context menus =====
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const selGlow = document.getElementById('selGlow');
+  const selHandles = document.getElementById('selHandles');
+  const ctxNeutral = document.getElementById('ctxNeutral');
+  const ctxSel = document.getElementById('ctxSel');
+  const ctxSelHead = document.getElementById('ctxSelHead');
+  const coach = document.getElementById('coach');
+  const targets = {
+    'hit-pipe1': { label: '配管: 冷温水(往) 50A SGP(白)', pts: [[270,170],[560,170],[560,390],[680,390]],
+                   glow: '<polyline points="270,170 560,170 560,390 680,390" fill="none" stroke="rgba(216,27,158,.35)" stroke-width="7"/>' },
+    'hit-ac1':   { label: '機器: AC-1 空調機', pts: [[180,150],[270,150],[270,210],[180,210]],
+                   glow: '<rect x="180" y="150" width="90" height="60" fill="rgba(216,27,158,.12)" stroke="rgba(216,27,158,.55)" stroke-width="2"/>' },
+  };
+  let selected = null;
+  function select(id) {
+    selected = id;
+    const t = targets[id];
+    selGlow.innerHTML = t.glow;
+    selHandles.innerHTML = t.pts.map(([x,y]) => `<rect class="selhandle" x="${x-4}" y="${y-4}" width="8" height="8"/>`).join('');
+    selGlow.style.display = 'block';
+    selHandles.style.display = 'block';
+    ctxSelHead.textContent = t.label;
+    coach.innerHTML = t.label + ' を選択中 — <b>右クリックでメニュー</b>';
+  }
+  function deselect() {
+    selected = null;
+    selGlow.style.display = 'none';
+    selHandles.style.display = 'none';
+    coach.innerHTML = '図形をクリックで選択 / 右クリックでメニュー <b>選択中と未選択で内容が変わります</b>';
+  }
+  Object.keys(targets).forEach(id => {
+    document.getElementById(id).addEventListener('click', e => { e.stopPropagation(); hideCtx(); select(id); });
+  });
+  cv.addEventListener('click', e => {
+    // click on empty canvas (not a hit target, not a menu) → deselect
+    if (e.target.closest && e.target.closest('.ctx')) return;
+    if (!(e.target.id in targets)) deselect();
+    hideCtx();
+  });
+  function hideCtx() { ctxNeutral.style.display = 'none'; ctxSel.style.display = 'none'; }
+  cv.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    hideCtx();
+    // right-click on a target selects it first (macOS流)
+    if (e.target.id in targets && selected !== e.target.id) select(e.target.id);
+    const menu = selected ? ctxSel : ctxNeutral;
+    const r = cv.getBoundingClientRect();
+    menu.style.display = 'block';
+    // measure, then flip if overflowing
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    let mx = e.clientX - r.left, my = e.clientY - r.top;
+    if (mx + mw > r.width - 8) mx -= mw;
+    if (my + mh > r.height - 8) my = Math.max(8, r.height - mh - 8);
+    menu.style.left = mx + 'px'; menu.style.top = my + 'px';
+  });
+  // any menu item click closes the menu (mock action)
+  document.querySelectorAll('.ctx .mi').forEach(mi => mi.addEventListener('click', e => { e.stopPropagation(); hideCtx(); }));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { hideCtx(); deselect(); } });
+</script>
+</body>
+</html>
