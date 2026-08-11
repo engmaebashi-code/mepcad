@@ -116,6 +116,24 @@ final class DrawingToolTests: XCTestCase {
         }
     }
 
+    func testNumericDistanceRespectsAngleConstraint() {
+        let (tool, cap) = makeTool()
+        tool.select(.line)
+        tool.angleConstraint = .deg90
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        // カーソルはほぼ垂直(少し右に流れている)→ 拘束後は完全垂直
+        _ = tool.preview(cursor: Vec2(80, 1000), shiftDown: false)
+        for ch in "2000" { _ = tool.keyInput(ch) }
+        _ = tool.keyInput("\r")
+        XCTAssertEqual(cap.produced.count, 1)
+        if case .line(_, let b) = cap.produced[0].kind {
+            XCTAssertEqual(b.x, 0, accuracy: 1e-9)      // 生カーソル方向でなく拘束方向
+            XCTAssertEqual(b.y, 2000, accuracy: 1e-9)
+        } else {
+            XCTFail("線分でない")
+        }
+    }
+
     func testTextPlacement() {
         let (tool, cap) = makeTool()
         tool.select(.text)

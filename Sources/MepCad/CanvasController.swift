@@ -25,6 +25,8 @@ final class CanvasController {
 
     func toggleGrid() {
         gridVisible.toggle()
+        // グリッド非表示のときはグリッドスナップも無効にする(端点スナップは維持)
+        snapEngine.gridEnabled = gridVisible
         // グリッドはキャッシュに焼き込まれているため破棄が必要
         onDocumentChanged?()
         needsContentRedraw?()

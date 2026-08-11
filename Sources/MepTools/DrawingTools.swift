@@ -177,8 +177,10 @@ public final class DrawingToolController {
                 commitLine(a, b)
                 anchor = b
             } else if comps.count == 1, let dist = Double(comps[0]), abs(dist) > 0.001 {
-                // 距離入力: カーソル方向へ指定距離
-                let dir = lastCursor - a
+                // 距離入力: 角度拘束を適用した後のカーソル方向へ指定距離
+                // (プレビューで見えている拘束済みの線と同じ方向に確定させる)
+                let target = constrained(from: a, to: lastCursor, active: false)
+                let dir = target - a
                 let len = dir.length
                 guard len > 1e-9 else { return }
                 let b = a + dir * (dist / len)
