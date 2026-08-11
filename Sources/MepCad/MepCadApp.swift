@@ -1,19 +1,31 @@
 import SwiftUI
 import AppKit
 import MepCore
+import MepTools
 
 /// ステータスバー表示用の状態
 final class CanvasUIState: ObservableObject {
     @Published var coords = "X: —  Y: —"
     @Published var zoom = "—"
     @Published var snap = "—"
-    @Published var info = "⌘O でJWWファイルを開けます(M2)"
+    @Published var info = "⌘O=JWWを開く / ツールバーで作図ツールを選択(M3)"
+    @Published var tool: ToolKind = .select
+}
+
+private func toolIcon(_ kind: ToolKind) -> String {
+    switch kind {
+    case .select: return "cursorarrow"
+    case .line: return "line.diagonal"
+    case .circle: return "circle"
+    case .text: return "textformat"
+    }
 }
 
 struct ContentView: View {
     let controller: CanvasController
     @ObservedObject var uiState: CanvasUIState
     @State private var isDark = false
+    @State private var angle: AngleConstraint = .free
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,6 +56,54 @@ struct ContentView: View {
             .background(.bar)
         }
         .toolbar {
+            // 作図ツール(モックの左パレット簡易版。パネルUIはM4)
+            ToolbarItemGroup {
+                Picker("ツール", selection: Binding(
+                    get: { uiState.tool },
+                    set: { newTool in
+                        uiState.tool = newTool
+                        controller.selectTool(newTool)
+                    }
+                )) {
+                    ForEach(ToolKind.allCases, id: \.self) { kind in
+                        Image(systemName: toolIcon(kind))
+                            .help(kind.rawValue)
+                            .tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            // 角度拘束パレット(常設・マウスだけで切替)
+            ToolbarItemGroup {
+                Picker("角度拘束", selection: $angle) {
+                    ForEach(AngleConstraint.allCases, id: \.self) { constraint in
+                        Text(constraint.rawValue).tag(constraint)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .help("角度拘束: 作図中の線の角度を丸める(自由/90°/45°/15°)")
+                .onChange(of: angle) { _, newValue in
+                    controller.tools.angleConstraint = newValue
+                }
+            }
+
+            ToolbarItemGroup {
+                Button {
+                    controller.undo()
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .help("取り消し(⌘Z)")
+
+                Button {
+                    controller.redo()
+                } label: {
+                    Image(systemName: "arrow.uturn.forward")
+                }
+                .help("やり直し(⇧⌘Z)")
+            }
+
             ToolbarItemGroup {
                 Button {
                     controller.openJwwPanel()
@@ -70,6 +130,9 @@ struct ContentView: View {
             }
             controller.onInfo = { info in
                 uiState.info = info
+            }
+            controller.onToolChanged = { kind in
+                uiState.tool = kind
             }
         }
     }

@@ -178,6 +178,65 @@ final class CrosshairOverlayView: NSView {
             ctx.closePath()
             ctx.strokePath()
         }
+
+        // 作図プレビュー(ラバーバンド)
+        let accent = CGColor(red: 0.0, green: 0.4, blue: 0.9, alpha: 0.9)
+        ctx.setStrokeColor(accent)
+        ctx.setLineWidth(1.5)
+        ctx.setLineDash(phase: 0, lengths: [6, 4])
+        switch controller.previewShape {
+        case .none:
+            break
+        case .line(let a, let b):
+            let sa = controller.transform.toScreen(a)
+            let sb = controller.transform.toScreen(b)
+            ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+            ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+            ctx.strokePath()
+            // 長さ表示
+            let len = a.distance(to: b)
+            drawOverlayLabel(String(format: "%.0f", len),
+                             at: CGPoint(x: (sa.x + sb.x) / 2 + 8, y: (sa.y + sb.y) / 2 - 8),
+                             in: ctx)
+        case .circle(let c, let r):
+            let sc = controller.transform.toScreen(c)
+            let sr = r * controller.transform.scale
+            ctx.strokeEllipse(in: CGRect(x: sc.x - sr, y: sc.y - sr, width: sr * 2, height: sr * 2))
+            drawOverlayLabel(String(format: "R%.0f", r),
+                             at: CGPoint(x: sc.x + 10, y: sc.y - 10), in: ctx)
+        }
+        ctx.setLineDash(phase: 0, lengths: [])
+
+        // 数値入力ポップアップ(カーソルのすぐ近くに表示)
+        let buffer = controller.tools.numericBuffer
+        if !buffer.isEmpty, let p = controller.cursorScreen {
+            drawInputBadge("\(buffer) ⏎", near: CGPoint(x: p.x + 18, y: p.y + 18), in: ctx)
+        }
+    }
+
+    /// 数値入力バッジ(角丸背景付き)
+    private func drawInputBadge(_ text: String, near point: CGPoint, in ctx: CGContext) {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ]
+        let attributed = NSAttributedString(string: text, attributes: attrs)
+        let size = attributed.size()
+        let rect = CGRect(x: point.x, y: point.y,
+                          width: size.width + 16, height: size.height + 8)
+        let path = CGPath(roundedRect: rect, cornerWidth: 6, cornerHeight: 6, transform: nil)
+        ctx.addPath(path)
+        ctx.setFillColor(CGColor(red: 0.0, green: 0.4, blue: 0.9, alpha: 0.92))
+        ctx.fillPath()
+        attributed.draw(at: CGPoint(x: rect.minX + 8, y: rect.minY + 4))
+    }
+
+    private func drawOverlayLabel(_ text: String, at point: CGPoint, in ctx: CGContext) {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: controller?.theme.isDark == true ? NSColor.white : NSColor.black,
+        ]
+        NSAttributedString(string: text, attributes: attrs).draw(at: point)
     }
 }
 
@@ -250,7 +309,8 @@ final class CanvasContainerView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        controller.mouseMoved(toScreen: screenPoint(event))
+        controller.mouseMoved(toScreen: screenPoint(event),
+                              shiftDown: event.modifierFlags.contains(.shift))
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -263,9 +323,12 @@ final class CanvasContainerView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            // ⌘+スクロールでズーム
-            let factor = 1 + Double(event.scrollingDeltaY) * 0.01
+        // マウスホイール(粗い離散デルタ)= ズーム(Jw_cad/FILDERの流儀)
+        // トラックパッド(精密デルタ)= パン、⌘併用でズーム
+        let isTrackpad = event.hasPreciseScrollingDeltas
+        if !isTrackpad || event.modifierFlags.contains(.command) {
+            let sensitivity = isTrackpad ? 0.01 : 0.1
+            let factor = 1 + Double(event.scrollingDeltaY) * sensitivity
             controller.zoom(factor: factor, atScreen: screenPoint(event))
         } else {
             controller.pan(dx: Double(event.scrollingDeltaX), dy: Double(event.scrollingDeltaY))
@@ -277,10 +340,48 @@ final class CanvasContainerView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 {
+        window?.makeFirstResponder(self)
+        if controller.tools.isDrawingToolActive {
+            // 作図ツール: クリック=点の指示
+            controller.mouseMoved(toScreen: screenPoint(event),
+                                  shiftDown: event.modifierFlags.contains(.shift))
+            controller.toolClick(shiftDown: event.modifierFlags.contains(.shift))
+        } else if event.clickCount == 2 {
             controller.fit(viewSize: bounds.size)
         }
-        window?.makeFirstResponder(self)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        // 右クリック: 作図の終了/キャンセル(コンテキストメニューはM4)
+        controller.toolCancel()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // ⌘Z / ⇧⌘Z
+        if event.modifierFlags.contains(.command) {
+            let key = event.charactersIgnoringModifiers?.lowercased()
+            if key == "z" {
+                if event.modifierFlags.contains(.shift) {
+                    controller.redo()
+                } else {
+                    controller.undo()
+                }
+                return
+            }
+            super.keyDown(with: event)
+            return
+        }
+        // esc
+        if event.keyCode == 53 {
+            controller.toolCancel()
+            return
+        }
+        // 数値入力等はツールへ
+        if let chars = event.characters, let first = chars.first,
+           controller.toolKey(first) {
+            return
+        }
+        super.keyDown(with: event)
     }
 }
 

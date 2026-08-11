@@ -12,6 +12,7 @@ final class CanvasController {
     let document = Document()
     let commandStack: CommandStack
     let snapEngine = SnapEngine()
+    let tools: DrawingToolController
 
     var transform = ViewTransform(scale: 0.08, origin: Vec2(60, 540))
     var theme = RenderTheme.light()
@@ -22,10 +23,13 @@ final class CanvasController {
     var cursorScreen: Vec2?
     var snappedScreen: Vec2?
     var snappedKind: SnapKind?
+    /// 作図プレビュー(ワールド座標。オーバーレイが描画)
+    var previewShape: PreviewShape = .none
 
     /// UI更新通知
     var onStatusUpdate: ((_ coords: String, _ zoom: String, _ snap: String) -> Void)?
     var onInfo: ((String) -> Void)?
+    var onToolChanged: ((ToolKind) -> Void)?
     var needsContentRedraw: (() -> Void)?
     var needsOverlayRedraw: (() -> Void)?
     /// ドキュメント内容の変更(描画キャッシュ破棄が必要)
@@ -35,6 +39,7 @@ final class CanvasController {
 
     init() {
         commandStack = CommandStack(document: document)
+        tools = DrawingToolController(currentLayerID: document.currentLayerID)
         document.loadDemoContent()
         snapEngine.rebuild(from: document)
         document.onChange = { [weak self] in
@@ -43,6 +48,54 @@ final class CanvasController {
             self.onDocumentChanged?()
             self.needsContentRedraw?()
         }
+        tools.delegate = self
+    }
+
+    // MARK: - 作図ツール(M3)
+
+    func selectTool(_ kind: ToolKind) {
+        tools.select(kind)
+    }
+
+    /// クリック(作図ツール用)。スナップが効いていればスナップ点を使う
+    func toolClick(shiftDown: Bool) {
+        guard let cursor = cursorScreen else { return }
+        let effective = snappedScreen ?? cursor
+        tools.click(at: transform.toWorld(effective), shiftDown: shiftDown)
+        refreshPreview(shiftDown: shiftDown)
+    }
+
+    func toolCancel() {
+        tools.cancel()
+        previewShape = .none
+        needsOverlayRedraw?()
+    }
+
+    func toolKey(_ character: Character) -> Bool {
+        let handled = tools.keyInput(character)
+        if handled {
+            // 数値バッジ表示と、⏎確定後のプレビュー更新
+            refreshPreview(shiftDown: false)
+        }
+        return handled
+    }
+
+    private func refreshPreview(shiftDown: Bool) {
+        guard let cursor = cursorScreen else {
+            previewShape = .none
+            return
+        }
+        let effective = snappedScreen ?? cursor
+        previewShape = tools.preview(cursor: transform.toWorld(effective), shiftDown: shiftDown)
+        needsOverlayRedraw?()
+    }
+
+    func undo() {
+        commandStack.undo()
+    }
+
+    func redo() {
+        commandStack.redo()
     }
 
     // MARK: - JWW読込(M2)
@@ -111,7 +164,7 @@ final class CanvasController {
         publishStatus()
     }
 
-    func mouseMoved(toScreen p: Vec2) {
+    func mouseMoved(toScreen p: Vec2, shiftDown: Bool = false) {
         cursorScreen = p
         let world = transform.toWorld(p)
         let radiusMm = pickBoxPx / max(transform.scale, 1e-9)
@@ -122,6 +175,13 @@ final class CanvasController {
         } else {
             snappedScreen = nil
             snappedKind = nil
+        }
+        // 作図中プレビューの更新
+        if tools.isDrawingToolActive {
+            let effective = snappedScreen ?? p
+            previewShape = tools.preview(cursor: transform.toWorld(effective), shiftDown: shiftDown)
+        } else {
+            previewShape = .none
         }
         needsOverlayRedraw?()
         publishStatus()
@@ -136,6 +196,8 @@ final class CanvasController {
 
     func toggleTheme() {
         theme = theme.isDark ? .light() : .dark()
+        // テーマは描画キャッシュに焼き込まれているため、キャッシュ破棄が必須
+        onDocumentChanged?()
         needsContentRedraw?()
         needsOverlayRedraw?()
     }
@@ -157,5 +219,37 @@ final class CanvasController {
         case nil: snapText = "—"
         }
         onStatusUpdate?(coords, zoom, snapText)
+    }
+}
+
+// MARK: - DrawingToolDelegate
+
+extension CanvasController: DrawingToolDelegate {
+
+    func toolDidProduce(_ entity: Entity) {
+        commandStack.run(AddEntityCommand(entity: entity))
+    }
+
+    func toolRequestsText(at point: Vec2, completion: @escaping (String?) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "文字を入力"
+        alert.informativeText = "配置位置: X \(Int(point.x))  Y \(Int(point.y))"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "配置")
+        alert.addButton(withTitle: "キャンセル")
+        alert.window.initialFirstResponder = field
+        let response = alert.runModal()
+        completion(response == .alertFirstButtonReturn ? field.stringValue : nil)
+    }
+
+    func toolStatusChanged(_ hint: String) {
+        onInfo?(hint)
+    }
+
+    func toolKindChanged(_ kind: ToolKind) {
+        previewShape = .none
+        needsOverlayRedraw?()
+        onToolChanged?(kind)
     }
 }

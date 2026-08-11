@@ -80,8 +80,12 @@ final class JwwParserFixtureTests: XCTestCase {
             XCTAssertEqual(maxX, exp.lineBBox[2], accuracy: 1.0, "\(fileName): bbox.maxX")
             XCTAssertEqual(maxY, exp.lineBBox[3], accuracy: 1.0, "\(fileName): bbox.maxY")
 
-            // 性能目標: 2秒以内(設計書§8)
+            // 性能目標: 2秒以内(設計書§8)。Debugビルドは未最適化のため緩和
+            #if DEBUG
+            XCTAssertLessThan(elapsed, 15.0, "\(fileName): 解析時間(Debug)")
+            #else
             XCTAssertLessThan(elapsed, 2.0, "\(fileName): 解析時間")
+            #endif
         }
         try XCTSkipIf(tested == 0, "サンプルJWWファイルがFixturesにありません(READMEの手順でコピーしてください)")
     }
