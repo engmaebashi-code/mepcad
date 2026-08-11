@@ -134,27 +134,40 @@ public final class SnapEngine {
     // MARK: - スナップ検索
 
     public func snap(_ worldPoint: Vec2, radius: Double) -> SnapResult? {
-        // 1. 端点
-        if settings.endpoint, let r = nearestPoint(of: [.endpoint], to: worldPoint, within: radius) {
-            return r
+        // 第1層: 点系スナップ(端点・交点・中点・中心)は「距離×重み」で競争させる。
+        // 固定優先順だと密集図面で端点が常に勝ってしまい、交点に吸着できないため。
+        // 重みが小さいほど有利(端点をわずかに優遇)。
+        var best: (result: SnapResult, score: Double)?
+
+        func consider(_ candidate: (SnapResult, Double)?, weight: Double) {
+            guard let candidate else { return }
+            let score = candidate.1 * weight
+            if best == nil || score < best!.score {
+                best = (candidate.0, score)
+            }
         }
-        // 2. 交点(近傍の線分同士をその場で計算)
-        if settings.intersection, let r = nearestIntersection(to: worldPoint, within: radius) {
-            return r
+
+        if settings.endpoint {
+            consider(nearestPoint(of: [.endpoint], to: worldPoint, within: radius), weight: 0.8)
         }
-        // 3. 中点
-        if settings.midpoint, let r = nearestPoint(of: [.midpoint], to: worldPoint, within: radius) {
-            return r
+        if settings.intersection {
+            consider(nearestIntersection(to: worldPoint, within: radius), weight: 0.9)
         }
-        // 4. 円の中心
-        if settings.center, let r = nearestPoint(of: [.center], to: worldPoint, within: radius) {
-            return r
+        if settings.midpoint {
+            consider(nearestPoint(of: [.midpoint], to: worldPoint, within: radius), weight: 1.0)
         }
-        // 5. 線上(最寄りの線分への垂線の足)
+        if settings.center {
+            consider(nearestPoint(of: [.center], to: worldPoint, within: radius), weight: 1.0)
+        }
+        if let best {
+            return best.result
+        }
+
+        // 第2層: 線上(点系が何もないときだけ。カーソルは常に線の近くに居るため競争には入れない)
         if settings.onLine, let r = nearestOnLine(to: worldPoint, within: radius) {
             return r
         }
-        // 6. グリッド
+        // 第3層: グリッド
         if settings.grid {
             let gx = (worldPoint.x / gridSpacing).rounded() * gridSpacing
             let gy = (worldPoint.y / gridSpacing).rounded() * gridSpacing
@@ -166,7 +179,8 @@ public final class SnapEngine {
         return nil
     }
 
-    private func nearestPoint(of kinds: Set<SnapKind>, to world: Vec2, within radius: Double) -> SnapResult? {
+    /// 最寄りの点系スナップ。戻り値は(結果, 距離)
+    private func nearestPoint(of kinds: Set<SnapKind>, to world: Vec2, within radius: Double) -> (SnapResult, Double)? {
         var best: TypedPoint?
         var bestDist = radius
         let (cx, cy) = cellOf(world)
@@ -183,7 +197,7 @@ public final class SnapEngine {
             }
         }
         guard let best else { return nil }
-        return SnapResult(point: best.point, kind: best.kind)
+        return (SnapResult(point: best.point, kind: best.kind), bestDist)
     }
 
     /// カーソル近傍の線分インデックス(重複除去済み)
@@ -202,16 +216,32 @@ public final class SnapEngine {
         return result
     }
 
-    private func nearestIntersection(to world: Vec2, within radius: Double) -> SnapResult? {
+    /// 最寄りの交点。戻り値は(結果, 距離)。
+    /// 交点が半径内にあるためには両方の線分がカーソル半径内を通る必要があるので、
+    /// まず「カーソルに近い線分」だけに絞ってから総当たり計算する(密集図面対策)。
+    private func nearestIntersection(to world: Vec2, within radius: Double) -> (SnapResult, Double)? {
         let indices = nearbySegmentIndices(around: world)
-        // 近傍が多すぎる場合は交点計算を打ち切る(密集地帯でのO(k²)暴走防止)
-        guard indices.count >= 2, indices.count <= 64 else { return nil }
+        // カーソルからの距離で線分を絞り込み
+        var near: [(index: Int32, dist: Double)] = []
+        for idx in indices {
+            let s = segments[Int(idx)]
+            let d = Self.closestPointOnSegment(world, s.a, s.b).distance(to: world)
+            if d <= radius * 1.2 {
+                near.append((idx, d))
+            }
+        }
+        guard near.count >= 2 else { return nil }
+        // それでも多い場合は近い順に32本まで(O(k²)の上限を確保)
+        if near.count > 32 {
+            near.sort { $0.dist < $1.dist }
+            near.removeSubrange(32...)
+        }
         var best: Vec2?
         var bestDist = radius
-        for i in 0..<(indices.count - 1) {
-            let s1 = segments[Int(indices[i])]
-            for j in (i + 1)..<indices.count {
-                let s2 = segments[Int(indices[j])]
+        for i in 0..<(near.count - 1) {
+            let s1 = segments[Int(near[i].index)]
+            for j in (i + 1)..<near.count {
+                let s2 = segments[Int(near[j].index)]
                 guard let p = Self.segmentIntersection(s1.a, s1.b, s2.a, s2.b) else { continue }
                 let d = p.distance(to: world)
                 if d < bestDist {
@@ -221,7 +251,7 @@ public final class SnapEngine {
             }
         }
         guard let best else { return nil }
-        return SnapResult(point: best, kind: .intersection)
+        return (SnapResult(point: best, kind: .intersection), bestDist)
     }
 
     private func nearestOnLine(to world: Vec2, within radius: Double) -> SnapResult? {
