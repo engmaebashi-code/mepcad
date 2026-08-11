@@ -69,12 +69,27 @@ public struct Renderer {
                      viewSize: CGSize,
                      gridSpacing: Double,   // mm
                      in ctx: CGContext) {
-        // 背景
+        draw(entities: document.entities, layers: document.layers,
+             transform: transform, viewSize: viewSize, gridSpacing: gridSpacing, in: ctx)
+    }
+
+    /// スナップショット(値コピー)ベースの描画。バックグラウンドスレッドでのキャッシュ生成に使う
+    public func draw(entities: [Entity], layers: [Layer],
+                     transform: ViewTransform,
+                     viewSize: CGSize,
+                     gridSpacing: Double,
+                     in ctx: CGContext) {
         ctx.setFillColor(theme.background)
         ctx.fill(CGRect(origin: .zero, size: viewSize))
-
         drawGrid(transform: transform, viewSize: viewSize, spacing: gridSpacing, in: ctx)
-        drawEntities(document: document, transform: transform, in: ctx)
+
+        var layerByID: [LayerID: Layer] = [:]
+        for layer in layers { layerByID[layer.id] = layer }
+
+        for entity in entities {
+            guard let layer = layerByID[entity.layerID], layer.isVisible else { continue }
+            drawEntity(entity, layer: layer, transform: transform, in: ctx)
+        }
     }
 
     // MARK: - グリッド
@@ -118,41 +133,37 @@ public struct Renderer {
 
     // MARK: - エンティティ
 
-    private func drawEntities(document: Document, transform: ViewTransform, in ctx: CGContext) {
-        for entity in document.entities {
-            guard let layer = document.layer(id: entity.layerID), layer.isVisible else { continue }
+    private func drawEntity(_ entity: Entity, layer: Layer, transform: ViewTransform, in ctx: CGContext) {
+        let colorIndex = entity.style.colorIndex ?? layer.defaultColorIndex
+        let weight = entity.style.lineWeight ?? layer.defaultLineWeight
+        ctx.setStrokeColor(theme.color(forIndex: colorIndex))
+        // 線幅は紙面mm→pxの簡易換算(最低1px)
+        ctx.setLineWidth(max(1, weight * transform.scale * 10))
 
-            let colorIndex = entity.style.colorIndex ?? layer.defaultColorIndex
-            let weight = entity.style.lineWeight ?? layer.defaultLineWeight
-            ctx.setStrokeColor(theme.color(forIndex: colorIndex))
-            // 線幅は紙面mm→pxの簡易換算(最低1px)
-            ctx.setLineWidth(max(1, weight * transform.scale * 10))
+        switch entity.kind {
+        case .line(let a, let b):
+            let sa = transform.toScreen(a)
+            let sb = transform.toScreen(b)
+            ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+            ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+            ctx.strokePath()
 
-            switch entity.kind {
-            case .line(let a, let b):
-                let sa = transform.toScreen(a)
-                let sb = transform.toScreen(b)
-                ctx.move(to: CGPoint(x: sa.x, y: sa.y))
-                ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
-                ctx.strokePath()
+        case .circle(let center, let radius):
+            let sc = transform.toScreen(center)
+            let r = radius * transform.scale
+            ctx.strokeEllipse(in: CGRect(x: sc.x - r, y: sc.y - r, width: r * 2, height: r * 2))
 
-            case .circle(let center, let radius):
-                let sc = transform.toScreen(center)
-                let r = radius * transform.scale
-                ctx.strokeEllipse(in: CGRect(x: sc.x - r, y: sc.y - r, width: r * 2, height: r * 2))
+        case .arc(let center, let radius, let startAngle, let endAngle):
+            let sc = transform.toScreen(center)
+            let r = radius * transform.scale
+            // スクリーンはY反転しているため角度符号を反転
+            ctx.addArc(center: CGPoint(x: sc.x, y: sc.y), radius: r,
+                       startAngle: -startAngle, endAngle: -endAngle, clockwise: true)
+            ctx.strokePath()
 
-            case .arc(let center, let radius, let startAngle, let endAngle):
-                let sc = transform.toScreen(center)
-                let r = radius * transform.scale
-                // スクリーンはY反転しているため角度符号を反転
-                ctx.addArc(center: CGPoint(x: sc.x, y: sc.y), radius: r,
-                           startAngle: -startAngle, endAngle: -endAngle, clockwise: true)
-                ctx.strokePath()
-
-            case .text(let position, let content, let height, let angle):
-                drawText(content, at: position, height: height, angle: angle,
-                         colorIndex: colorIndex, transform: transform, in: ctx)
-            }
+        case .text(let position, let content, let height, let angle):
+            drawText(content, at: position, height: height, angle: angle,
+                     colorIndex: colorIndex, transform: transform, in: ctx)
         }
     }
 
@@ -160,8 +171,9 @@ public struct Renderer {
                           colorIndex: Int, transform: ViewTransform, in ctx: CGContext) {
         #if canImport(CoreText)
         let sp = transform.toScreen(position)
-        // 紙面mm×縮尺→ワールドmm換算はM2で。M1は高さmm×スケール×10で近似表示
-        let fontSize = max(6, height * transform.scale * 10)
+        // 文字高さは実寸mm(JWW取込時に紙面mm×グループ縮尺で変換済み)
+        let fontSize = height * transform.scale
+        guard fontSize >= 3 else { return }  // 読めないサイズは描かない(ズームアウト時の性能確保)
         let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
         let attrs: [CFString: Any] = [
             kCTFontAttributeName: font,

@@ -48,6 +48,24 @@ public final class Document {
         return removed
     }
 
+    /// 大量追加(JWW読込等)。onChangeは最後に1回だけ発火する
+    public func appendBulk(_ newEntities: [Entity]) {
+        entities.append(contentsOf: newEntities)
+        onChange?()
+    }
+
+    /// 指定レイヤのエンティティを全削除(下敷きの入替に使用)
+    public func removeAll(inLayer layerID: LayerID) {
+        entities.removeAll { $0.layerID == layerID }
+        onChange?()
+    }
+
+    /// 全エンティティを削除(ファイルを開く=新しい図面に置き換える時に使用)
+    public func removeAllEntities() {
+        entities.removeAll()
+        onChange?()
+    }
+
     public func replace(_ entity: Entity) {
         guard let idx = entities.firstIndex(where: { $0.id == entity.id }) else { return }
         entities[idx] = entity
@@ -92,11 +110,11 @@ public final class Document {
         // バルブ位置の円
         entities.append(Entity(layerID: pipe.id, kind: .circle(center: Vec2(4000, 6100), radius: 60)))
         entities.append(Entity(layerID: pipe.id, kind: .circle(center: Vec2(4000, 5800), radius: 60)))
-        // 注記
+        // 注記(文字高さは実寸mm: 1/50印刷時に紙面7mm/6mm相当)
         entities.append(Entity(layerID: base.id,
-                               kind: .text(position: Vec2(1100, 6600), content: "AC-1", height: 3.5, angle: 0)))
+                               kind: .text(position: Vec2(1100, 6600), content: "AC-1", height: 350, angle: 0)))
         entities.append(Entity(layerID: pipe.id,
-                               kind: .text(position: Vec2(4300, 6350), content: "50A 冷温水(往)", height: 3.0, angle: 0)))
+                               kind: .text(position: Vec2(4300, 6350), content: "50A 冷温水(往)", height: 300, angle: 0)))
         onChange?()
     }
 }

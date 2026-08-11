@@ -1,6 +1,8 @@
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
 import MepCore
+import MepFormats
 import MepRender
 import MepTools
 
@@ -23,8 +25,13 @@ final class CanvasController {
 
     /// UI更新通知
     var onStatusUpdate: ((_ coords: String, _ zoom: String, _ snap: String) -> Void)?
+    var onInfo: ((String) -> Void)?
     var needsContentRedraw: (() -> Void)?
     var needsOverlayRedraw: (() -> Void)?
+    /// ドキュメント内容の変更(描画キャッシュ破棄が必要)
+    var onDocumentChanged: (() -> Void)?
+    /// キャンバスの現在サイズ(コンテナビューが提供)
+    var viewSizeProvider: (() -> CGSize)?
 
     init() {
         commandStack = CommandStack(document: document)
@@ -33,7 +40,50 @@ final class CanvasController {
         document.onChange = { [weak self] in
             guard let self else { return }
             self.snapEngine.rebuild(from: self.document)
+            self.onDocumentChanged?()
             self.needsContentRedraw?()
+        }
+    }
+
+    // MARK: - JWW読込(M2)
+
+    func openJwwPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "JWWファイルを開く"
+        if let jwwType = UTType(filenameExtension: "jww") {
+            panel.allowedContentTypes = [jwwType]
+        }
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        loadJww(url: url)
+    }
+
+    func loadJww(url: URL) {
+        onInfo?("JWW読込中… \(url.lastPathComponent)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                // 解析はバックグラウンド、ドキュメント反映はメインで行う
+                let data = try Data(contentsOf: url)
+                let parser = JwwParser(data: data)
+                let start = Date()
+                let drawing = try parser.parse()
+                let parseMs = Int(Date().timeIntervalSince(start) * 1000)
+
+                DispatchQueue.main.async {
+                    // 「開く」= 図面全体の置き換え(デモ図面・前回の下敷きも含めて全消去)
+                    self.document.removeAllEntities()
+                    let count = JwwReader.importDrawing(drawing, into: self.document)
+                    if let size = self.viewSizeProvider?() {
+                        self.fit(viewSize: size)
+                    }
+                    self.onInfo?("\(url.lastPathComponent) — 線\(drawing.lines.count) 弧\(drawing.arcs.count) 字\(drawing.texts.count) / 解析\(parseMs)ms / 計\(count)要素")
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.onInfo?("読込エラー: \(error.localizedDescription)")
+                }
+            }
         }
     }
 

@@ -24,5 +24,10 @@ let package = Package(
             dependencies: ["MepCore", "MepFormats", "MepRender", "MepTools"]
         ),
         .testTarget(name: "MepCoreTests", dependencies: ["MepCore"]),
+        .testTarget(
+            name: "MepFormatsTests",
+            dependencies: ["MepFormats"],
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )
