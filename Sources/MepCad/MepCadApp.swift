@@ -26,6 +26,7 @@ struct ContentView: View {
     @ObservedObject var uiState: CanvasUIState
     @State private var isDark = false
     @State private var angle: AngleConstraint = .free
+    @State private var gridOn = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -38,7 +39,16 @@ struct ContentView: View {
                 Text(uiState.coords)
                     .monospacedDigit()
                     .frame(width: 190, alignment: .leading)
-                Text("グリッド 250")
+                // クリックでグリッド表示切替
+                Button {
+                    controller.toggleGrid()
+                    gridOn.toggle()
+                } label: {
+                    Text(gridOn ? "グリッド 250" : "グリッド OFF")
+                        .foregroundStyle(gridOn ? .primary : .tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("クリックでグリッド表示/非表示")
                 Text("スナップ: \(uiState.snap)")
                     .frame(width: 110, alignment: .leading)
                 Text("ズーム \(uiState.zoom)")

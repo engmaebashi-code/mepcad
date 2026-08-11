@@ -60,7 +60,7 @@ final class CanvasContentView: NSView {
                 renderer.draw(document: controller.document,
                               transform: transform,
                               viewSize: bounds.size,
-                              gridSpacing: controller.gridSpacing,
+                              gridSpacing: controller.effectiveGridSpacing,
                               in: ctx)
                 // 同期描画結果をそのままキャッシュ化するため非同期生成も走らせる
                 scheduleRegenerate()
@@ -83,7 +83,7 @@ final class CanvasContentView: NSView {
         let layers = controller.document.layers
         let transform = controller.transform
         let theme = controller.theme
-        let gridSpacing = controller.gridSpacing
+        let gridSpacing = controller.effectiveGridSpacing
         let size = bounds.size
         let scaleFactor = window?.backingScaleFactor ?? 2
 

@@ -17,7 +17,18 @@ final class CanvasController {
     var transform = ViewTransform(scale: 0.08, origin: Vec2(60, 540))
     var theme = RenderTheme.light()
     var gridSpacing: Double = 250  // mm
+    var gridVisible = true
     var pickBoxPx: Double = 10     // 環境設定と連動予定
+
+    /// 描画に渡すグリッド間隔(非表示時は0=描かない)
+    var effectiveGridSpacing: Double { gridVisible ? gridSpacing : 0 }
+
+    func toggleGrid() {
+        gridVisible.toggle()
+        // グリッドはキャッシュに焼き込まれているため破棄が必要
+        onDocumentChanged?()
+        needsContentRedraw?()
+    }
 
     /// 最後に計算したカーソル状態(オーバーレイ描画用)
     var cursorScreen: Vec2?

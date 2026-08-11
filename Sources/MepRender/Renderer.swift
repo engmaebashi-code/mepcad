@@ -95,6 +95,7 @@ public struct Renderer {
     // MARK: - グリッド
 
     private func drawGrid(transform: ViewTransform, viewSize: CGSize, spacing: Double, in ctx: CGContext) {
+        guard spacing > 0 else { return }  // 0 = グリッド非表示
         let pxPerCell = spacing * transform.scale
         guard pxPerCell >= 4 else { return }  // 細かすぎたら描かない(自動間引き)
 
