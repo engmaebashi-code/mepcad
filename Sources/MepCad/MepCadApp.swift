@@ -27,6 +27,12 @@ struct ContentView: View {
     @State private var isDark = false
     @State private var angle: AngleConstraint = .free
     @State private var gridOn = true
+    // スナップ種別のON/OFF(将来は環境設定ウィンドウに移設)
+    @State private var snapEndpoint = true
+    @State private var snapIntersection = true
+    @State private var snapMidpoint = true
+    @State private var snapCenter = true
+    @State private var snapOnLine = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,6 +118,25 @@ struct ContentView: View {
                     Image(systemName: "arrow.uturn.forward")
                 }
                 .help("やり直し(⇧⌘Z)")
+            }
+
+            // スナップ設定(将来は環境設定に移設)
+            ToolbarItemGroup {
+                Menu {
+                    Toggle("端点", isOn: $snapEndpoint)
+                        .onChange(of: snapEndpoint) { _, v in controller.snapEngine.settings.endpoint = v }
+                    Toggle("交点", isOn: $snapIntersection)
+                        .onChange(of: snapIntersection) { _, v in controller.snapEngine.settings.intersection = v }
+                    Toggle("中点", isOn: $snapMidpoint)
+                        .onChange(of: snapMidpoint) { _, v in controller.snapEngine.settings.midpoint = v }
+                    Toggle("円の中心", isOn: $snapCenter)
+                        .onChange(of: snapCenter) { _, v in controller.snapEngine.settings.center = v }
+                    Toggle("線上", isOn: $snapOnLine)
+                        .onChange(of: snapOnLine) { _, v in controller.snapEngine.settings.onLine = v }
+                } label: {
+                    Image(systemName: "scope")
+                }
+                .help("スナップ設定(種別ごとのON/OFF)")
             }
 
             ToolbarItemGroup {

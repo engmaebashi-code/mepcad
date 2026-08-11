@@ -223,14 +223,7 @@ final class CanvasController {
         let w = transform.toWorld(effective)
         let coords = String(format: "X: %.0f  Y: %.0f", w.x, w.y)
         let zoom = String(format: "%.0f%%", transform.scale * 1000)  // 1/50図面での見かけ倍率目安
-        let snapText: String
-        switch snappedKind {
-        case .endpoint: snapText = "端点"
-        case .midpoint: snapText = "中点"
-        case .center: snapText = "中心"
-        case .grid: snapText = "グリッド"
-        case nil: snapText = "—"
-        }
+        let snapText = snappedKind?.label ?? "—"
         onStatusUpdate?(coords, zoom, snapText)
     }
 }

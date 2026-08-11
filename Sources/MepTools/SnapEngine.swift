@@ -2,10 +2,23 @@ import Foundation
 import MepCore
 
 public enum SnapKind: Int, Sendable {
-    case endpoint = 0
-    case midpoint = 1
-    case center = 2
-    case grid = 3
+    case endpoint = 0      // 端点
+    case midpoint = 1      // 中点
+    case center = 2        // 円・円弧の中心
+    case grid = 3          // グリッド
+    case intersection = 4  // 交点
+    case onLine = 5        // 線上
+
+    public var label: String {
+        switch self {
+        case .endpoint: return "端点"
+        case .midpoint: return "中点"
+        case .center: return "中心"
+        case .grid: return "グリッド"
+        case .intersection: return "交点"
+        case .onLine: return "線上"
+        }
+    }
 }
 
 public struct SnapResult: Sendable {
@@ -13,64 +26,136 @@ public struct SnapResult: Sendable {
     public let kind: SnapKind
 }
 
+/// スナップ種別ごとの有効/無効(環境設定に載せる想定の設定値)
+public struct SnapSettings: Sendable {
+    public var endpoint = true
+    public var midpoint = true
+    public var center = true
+    public var intersection = true
+    public var onLine = true
+    public var grid = true
+
+    public init() {}
+}
+
 /// グリッドバケット空間索引によるスナップエンジン。
-/// M1は端点・中点・中心+グリッド補正。交点・線上スナップはM3で追加。
+/// 点(端点・中点・中心)は事前索引、交点・線上はカーソル近傍の線分だけを
+/// その場で計算する(全交点の事前計算はO(n²)で7万線分では不可能なため)。
+/// 優先順位: 端点 > 交点 > 中点 > 中心 > 線上 > グリッド
 public final class SnapEngine {
-    private var buckets: [Int64: [Vec2]] = [:]
+
+    private struct TypedPoint {
+        var point: Vec2
+        var kind: SnapKind
+    }
+
+    private struct Segment {
+        var a: Vec2
+        var b: Vec2
+    }
+
+    private var pointBuckets: [Int64: [TypedPoint]] = [:]
+    private var segments: [Segment] = []
+    private var segmentBuckets: [Int64: [Int32]] = [:]
     private let cellSize: Double
 
+    public var settings = SnapSettings()
     public var gridSpacing: Double = 250  // mm
-    public var gridEnabled = true
-    public var pointSnapEnabled = true
+
+    /// 互換ブリッジ(グリッド表示切替と連動)
+    public var gridEnabled: Bool {
+        get { settings.grid }
+        set { settings.grid = newValue }
+    }
 
     public init(cellSize: Double = 500) {
         self.cellSize = cellSize
     }
 
-    private func key(_ p: Vec2) -> Int64 {
-        let cx = Int64((p.x / cellSize).rounded(.down))
-        let cy = Int64((p.y / cellSize).rounded(.down))
-        return cx &* 1_000_003 &+ cy
+    // MARK: - 索引構築
+
+    private func cellKey(_ cx: Int64, _ cy: Int64) -> Int64 {
+        cx &* 1_000_003 &+ cy
     }
 
-    /// ドキュメントからスナップ点索引を再構築
+    private func cellOf(_ p: Vec2) -> (Int64, Int64) {
+        (Int64((p.x / cellSize).rounded(.down)), Int64((p.y / cellSize).rounded(.down)))
+    }
+
     public func rebuild(from document: Document) {
-        buckets.removeAll(keepingCapacity: true)
+        pointBuckets.removeAll(keepingCapacity: true)
+        segments.removeAll(keepingCapacity: true)
+        segmentBuckets.removeAll(keepingCapacity: true)
+
         for entity in document.entities {
             guard let layer = document.layer(id: entity.layerID), layer.isVisible else { continue }
-            for p in entity.snapPoints {
-                buckets[key(p), default: []].append(p)
+            switch entity.kind {
+            case .line(let a, let b):
+                addPoint(a, .endpoint)
+                addPoint(b, .endpoint)
+                addPoint(Vec2((a.x + b.x) / 2, (a.y + b.y) / 2), .midpoint)
+                addSegment(a, b)
+            case .circle(let c, _):
+                addPoint(c, .center)
+            case .arc(let c, let r, let sa, let ea):
+                addPoint(c, .center)
+                addPoint(Vec2(c.x + r * cos(sa), c.y + r * sin(sa)), .endpoint)
+                addPoint(Vec2(c.x + r * cos(ea), c.y + r * sin(ea)), .endpoint)
+            case .text(let p, _, _, _):
+                addPoint(p, .endpoint)
             }
         }
     }
 
-    /// worldPoint近傍のスナップを探す。radiusはワールドmm(ピックボックス半径をmm換算して渡す)
-    public func snap(_ worldPoint: Vec2, radius: Double) -> SnapResult? {
-        // 1) 端点系スナップ
-        if pointSnapEnabled {
-            var best: Vec2?
-            var bestDist = radius
-            let cx = Int64((worldPoint.x / cellSize).rounded(.down))
-            let cy = Int64((worldPoint.y / cellSize).rounded(.down))
-            for dx in -1...1 {
-                for dy in -1...1 {
-                    let k = (cx + Int64(dx)) &* 1_000_003 &+ (cy + Int64(dy))
-                    guard let points = buckets[k] else { continue }
-                    for p in points {
-                        let d = p.distance(to: worldPoint)
-                        if d < bestDist {
-                            bestDist = d
-                            best = p
-                        }
-                    }
-                }
-            }
-            if let b = best {
-                return SnapResult(point: b, kind: .endpoint)
+    private func addPoint(_ p: Vec2, _ kind: SnapKind) {
+        let (cx, cy) = cellOf(p)
+        pointBuckets[cellKey(cx, cy), default: []].append(TypedPoint(point: p, kind: kind))
+    }
+
+    /// 線分を通過セルすべてに登録(セルサイズの半分刻みで線分上を歩く)
+    private func addSegment(_ a: Vec2, _ b: Vec2) {
+        let index = Int32(segments.count)
+        segments.append(Segment(a: a, b: b))
+        let length = a.distance(to: b)
+        let steps = max(1, Int(length / (cellSize * 0.5)))
+        var lastKey: Int64 = .min
+        for i in 0...steps {
+            let t = Double(i) / Double(steps)
+            let p = Vec2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+            let (cx, cy) = cellOf(p)
+            let key = cellKey(cx, cy)
+            if key != lastKey {
+                segmentBuckets[key, default: []].append(index)
+                lastKey = key
             }
         }
-        // 2) グリッド補正
-        if gridEnabled {
+    }
+
+    // MARK: - スナップ検索
+
+    public func snap(_ worldPoint: Vec2, radius: Double) -> SnapResult? {
+        // 1. 端点
+        if settings.endpoint, let r = nearestPoint(of: [.endpoint], to: worldPoint, within: radius) {
+            return r
+        }
+        // 2. 交点(近傍の線分同士をその場で計算)
+        if settings.intersection, let r = nearestIntersection(to: worldPoint, within: radius) {
+            return r
+        }
+        // 3. 中点
+        if settings.midpoint, let r = nearestPoint(of: [.midpoint], to: worldPoint, within: radius) {
+            return r
+        }
+        // 4. 円の中心
+        if settings.center, let r = nearestPoint(of: [.center], to: worldPoint, within: radius) {
+            return r
+        }
+        // 5. 線上(最寄りの線分への垂線の足)
+        if settings.onLine, let r = nearestOnLine(to: worldPoint, within: radius) {
+            return r
+        }
+        // 6. グリッド
+        if settings.grid {
             let gx = (worldPoint.x / gridSpacing).rounded() * gridSpacing
             let gy = (worldPoint.y / gridSpacing).rounded() * gridSpacing
             let gp = Vec2(gx, gy)
@@ -79,5 +164,105 @@ public final class SnapEngine {
             }
         }
         return nil
+    }
+
+    private func nearestPoint(of kinds: Set<SnapKind>, to world: Vec2, within radius: Double) -> SnapResult? {
+        var best: TypedPoint?
+        var bestDist = radius
+        let (cx, cy) = cellOf(world)
+        for dx in -1...1 {
+            for dy in -1...1 {
+                guard let points = pointBuckets[cellKey(cx + Int64(dx), cy + Int64(dy))] else { continue }
+                for tp in points where kinds.contains(tp.kind) {
+                    let d = tp.point.distance(to: world)
+                    if d < bestDist {
+                        bestDist = d
+                        best = tp
+                    }
+                }
+            }
+        }
+        guard let best else { return nil }
+        return SnapResult(point: best.point, kind: best.kind)
+    }
+
+    /// カーソル近傍の線分インデックス(重複除去済み)
+    private func nearbySegmentIndices(around world: Vec2) -> [Int32] {
+        var seen = Set<Int32>()
+        var result: [Int32] = []
+        let (cx, cy) = cellOf(world)
+        for dx in -1...1 {
+            for dy in -1...1 {
+                guard let list = segmentBuckets[cellKey(cx + Int64(dx), cy + Int64(dy))] else { continue }
+                for idx in list where seen.insert(idx).inserted {
+                    result.append(idx)
+                }
+            }
+        }
+        return result
+    }
+
+    private func nearestIntersection(to world: Vec2, within radius: Double) -> SnapResult? {
+        let indices = nearbySegmentIndices(around: world)
+        // 近傍が多すぎる場合は交点計算を打ち切る(密集地帯でのO(k²)暴走防止)
+        guard indices.count >= 2, indices.count <= 64 else { return nil }
+        var best: Vec2?
+        var bestDist = radius
+        for i in 0..<(indices.count - 1) {
+            let s1 = segments[Int(indices[i])]
+            for j in (i + 1)..<indices.count {
+                let s2 = segments[Int(indices[j])]
+                guard let p = Self.segmentIntersection(s1.a, s1.b, s2.a, s2.b) else { continue }
+                let d = p.distance(to: world)
+                if d < bestDist {
+                    bestDist = d
+                    best = p
+                }
+            }
+        }
+        guard let best else { return nil }
+        return SnapResult(point: best, kind: .intersection)
+    }
+
+    private func nearestOnLine(to world: Vec2, within radius: Double) -> SnapResult? {
+        let indices = nearbySegmentIndices(around: world)
+        var best: Vec2?
+        var bestDist = radius
+        for idx in indices {
+            let s = segments[Int(idx)]
+            let p = Self.closestPointOnSegment(world, s.a, s.b)
+            let d = p.distance(to: world)
+            if d < bestDist {
+                bestDist = d
+                best = p
+            }
+        }
+        guard let best else { return nil }
+        return SnapResult(point: best, kind: .onLine)
+    }
+
+    // MARK: - 幾何ヘルパ
+
+    /// 線分同士の交点(端点接触も含む)。平行・非交差はnil
+    static func segmentIntersection(_ p1: Vec2, _ p2: Vec2, _ p3: Vec2, _ p4: Vec2) -> Vec2? {
+        let d1 = p2 - p1
+        let d2 = p4 - p3
+        let denom = d1.x * d2.y - d1.y * d2.x
+        guard abs(denom) > 1e-12 else { return nil }
+        let dp = p3 - p1
+        let t = (dp.x * d2.y - dp.y * d2.x) / denom
+        let u = (dp.x * d1.y - dp.y * d1.x) / denom
+        let eps = 1e-9
+        guard t >= -eps, t <= 1 + eps, u >= -eps, u <= 1 + eps else { return nil }
+        return Vec2(p1.x + d1.x * t, p1.y + d1.y * t)
+    }
+
+    /// 点から線分への最近点(垂線の足。線分外なら端点)
+    static func closestPointOnSegment(_ p: Vec2, _ a: Vec2, _ b: Vec2) -> Vec2 {
+        let ab = b - a
+        let lenSq = ab.x * ab.x + ab.y * ab.y
+        guard lenSq > 1e-12 else { return a }
+        let t = max(0, min(1, ((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / lenSq))
+        return Vec2(a.x + ab.x * t, a.y + ab.y * t)
     }
 }

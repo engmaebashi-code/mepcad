@@ -166,7 +166,7 @@ final class CrosshairOverlayView: NSView {
         ctx.stroke(CGRect(x: p.x - half, y: p.y - half,
                           width: controller.pickBoxPx, height: controller.pickBoxPx))
 
-        // スナップマーク(オレンジ菱形)
+        // スナップマーク(オレンジ菱形)+ 種別ラベル(カーソル中心付近に文字表示)
         if let s = controller.snappedScreen {
             ctx.setStrokeColor(CGColor(red: 0.91, green: 0.63, blue: 0, alpha: 1))
             ctx.setLineWidth(2)
@@ -177,6 +177,10 @@ final class CrosshairOverlayView: NSView {
             ctx.addLine(to: CGPoint(x: s.x - r, y: s.y))
             ctx.closePath()
             ctx.strokePath()
+
+            if let kind = controller.snappedKind {
+                drawSnapLabel(kind.label, near: CGPoint(x: s.x + 12, y: s.y - 26), in: ctx)
+            }
         }
 
         // 作図プレビュー(ラバーバンド)
@@ -212,6 +216,23 @@ final class CrosshairOverlayView: NSView {
         if !buffer.isEmpty, let p = controller.cursorScreen {
             drawInputBadge("\(buffer) ⏎", near: CGPoint(x: p.x + 18, y: p.y + 18), in: ctx)
         }
+    }
+
+    /// スナップ種別ラベル(オレンジの小バッジ)
+    private func drawSnapLabel(_ text: String, near point: CGPoint, in ctx: CGContext) {
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ]
+        let attributed = NSAttributedString(string: text, attributes: attrs)
+        let size = attributed.size()
+        let rect = CGRect(x: point.x, y: point.y,
+                          width: size.width + 12, height: size.height + 5)
+        let path = CGPath(roundedRect: rect, cornerWidth: 5, cornerHeight: 5, transform: nil)
+        ctx.addPath(path)
+        ctx.setFillColor(CGColor(red: 0.91, green: 0.63, blue: 0, alpha: 0.92))
+        ctx.fillPath()
+        attributed.draw(at: CGPoint(x: rect.minX + 6, y: rect.minY + 2.5))
     }
 
     /// 数値入力バッジ(角丸背景付き)
