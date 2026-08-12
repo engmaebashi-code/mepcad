@@ -78,6 +78,95 @@ public final class Document {
         onChange?()
     }
 
+    /// レイヤ追加(JWWグループ展開・ユーザー追加レイヤ用)
+    public func addLayer(_ layer: Layer) {
+        layers.append(layer)
+        onChange?()
+    }
+
+    /// 条件に合うレイヤを削除(所属エンティティも削除)。カレントレイヤは削除しない
+    public func removeLayers(where predicate: (Layer) -> Bool) {
+        let removing = Set(layers.filter { predicate($0) && $0.id != currentLayerID }.map(\.id))
+        guard !removing.isEmpty else { return }
+        entities.removeAll { removing.contains($0.layerID) }
+        layers.removeAll { removing.contains($0.id) }
+        onChange?()
+    }
+
+    public func setCurrentLayer(id: LayerID) {
+        guard layers.contains(where: { $0.id == id }) else { return }
+        currentLayerID = id
+        onChange?()
+    }
+
+    // MARK: - 一括編集(M4: 選択編集用。onChangeは1回だけ発火)
+
+    /// 複数エンティティを平行移動する
+    public func translateBulk(ids: Set<EntityID>, by delta: Vec2) {
+        guard !ids.isEmpty else { return }
+        for idx in entities.indices where ids.contains(entities[idx].id) {
+            entities[idx] = entities[idx].translated(by: delta)
+        }
+        onChange?()
+    }
+
+    /// 複数エンティティを削除し、削除したスナップショットを返す(Undo用)
+    @discardableResult
+    public func removeBulk(ids: Set<EntityID>) -> [Entity] {
+        guard !ids.isEmpty else { return [] }
+        let removed = entities.filter { ids.contains($0.id) }
+        entities.removeAll { ids.contains($0.id) }
+        onChange?()
+        return removed
+    }
+
+    /// 複数エンティティを削除し、(元の位置, 実体)を返す(Undoでの重なり順復元用)
+    @discardableResult
+    public func removeBulkIndexed(ids: Set<EntityID>) -> [(index: Int, entity: Entity)] {
+        guard !ids.isEmpty else { return [] }
+        var removed: [(index: Int, entity: Entity)] = []
+        var kept: [Entity] = []
+        kept.reserveCapacity(entities.count)
+        for (i, e) in entities.enumerated() {
+            if ids.contains(e.id) {
+                removed.append((i, e))
+            } else {
+                kept.append(e)
+            }
+        }
+        guard !removed.isEmpty else { return [] }
+        entities = kept
+        onChange?()
+        return removed
+    }
+
+    /// removeBulkIndexedの逆操作: 元の位置に挿入して重なり順を復元する
+    public func insertBulk(_ items: [(index: Int, entity: Entity)]) {
+        guard !items.isEmpty else { return }
+        for item in items.sorted(by: { $0.index < $1.index }) {
+            entities.insert(item.entity, at: min(item.index, entities.count))
+        }
+        onChange?()
+    }
+
+    /// 複数エンティティを同id置換する(属性一括変更用)
+    public func replaceBulk(_ newEntities: [Entity]) {
+        guard !newEntities.isEmpty else { return }
+        var byID: [EntityID: Entity] = [:]
+        for e in newEntities { byID[e.id] = e }
+        for idx in entities.indices {
+            if let replacement = byID[entities[idx].id] {
+                entities[idx] = replacement
+            }
+        }
+        onChange?()
+    }
+
+    /// idの集合からエンティティ実体を引く(選択ハイライト・プロパティ表示用)
+    public func entities(ids: Set<EntityID>) -> [Entity] {
+        entities.filter { ids.contains($0.id) }
+    }
+
     // MARK: - デモ用サンプル(M1動作確認)
 
     /// 機械室風のサンプル図形を配置する(10m×8mの部屋+機器+配管ライン)

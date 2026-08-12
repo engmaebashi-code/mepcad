@@ -137,9 +137,17 @@ public struct Renderer {
     private func drawEntity(_ entity: Entity, layer: Layer, transform: ViewTransform, in ctx: CGContext) {
         let colorIndex = entity.style.colorIndex ?? layer.defaultColorIndex
         let weight = entity.style.lineWeight ?? layer.defaultLineWeight
+        let lineType = entity.style.lineType ?? layer.defaultLineType
         ctx.setStrokeColor(theme.color(forIndex: colorIndex))
         // 線幅は紙面mm→pxの簡易換算(最低1px)
         ctx.setLineWidth(max(1, weight * transform.scale * 10))
+        // 線種: 0=実線 1=破線 2=一点鎖線(M4: プロパティパネルの線種変更に対応)
+        switch lineType {
+        case 1:  ctx.setLineDash(phase: 0, lengths: [7, 4])
+        case 2:  ctx.setLineDash(phase: 0, lengths: [12, 4, 2, 4])
+        default: ctx.setLineDash(phase: 0, lengths: [])
+        }
+        defer { ctx.setLineDash(phase: 0, lengths: []) }
 
         switch entity.kind {
         case .line(let a, let b):
@@ -166,6 +174,48 @@ public struct Renderer {
             drawText(content, at: position, height: height, angle: angle,
                      colorIndex: colorIndex, transform: transform, in: ctx)
         }
+    }
+
+    // MARK: - 輪郭のみの描画(選択ハイライト・移動/複写ゴースト用。M4)
+
+    /// エンティティ群を指定色・指定線幅の輪郭だけで描く(背景は塗らない)。
+    /// オーバーレイでの選択ハイライトとゴーストプレビューに使う。
+    public func drawOutlines(_ entities: [Entity],
+                             transform: ViewTransform,
+                             color: CGColor,
+                             lineWidth: CGFloat,
+                             in ctx: CGContext) {
+        ctx.saveGState()
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(lineWidth)
+        for entity in entities {
+            switch entity.kind {
+            case .line(let a, let b):
+                let sa = transform.toScreen(a)
+                let sb = transform.toScreen(b)
+                ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                ctx.strokePath()
+            case .circle(let center, let radius):
+                let sc = transform.toScreen(center)
+                let r = radius * transform.scale
+                ctx.strokeEllipse(in: CGRect(x: sc.x - r, y: sc.y - r, width: r * 2, height: r * 2))
+            case .arc(let center, let radius, let startAngle, let endAngle):
+                let sc = transform.toScreen(center)
+                let r = radius * transform.scale
+                ctx.addArc(center: CGPoint(x: sc.x, y: sc.y), radius: r,
+                           startAngle: -startAngle, endAngle: -endAngle, clockwise: true)
+                ctx.strokePath()
+            case .text(let position, let content, let height, _):
+                // 文字は概算バウンディングボックスで示す
+                let widthMm = max(height * 0.6, Double(content.count) * height * 0.9)
+                let p0 = transform.toScreen(position)
+                let p1 = transform.toScreen(Vec2(position.x + widthMm, position.y + height))
+                ctx.stroke(CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y),
+                                  width: abs(p1.x - p0.x), height: abs(p1.y - p0.y)))
+            }
+        }
+        ctx.restoreGState()
     }
 
     private func drawText(_ string: String, at position: Vec2, height: Double, angle: Double,

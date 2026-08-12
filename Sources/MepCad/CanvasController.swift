@@ -6,13 +6,28 @@ import MepFormats
 import MepRender
 import MepTools
 
+/// 選択中オブジェクトの属性サマリ(プロパティパネル表示用)
+struct SelectionSummary: Equatable {
+    var count: Int
+    var lineCount: Int
+    var circleCount: Int
+    var arcCount: Int
+    var textCount: Int
+    /// 全選択で共通ならその値(内側nil=byLayer)、混在なら外側nil
+    var commonColorIndex: Int??
+    var commonLineType: Int??
+    var commonLineWeight: Double??
+    var commonLayerID: LayerID?
+}
+
 /// キャンバスの状態と操作を束ねるコントローラ(メインスレッド専用)。
-/// NSView(イベント)とSwiftUI(ステータスバー)の橋渡しをする。
-final class CanvasController {
-    let document = Document()
+/// NSView(イベント)とSwiftUI(ステータスバー・パネル)の橋渡しをする。
+final class CanvasController: NSObject {
+    let document: Document
     let commandStack: CommandStack
     let snapEngine = SnapEngine()
     let tools: DrawingToolController
+    let editOp = EditOperation()
 
     var transform = ViewTransform(scale: 0.08, origin: Vec2(60, 540))
     var theme = RenderTheme.light()
@@ -30,6 +45,7 @@ final class CanvasController {
         // グリッドはキャッシュに焼き込まれているため破棄が必要
         onDocumentChanged?()
         needsContentRedraw?()
+        onGridChanged?(gridVisible)  // 状態はコントローラが唯一の情報源(UI側はこれに追従)
     }
 
     /// 最後に計算したカーソル状態(オーバーレイ描画用)
@@ -38,6 +54,36 @@ final class CanvasController {
     var snappedKind: SnapKind?
     /// 作図プレビュー(ワールド座標。オーバーレイが描画)
     var previewShape: PreviewShape = .none
+
+    // MARK: - 選択状態(M4)
+
+    /// 現在の選択(idの集合)
+    private(set) var selection: Set<EntityID> = []
+    /// オーバーレイ描画用の選択エンティティ実体キャッシュ
+    private(set) var selectedEntities: [Entity] = []
+    /// 矩形選択(マーキー)中のスクリーン座標
+    var marqueeStartScreen: Vec2?
+    var marqueeCurrentScreen: Vec2?
+    /// マーキーのモード(ドラッグ方向で決まる: 左→右=窓、右→左=交差)
+    var marqueeMode: RectSelectionMode {
+        guard let s = marqueeStartScreen, let c = marqueeCurrentScreen else { return .window }
+        return c.x >= s.x ? .window : .crossing
+    }
+    /// 移動/複写ゴーストの移動量(ワールド)。nilなら非表示
+    var ghostDelta: Vec2?
+    /// SwiftUIパネル上にカーソルがある間true(十字カーソルを消して矢印に戻す)
+    var uiHovering = false {
+        didSet {
+            guard uiHovering != oldValue else { return }
+            if uiHovering {
+                cursorScreen = nil
+                snappedScreen = nil
+                snappedKind = nil
+            }
+            needsOverlayRedraw?()
+            onUIHoverChanged?()
+        }
+    }
 
     /// UI更新通知
     var onStatusUpdate: ((_ coords: String, _ zoom: String, _ snap: String) -> Void)?
@@ -49,24 +95,326 @@ final class CanvasController {
     var onDocumentChanged: (() -> Void)?
     /// キャンバスの現在サイズ(コンテナビューが提供)
     var viewSizeProvider: (() -> CGSize)?
+    /// レイヤ一覧の変化(レイヤパネル用)
+    var onLayersChanged: (([Layer], LayerID) -> Void)?
+    /// 選択の変化(プロパティパネル用)
+    var onSelectionChanged: ((SelectionSummary?) -> Void)?
+    /// パネルホバー状態の変化(カーソル矩形の更新用)
+    var onUIHoverChanged: (() -> Void)?
+    /// 右端接近の変化(Dock風パネルの出し入れ用。trueで接近)
+    var onEdgeProximity: ((Bool) -> Void)?
+    private var lastEdgeProximity = false
+    /// グリッド表示状態の変化(ステータスバー表示の同期用)
+    var onGridChanged: ((Bool) -> Void)?
 
-    init() {
-        commandStack = CommandStack(document: document)
-        tools = DrawingToolController(currentLayerID: document.currentLayerID)
+    override init() {
+        let doc = Document()
+        document = doc
+        commandStack = CommandStack(document: doc)
+        tools = DrawingToolController(currentLayerID: doc.currentLayerID)
+        super.init()
         document.loadDemoContent()
         snapEngine.rebuild(from: document)
         document.onChange = { [weak self] in
             guard let self else { return }
             self.snapEngine.rebuild(from: self.document)
+            // 選択中エンティティが消えた/変わった場合に追従
+            self.pruneSelection()
             self.onDocumentChanged?()
             self.needsContentRedraw?()
+            self.publishLayers()
         }
         tools.delegate = self
+    }
+
+    // MARK: - 選択(M4)
+
+    /// ワールド座標でのヒット許容距離(画面上のピックボックス半幅+1px)
+    private var hitToleranceMm: Double {
+        (pickBoxPx / 2 + 1) / max(transform.scale, 1e-9)
+    }
+
+    /// クリック選択。shift=追加/除外トグル
+    func clickSelect(atScreen p: Vec2, shiftDown: Bool) {
+        let world = transform.toWorld(p)
+        let hit = SelectionEngine.topmostHit(at: world, tolerance: hitToleranceMm,
+                                             entities: document.entities,
+                                             layers: document.layers)
+        if let hit {
+            if shiftDown {
+                if selection.contains(hit) { selection.remove(hit) } else { selection.insert(hit) }
+            } else {
+                selection = [hit]
+            }
+        } else if !shiftDown {
+            selection = []
+        }
+        selectionDidChange()
+    }
+
+    /// 矩形選択の確定
+    func commitMarquee(shiftDown: Bool) {
+        defer {
+            marqueeStartScreen = nil
+            marqueeCurrentScreen = nil
+            needsOverlayRedraw?()
+        }
+        guard let s = marqueeStartScreen, let c = marqueeCurrentScreen else { return }
+        let mode = marqueeMode
+        let w1 = transform.toWorld(s)
+        let w2 = transform.toWorld(c)
+        let rect = BBox(minX: min(w1.x, w2.x), minY: min(w1.y, w2.y),
+                        maxX: max(w1.x, w2.x), maxY: max(w1.y, w2.y))
+        let ids = SelectionEngine.ids(in: rect, mode: mode,
+                                      entities: document.entities,
+                                      layers: document.layers)
+        if shiftDown {
+            selection.formUnion(ids)
+        } else {
+            selection = Set(ids)
+        }
+        selectionDidChange()
+    }
+
+    func selectAll() {
+        let selectable = SelectionEngine.selectableLayerIDs(document.layers)
+        selection = Set(document.entities.filter { selectable.contains($0.layerID) }.map(\.id))
+        selectionDidChange()
+    }
+
+    func clearSelection() {
+        guard !selection.isEmpty else { return }
+        selection = []
+        selectionDidChange()
+    }
+
+    func deleteSelection() {
+        guard !selection.isEmpty else { return }
+        let snapshot = document.entities(ids: selection)
+        selection = []
+        commandStack.run(RemoveEntitiesCommand(entities: snapshot))
+        selectionDidChange()
+        onInfo?("\(snapshot.count)個の要素を削除しました(⌘Zで取り消し)")
+    }
+
+    /// ドキュメント変更後、存在しないidを選択から取り除き実体キャッシュを更新する
+    private func pruneSelection() {
+        guard !selection.isEmpty else {
+            selectedEntities = []
+            return
+        }
+        let existing = Set(document.entities.map(\.id))
+        selection = selection.intersection(existing)
+        selectedEntities = document.entities(ids: selection)
+        onSelectionChanged?(selectionSummary())
+        needsOverlayRedraw?()
+    }
+
+    private func selectionDidChange() {
+        selectedEntities = document.entities(ids: selection)
+        needsOverlayRedraw?()
+        onSelectionChanged?(selectionSummary())
+        publishSelectionHint()
+    }
+
+    private func publishSelectionHint() {
+        if editOp.isActive { return }
+        if selection.isEmpty {
+            if tools.kind == .select {
+                onInfo?("クリック=選択 / 左→右ドラッグ=窓選択 / 右→左=交差選択 / 右クリック=メニュー")
+            }
+        } else {
+            onInfo?("\(selection.count)個選択中 — 右クリック=複写・移動 / delete=削除 / esc=解除")
+        }
+    }
+
+    private func selectionSummary() -> SelectionSummary? {
+        guard !selectedEntities.isEmpty else { return nil }
+        var lines = 0, circles = 0, arcs = 0, texts = 0
+        for e in selectedEntities {
+            switch e.kind {
+            case .line: lines += 1
+            case .circle: circles += 1
+            case .arc: arcs += 1
+            case .text: texts += 1
+            }
+        }
+        func common<T: Equatable>(_ values: [T]) -> T? {
+            guard let first = values.first else { return nil }
+            return values.allSatisfy { $0 == first } ? first : nil
+        }
+        return SelectionSummary(
+            count: selectedEntities.count,
+            lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
+            commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
+            commonLineType: common(selectedEntities.map(\.style.lineType)),
+            commonLineWeight: common(selectedEntities.map(\.style.lineWeight)),
+            commonLayerID: common(selectedEntities.map(\.layerID))
+        )
+    }
+
+    // MARK: - 選択オブジェクトの属性変更(プロパティパネルから)
+
+    /// スタイル・レイヤの一括変更。changeでコピーを書き換える
+    private func updateSelection(name: String, change: (inout Entity) -> Void) {
+        guard !selectedEntities.isEmpty else { return }
+        let before = selectedEntities
+        var after = before
+        for i in after.indices { change(&after[i]) }
+        guard after != before else { return }
+        commandStack.run(UpdateEntitiesCommand(name: name, before: before, after: after))
+        selectionDidChange()
+    }
+
+    func applyColorIndex(_ index: Int?) {
+        updateSelection(name: "色変更") { $0.style.colorIndex = index }
+    }
+
+    func applyLineType(_ type: Int?) {
+        updateSelection(name: "線種変更") { $0.style.lineType = type }
+    }
+
+    func applyLineWeight(_ weight: Double?) {
+        updateSelection(name: "太さ変更") { $0.style.lineWeight = weight }
+    }
+
+    func moveSelectionToLayer(_ layerID: LayerID) {
+        updateSelection(name: "レイヤ移動") { $0.layerID = layerID }
+    }
+
+    // MARK: - 移動・複写(M4)
+
+    func beginEditOperation(_ kind: EditOpKind) {
+        guard !selection.isEmpty else { return }
+        // 作図ツール中なら選択ツールへ戻してから開始
+        if tools.kind != .select { tools.select(.select) }
+        editOp.begin(kind, hasSelection: true)
+        ghostDelta = nil
+        onInfo?(editOp.hint)
+        needsOverlayRedraw?()
+    }
+
+    /// 編集操作中のクリック(スナップ有効)
+    func editClick() {
+        guard editOp.isActive, let cursor = cursorScreen else { return }
+        let effective = snappedScreen ?? cursor
+        let world = transform.toWorld(effective)
+        if let delta = editOp.click(at: world) {
+            commitEditDelta(delta)  // 結果メッセージはコミット側が出す
+        } else if editOp.isActive {
+            onInfo?(editOp.hint)
+        }
+        ghostDelta = editOp.previewDelta(cursor: world)
+        needsOverlayRedraw?()
+    }
+
+    private func commitEditDelta(_ delta: Vec2) {
+        guard !selection.isEmpty else { return }
+        switch editOp.kind {
+        case .move:
+            commandStack.run(TranslateEntitiesCommand(ids: selection, delta: delta))
+            onInfo?("\(selection.count)個を移動しました(⌘Zで取り消し)")
+        case .copy:
+            let copies = selectedEntities.map { $0.duplicated(by: delta) }
+            commandStack.run(AddEntitiesCommand(name: "複写", entities: copies))
+            onInfo?("\(copies.count)個を複写しました — 続けてクリックで連続配置 / escで終了")
+        }
+    }
+
+    func cancelEditOperation() {
+        guard editOp.isActive else { return }
+        editOp.cancel()
+        ghostDelta = nil
+        publishSelectionHint()
+        needsOverlayRedraw?()
+    }
+
+    // MARK: - 右クリックメニュー(M4)
+
+    /// 現在の状態に応じたコンテキストメニュー。nilならメニューを出さない
+    /// (作図ツール中・編集操作中は右クリック=キャンセルの操作感を維持)
+    func contextMenu() -> NSMenu? {
+        guard tools.kind == .select, !editOp.isActive else { return nil }
+
+        let menu = NSMenu()
+        if !selection.isEmpty {
+            // 最上段: 複写・移動(一番使うため)
+            menu.addItem(menuItem("複写", #selector(menuCopy)))
+            menu.addItem(menuItem("移動", #selector(menuMove)))
+            menu.addItem(.separator())
+            menu.addItem(menuItem("削除", #selector(menuDelete)))
+            menu.addItem(.separator())
+            menu.addItem(menuItem("選択解除", #selector(menuDeselect)))
+        } else {
+            menu.addItem(menuItem("すべて選択", #selector(menuSelectAll)))
+            menu.addItem(menuItem("全体表示", #selector(menuFit)))
+            menu.addItem(menuItem(gridVisible ? "グリッドを隠す" : "グリッドを表示", #selector(menuToggleGrid)))
+        }
+        return menu
+    }
+
+    private func menuItem(_ title: String, _ action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func menuCopy() { beginEditOperation(.copy) }
+    @objc private func menuMove() { beginEditOperation(.move) }
+    @objc private func menuDelete() { deleteSelection() }
+    @objc private func menuDeselect() { clearSelection() }
+    @objc private func menuSelectAll() { selectAll() }
+    @objc private func menuFit() {
+        if let size = viewSizeProvider?() { fit(viewSize: size) }
+    }
+    @objc private func menuToggleGrid() { toggleGrid() }
+
+    // MARK: - レイヤ操作(レイヤパネルから)
+
+    func setLayerVisible(_ id: LayerID, _ visible: Bool) {
+        guard var layer = document.layer(id: id) else { return }
+        layer.isVisible = visible
+        // 非表示レイヤの要素は選択から外す(updateLayerのonChange経由でprune済みだが
+        // 可視状態はidの存在に影響しないため明示的に外す)
+        if !visible {
+            let hiddenIDs = Set(document.entities.filter { $0.layerID == id }.map(\.id))
+            selection.subtract(hiddenIDs)
+        }
+        document.updateLayer(layer)  // onChange: スナップ再構築・キャッシュ破棄
+        selectionDidChange()
+    }
+
+    func setLayerLocked(_ id: LayerID, _ locked: Bool) {
+        guard var layer = document.layer(id: id) else { return }
+        layer.isEditable = !locked
+        if locked {
+            let lockedIDs = Set(document.entities.filter { $0.layerID == id }.map(\.id))
+            selection.subtract(lockedIDs)
+        }
+        document.updateLayer(layer)
+        selectionDidChange()
+    }
+
+    func setCurrentLayer(_ id: LayerID) {
+        guard let layer = document.layer(id: id), layer.isEditable, layer.isVisible else { return }
+        document.setCurrentLayer(id: id)
+        tools.currentLayerID = id
+    }
+
+    private func publishLayers() {
+        onLayersChanged?(document.layers, document.currentLayerID)
+    }
+
+    /// 初期表示用(SwiftUI側のonAppearから呼ぶ)
+    func publishInitialState() {
+        publishLayers()
+        onSelectionChanged?(selectionSummary())
     }
 
     // MARK: - 作図ツール(M3)
 
     func selectTool(_ kind: ToolKind) {
+        cancelEditOperation()
         tools.select(kind)
     }
 
@@ -79,12 +427,37 @@ final class CanvasController {
     }
 
     func toolCancel() {
+        if editOp.isActive {
+            cancelEditOperation()
+            return
+        }
+        if tools.kind == .select, !selection.isEmpty {
+            clearSelection()
+            return
+        }
         tools.cancel()
         previewShape = .none
         needsOverlayRedraw?()
     }
 
     func toolKey(_ character: Character) -> Bool {
+        // 編集操作(移動・複写)の数値入力を優先
+        if editOp.isActive {
+            var committed = false
+            let handled = editOp.keyInput(character) { [weak self] delta in
+                committed = true
+                self?.commitEditDelta(delta)
+                self?.ghostDelta = nil
+            }
+            if handled {
+                // コミット時は結果メッセージ(commitEditDelta側)を残す
+                if !committed, editOp.isActive {
+                    onInfo?(editOp.hint)
+                }
+                needsOverlayRedraw?()
+            }
+            return handled
+        }
         let handled = tools.keyInput(character)
         if handled {
             // 数値バッジ表示と、⏎確定後のプレビュー更新
@@ -137,9 +510,12 @@ final class CanvasController {
                 let parseMs = Int(Date().timeIntervalSince(start) * 1000)
 
                 DispatchQueue.main.async {
-                    // 「開く」= 図面全体の置き換え(デモ図面・前回の下敷きも含めて全消去)
+                    // 「開く」= 図面全体の置き換え(前回のJWW下敷きレイヤも入れ替える)
+                    self.selection = []
                     self.document.removeAllEntities()
+                    self.document.removeLayers(where: { $0.isUnderlay })
                     let count = JwwReader.importDrawing(drawing, into: self.document)
+                    self.selectionDidChange()
                     if let size = self.viewSizeProvider?() {
                         self.fit(viewSize: size)
                     }
@@ -178,6 +554,15 @@ final class CanvasController {
     }
 
     func mouseMoved(toScreen p: Vec2, shiftDown: Bool = false) {
+        // 右端接近の検知(Dock風パネルのトリガ)
+        if let size = viewSizeProvider?(), size.width > 0 {
+            let near = Double(size.width) - p.x < 16
+            if near != lastEdgeProximity {
+                lastEdgeProximity = near
+                onEdgeProximity?(near)
+            }
+        }
+        guard !uiHovering else { return }
         cursorScreen = p
         let world = transform.toWorld(p)
         let radiusMm = pickBoxPx / max(transform.scale, 1e-9)
@@ -195,6 +580,13 @@ final class CanvasController {
             previewShape = tools.preview(cursor: transform.toWorld(effective), shiftDown: shiftDown)
         } else {
             previewShape = .none
+        }
+        // 移動・複写のゴースト更新(スナップ点優先)
+        if editOp.isActive {
+            let effective = snappedScreen ?? p
+            ghostDelta = editOp.previewDelta(cursor: transform.toWorld(effective))
+        } else {
+            ghostDelta = nil
         }
         needsOverlayRedraw?()
         publishStatus()

@@ -1,15 +1,32 @@
 import SwiftUI
 import AppKit
 import MepCore
+import MepRender
 import MepTools
 
-/// ステータスバー表示用の状態
+/// ステータスバー・パネル表示用の状態
 final class CanvasUIState: ObservableObject {
     @Published var coords = "X: —  Y: —"
     @Published var zoom = "—"
     @Published var snap = "—"
-    @Published var info = "⌘O=JWWを開く / ツールバーで作図ツールを選択(M3)"
+    @Published var info = "⌘O=JWWを開く / クリック=選択 / 右クリック=メニュー(M4)"
     @Published var tool: ToolKind = .select
+    // M4: レイヤ・選択・パネル
+    @Published var layers: [Layer] = []
+    @Published var currentLayerID: LayerID?
+    @Published var selection: SelectionSummary?
+    @Published var panelPinned = false
+    @Published var paletteColors: [Color] = []
+    @Published var gridOn = true
+
+    func paletteColor(_ index: Int) -> Color {
+        guard index >= 0, index < paletteColors.count else { return .primary }
+        return paletteColors[index]
+    }
+
+    func updatePalette(from theme: RenderTheme) {
+        paletteColors = theme.palette.map { Color(cgColor: $0) }
+    }
 }
 
 private func toolIcon(_ kind: ToolKind) -> String {
@@ -26,18 +43,39 @@ struct ContentView: View {
     @ObservedObject var uiState: CanvasUIState
     @State private var isDark = false
     @State private var angle: AngleConstraint = .free
-    @State private var gridOn = true
     // スナップ種別のON/OFF(将来は環境設定ウィンドウに移設)
     @State private var snapEndpoint = true
     @State private var snapIntersection = true
     @State private var snapMidpoint = true
     @State private var snapCenter = true
     @State private var snapOnLine = true
+    // パネル自動格納(Dock風: 右端に近づくと出る)
+    @State private var panelRevealed = false
+    @State private var panelHideWork: DispatchWorkItem?
+
+    private var panelShown: Bool { panelRevealed || uiState.panelPinned }
 
     var body: some View {
         VStack(spacing: 0) {
-            CanvasView(controller: controller)
-                .frame(minWidth: 800, minHeight: 500)
+            ZStack(alignment: .trailing) {
+                CanvasView(controller: controller)
+                    .frame(minWidth: 800, minHeight: 500)
+
+                // ガラス調自動格納パネル(出現トリガはキャンバス側の右端接近検知)
+                if panelShown {
+                    SidePanelView(controller: controller, uiState: uiState)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .onHover { hovering in
+                            controller.uiHovering = hovering
+                            if hovering {
+                                revealPanel()
+                            } else {
+                                scheduleHide()
+                            }
+                        }
+                }
+            }
+            .animation(.spring(response: 0.28, dampingFraction: 0.86), value: panelShown)
 
             // ステータスバー(モックv0.4準拠の最小構成)
             HStack(spacing: 14) {
@@ -45,13 +83,12 @@ struct ContentView: View {
                 Text(uiState.coords)
                     .monospacedDigit()
                     .frame(width: 190, alignment: .leading)
-                // クリックでグリッド表示切替
+                // クリックでグリッド表示切替(状態はコントローラから同期)
                 Button {
                     controller.toggleGrid()
-                    gridOn.toggle()
                 } label: {
-                    Text(gridOn ? "グリッド 250" : "グリッド OFF")
-                        .foregroundStyle(gridOn ? .primary : .tertiary)
+                    Text(uiState.gridOn ? "グリッド 250" : "グリッド OFF")
+                        .foregroundStyle(uiState.gridOn ? .primary : .tertiary)
                 }
                 .buttonStyle(.plain)
                 .help("クリックでグリッド表示/非表示")
@@ -72,7 +109,7 @@ struct ContentView: View {
             .background(.bar)
         }
         .toolbar {
-            // 作図ツール(モックの左パレット簡易版。パネルUIはM4)
+            // 作図ツール(モックの左パレット簡易版)
             ToolbarItemGroup {
                 Picker("ツール", selection: Binding(
                     get: { uiState.tool },
@@ -148,9 +185,19 @@ struct ContentView: View {
                 .keyboardShortcut("o", modifiers: .command)
                 .help("JWWファイルを開く(⌘O)")
 
+                // パネルのピン留め(自動格納⇔常時表示)
+                Button {
+                    uiState.panelPinned.toggle()
+                    if uiState.panelPinned { panelRevealed = true }
+                } label: {
+                    Image(systemName: uiState.panelPinned ? "sidebar.trailing" : "sidebar.right")
+                }
+                .help("レイヤ/プロパティパネル(右端にカーソルを寄せても出ます)")
+
                 Button {
                     controller.toggleTheme()
                     isDark.toggle()
+                    uiState.updatePalette(from: controller.theme)
                 } label: {
                     Image(systemName: isDark ? "sun.max" : "moon")
                 }
@@ -169,7 +216,49 @@ struct ContentView: View {
             controller.onToolChanged = { kind in
                 uiState.tool = kind
             }
+            controller.onLayersChanged = { layers, currentID in
+                uiState.layers = layers
+                uiState.currentLayerID = currentID
+            }
+            controller.onSelectionChanged = { summary in
+                uiState.selection = summary
+            }
+            controller.onEdgeProximity = { near in
+                if near {
+                    revealPanel()
+                } else if !controller.uiHovering {
+                    // パネル上にカーソルがある間は格納しない
+                    scheduleHide()
+                }
+            }
+            controller.onGridChanged = { visible in
+                uiState.gridOn = visible
+            }
+            uiState.updatePalette(from: controller.theme)
+            controller.publishInitialState()
         }
+    }
+
+    // MARK: - パネル自動格納
+
+    private func revealPanel() {
+        panelHideWork?.cancel()
+        panelHideWork = nil
+        if !panelRevealed { panelRevealed = true }
+    }
+
+    private func scheduleHide() {
+        guard !uiState.panelPinned else { return }
+        panelHideWork?.cancel()
+        let work = DispatchWorkItem {
+            // 発火時点でパネル上にカーソルがあれば格納しない
+            if !controller.uiHovering {
+                panelRevealed = false
+            }
+        }
+        panelHideWork = work
+        // 少し待ってから格納(右端→パネルへ移動する間に消えないよう猶予を持たせる)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 }
 
@@ -185,7 +274,7 @@ struct MepCadApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("MepCad — M1") {
+        WindowGroup("MepCad — M4") {
             ContentView(controller: controller, uiState: uiState)
         }
     }

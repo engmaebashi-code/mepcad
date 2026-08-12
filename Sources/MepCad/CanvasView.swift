@@ -134,18 +134,39 @@ final class CanvasContentView: NSView {
     }
 }
 
-// MARK: - 十字カーソル・ピックボックス・スナップマークのオーバーレイ
+// MARK: - 十字カーソル・ピックボックス・スナップマーク・選択表示のオーバーレイ
 
 final class CrosshairOverlayView: NSView {
     weak var controller: CanvasController?
+
+    /// 選択ハイライト/ゴーストを個別に描く上限(超えたらバウンディングボックス表示)
+    private let outlineDrawLimit = 2000
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }  // イベントは下へ通す
 
     override func draw(_ dirtyRect: NSRect) {
         guard let controller,
-              let p = controller.cursorScreen,
               let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        let accent = CGColor(red: 0.0, green: 0.4, blue: 0.9, alpha: 0.9)
+
+        // 選択ハイライト(カーソルが無くても描く)
+        if !controller.selectedEntities.isEmpty {
+            drawSelectionHighlight(controller: controller, in: ctx)
+        }
+
+        // 移動・複写のゴースト
+        if let delta = controller.ghostDelta, !controller.selectedEntities.isEmpty {
+            drawGhost(controller: controller, delta: delta, in: ctx)
+        }
+
+        // 矩形選択(マーキー)
+        if let s = controller.marqueeStartScreen, let c = controller.marqueeCurrentScreen {
+            drawMarquee(from: s, to: c, mode: controller.marqueeMode, in: ctx)
+        }
+
+        guard let p = controller.cursorScreen else { return }
 
         let lineColor: CGColor = controller.theme.isDark
             ? CGColor(gray: 1, alpha: 0.85)
@@ -184,7 +205,6 @@ final class CrosshairOverlayView: NSView {
         }
 
         // 作図プレビュー(ラバーバンド)
-        let accent = CGColor(red: 0.0, green: 0.4, blue: 0.9, alpha: 0.9)
         ctx.setStrokeColor(accent)
         ctx.setLineWidth(1.5)
         ctx.setLineDash(phase: 0, lengths: [6, 4])
@@ -212,9 +232,96 @@ final class CrosshairOverlayView: NSView {
         ctx.setLineDash(phase: 0, lengths: [])
 
         // 数値入力ポップアップ(カーソルのすぐ近くに表示)
-        let buffer = controller.tools.numericBuffer
-        if !buffer.isEmpty, let p = controller.cursorScreen {
+        let buffer = controller.editOp.isActive ? controller.editOp.numericBuffer
+                                                : controller.tools.numericBuffer
+        if !buffer.isEmpty {
             drawInputBadge("\(buffer) ⏎", near: CGPoint(x: p.x + 18, y: p.y + 18), in: ctx)
+        }
+    }
+
+    // MARK: 選択ハイライト・ゴースト・マーキー
+
+    private func drawSelectionHighlight(controller: CanvasController, in ctx: CGContext) {
+        let renderer = Renderer(theme: controller.theme)
+        let highlight = CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.9)
+        let entities = controller.selectedEntities
+        if entities.count <= outlineDrawLimit {
+            renderer.drawOutlines(entities, transform: controller.transform,
+                                  color: highlight, lineWidth: 2.5, in: ctx)
+        } else {
+            // 大量選択はバウンディングボックスで示す
+            var box = BBox.empty
+            for e in entities { box.union(e.bounds) }
+            guard !box.isEmpty else { return }
+            let p0 = controller.transform.toScreen(Vec2(box.minX, box.minY))
+            let p1 = controller.transform.toScreen(Vec2(box.maxX, box.maxY))
+            ctx.setStrokeColor(highlight)
+            ctx.setLineWidth(2)
+            ctx.setLineDash(phase: 0, lengths: [8, 4])
+            ctx.stroke(CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y),
+                              width: abs(p1.x - p0.x), height: abs(p1.y - p0.y)))
+            ctx.setLineDash(phase: 0, lengths: [])
+        }
+    }
+
+    private func drawGhost(controller: CanvasController, delta: Vec2, in ctx: CGContext) {
+        let renderer = Renderer(theme: controller.theme)
+        let ghostColor = CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.45)
+        let entities = controller.selectedEntities
+        if entities.count <= outlineDrawLimit {
+            let moved = entities.map { $0.translated(by: delta) }
+            renderer.drawOutlines(moved, transform: controller.transform,
+                                  color: ghostColor, lineWidth: 1.5, in: ctx)
+        } else {
+            var box = BBox.empty
+            for e in entities { box.union(e.bounds) }
+            guard !box.isEmpty else { return }
+            let p0 = controller.transform.toScreen(Vec2(box.minX + delta.x, box.minY + delta.y))
+            let p1 = controller.transform.toScreen(Vec2(box.maxX + delta.x, box.maxY + delta.y))
+            ctx.setStrokeColor(ghostColor)
+            ctx.setLineWidth(1.5)
+            ctx.setLineDash(phase: 0, lengths: [8, 4])
+            ctx.stroke(CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y),
+                              width: abs(p1.x - p0.x), height: abs(p1.y - p0.y)))
+            ctx.setLineDash(phase: 0, lengths: [])
+        }
+        // 基準点→カーソルのガイド線と移動量表示
+        if let base = controller.editOp.basePoint {
+            let sb = controller.transform.toScreen(base)
+            let st = controller.transform.toScreen(base + delta)
+            ctx.setStrokeColor(ghostColor)
+            ctx.setLineWidth(1)
+            ctx.setLineDash(phase: 0, lengths: [4, 3])
+            ctx.move(to: CGPoint(x: sb.x, y: sb.y))
+            ctx.addLine(to: CGPoint(x: st.x, y: st.y))
+            ctx.strokePath()
+            ctx.setLineDash(phase: 0, lengths: [])
+            drawOverlayLabel(String(format: "dx %.0f  dy %.0f", delta.x, delta.y),
+                             at: CGPoint(x: (sb.x + st.x) / 2 + 8, y: (sb.y + st.y) / 2 - 8),
+                             in: ctx)
+        }
+    }
+
+    private func drawMarquee(from s: Vec2, to c: Vec2, mode: RectSelectionMode, in ctx: CGContext) {
+        let rect = CGRect(x: min(s.x, c.x), y: min(s.y, c.y),
+                          width: abs(c.x - s.x), height: abs(c.y - s.y))
+        switch mode {
+        case .window:
+            // 窓選択(内包): 青の実線
+            ctx.setFillColor(CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.08))
+            ctx.fill(rect)
+            ctx.setStrokeColor(CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.8))
+            ctx.setLineWidth(1)
+            ctx.stroke(rect)
+        case .crossing:
+            // 交差選択: 緑の破線
+            ctx.setFillColor(CGColor(red: 0.2, green: 0.65, blue: 0.3, alpha: 0.08))
+            ctx.fill(rect)
+            ctx.setStrokeColor(CGColor(red: 0.2, green: 0.65, blue: 0.3, alpha: 0.9))
+            ctx.setLineWidth(1)
+            ctx.setLineDash(phase: 0, lengths: [5, 3])
+            ctx.stroke(rect)
+            ctx.setLineDash(phase: 0, lengths: [])
         }
     }
 
@@ -267,6 +374,11 @@ final class CanvasContainerView: NSView {
     let controller: CanvasController
     private let content = CanvasContentView()
     private let overlay = CrosshairOverlayView()
+
+    /// 選択ツールでのクリック/ドラッグ判定用
+    private var mouseDownScreen: Vec2?
+    private var isMarqueeDragging = false
+
     private var invisibleCursor: NSCursor = {
         let image = NSImage(size: NSSize(width: 1, height: 1))
         image.lockFocus()
@@ -305,14 +417,18 @@ final class CanvasContainerView: NSView {
         controller.needsOverlayRedraw = { [weak self] in self?.overlay.needsDisplay = true }
         controller.onDocumentChanged = { [weak self] in self?.content.invalidateCache() }
         controller.viewSizeProvider = { [weak self] in self?.bounds.size ?? .zero }
+        controller.onUIHoverChanged = { [weak self] in
+            guard let self else { return }
+            self.window?.invalidateCursorRects(for: self)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    // MARK: カーソル(標準矢印を消して十字に)
+    // MARK: カーソル(標準矢印を消して十字に。パネル上では矢印に戻す)
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: invisibleCursor)
+        addCursorRect(bounds, cursor: controller.uiHovering ? .arrow : invisibleCursor)
     }
 
     // MARK: トラッキング
@@ -335,7 +451,25 @@ final class CanvasContainerView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        // ドラッグでパン(M3で選択ドラッグに置き換え、パンはスペース+ドラッグへ)
+        let p = screenPoint(event)
+        if let start = mouseDownScreen, controller.tools.kind == .select, !controller.editOp.isActive {
+            // 選択ツール: ドラッグ=矩形選択(3px以上動いたらマーキー開始)
+            if !isMarqueeDragging, p.distance(to: start) > 3 {
+                isMarqueeDragging = true
+                controller.marqueeStartScreen = start
+            }
+            if isMarqueeDragging {
+                controller.marqueeCurrentScreen = p
+                controller.needsOverlayRedraw?()
+            }
+            return
+        }
+        // 作図ツール中・編集操作中はドラッグ=パン(M3の操作感)
+        controller.pan(dx: Double(event.deltaX), dy: Double(event.deltaY))
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        // 中ボタンドラッグ=パン(選択ツールでも常に使える)
         controller.pan(dx: Double(event.deltaX), dy: Double(event.deltaY))
     }
 
@@ -362,23 +496,54 @@ final class CanvasContainerView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        let p = screenPoint(event)
+        controller.mouseMoved(toScreen: p, shiftDown: event.modifierFlags.contains(.shift))
+
+        if controller.editOp.isActive {
+            // 移動・複写: クリック=基準点/目標点の指示
+            controller.editClick()
+            return
+        }
         if controller.tools.isDrawingToolActive {
             // 作図ツール: クリック=点の指示
-            controller.mouseMoved(toScreen: screenPoint(event),
-                                  shiftDown: event.modifierFlags.contains(.shift))
             controller.toolClick(shiftDown: event.modifierFlags.contains(.shift))
-        } else if event.clickCount == 2 {
+            return
+        }
+        // 選択ツール
+        if event.clickCount == 2 {
             controller.fit(viewSize: bounds.size)
+            return
+        }
+        mouseDownScreen = p
+        isMarqueeDragging = false
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer {
+            mouseDownScreen = nil
+            isMarqueeDragging = false
+        }
+        guard controller.tools.kind == .select, !controller.editOp.isActive else { return }
+        let shift = event.modifierFlags.contains(.shift)
+        if isMarqueeDragging {
+            controller.marqueeCurrentScreen = screenPoint(event)
+            controller.commitMarquee(shiftDown: shift)
+        } else if let start = mouseDownScreen, event.clickCount == 1 {
+            controller.clickSelect(atScreen: start, shiftDown: shift)
         }
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        // 右クリック: 作図の終了/キャンセル(コンテキストメニューはM4)
-        controller.toolCancel()
+        // 選択ツール: コンテキストメニュー / 作図・編集中: キャンセル(M3の操作感)
+        if let menu = controller.contextMenu() {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        } else {
+            controller.toolCancel()
+        }
     }
 
     override func keyDown(with event: NSEvent) {
-        // ⌘Z / ⇧⌘Z
+        // ⌘系ショートカット
         if event.modifierFlags.contains(.command) {
             let key = event.charactersIgnoringModifiers?.lowercased()
             if key == "z" {
@@ -389,6 +554,10 @@ final class CanvasContainerView: NSView {
                 }
                 return
             }
+            if key == "a" {
+                controller.selectAll()
+                return
+            }
             super.keyDown(with: event)
             return
         }
@@ -396,6 +565,13 @@ final class CanvasContainerView: NSView {
         if event.keyCode == 53 {
             controller.toolCancel()
             return
+        }
+        // delete / forward delete: 選択削除
+        if event.keyCode == 51 || event.keyCode == 117 {
+            if controller.tools.kind == .select, !controller.editOp.isActive {
+                controller.deleteSelection()
+                return
+            }
         }
         // 数値入力等はツールへ
         if let chars = event.characters, let first = chars.first,

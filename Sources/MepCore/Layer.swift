@@ -10,6 +10,8 @@ public struct Layer: Identifiable, Equatable, Codable, Sendable {
     public var defaultColorIndex: Int
     public var defaultLineType: Int
     public var defaultLineWeight: Double  // mm
+    /// JWW/PDF取込で作られた下敷きレイヤか(ファイルを開き直す時にまとめて入れ替える)
+    public var isUnderlay: Bool
 
     public init(id: LayerID = LayerID(),
                 name: String,
@@ -17,7 +19,8 @@ public struct Layer: Identifiable, Equatable, Codable, Sendable {
                 isEditable: Bool = true,
                 defaultColorIndex: Int = 0,
                 defaultLineType: Int = 0,
-                defaultLineWeight: Double = 0.15) {
+                defaultLineWeight: Double = 0.15,
+                isUnderlay: Bool = false) {
         self.id = id
         self.name = name
         self.isVisible = isVisible
@@ -25,6 +28,7 @@ public struct Layer: Identifiable, Equatable, Codable, Sendable {
         self.defaultColorIndex = defaultColorIndex
         self.defaultLineType = defaultLineType
         self.defaultLineWeight = defaultLineWeight
+        self.isUnderlay = isUnderlay
     }
 }
 
