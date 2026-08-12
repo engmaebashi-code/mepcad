@@ -28,13 +28,14 @@ public enum EntityKind: Equatable, Codable, Sendable {
 
 public struct Entity: Identifiable, Equatable, Codable, Sendable {
     public let id: EntityID
-    public var layerID: LayerID
+    /// 所属レイヤ(グループ0-15 × レイヤ0-15。Jw_cad準拠)
+    public var layer: LayerAddress
     public var style: Style
     public var kind: EntityKind
 
-    public init(id: EntityID = EntityID(), layerID: LayerID, style: Style = .byLayer, kind: EntityKind) {
+    public init(id: EntityID = EntityID(), layer: LayerAddress, style: Style = .byLayer, kind: EntityKind) {
         self.id = id
-        self.layerID = layerID
+        self.layer = layer
         self.style = style
         self.kind = kind
     }

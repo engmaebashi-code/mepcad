@@ -8,10 +8,10 @@ final class SnapEngineTests: XCTestCase {
     func makeDocument() -> Document {
         let document = Document()
         document.removeAllEntities()
-        let layer = document.currentLayerID
-        document.add(Entity(layerID: layer, kind: .line(a: Vec2(0, 500), b: Vec2(1000, 500))))
-        document.add(Entity(layerID: layer, kind: .line(a: Vec2(500, 0), b: Vec2(500, 1000))))
-        document.add(Entity(layerID: layer, kind: .circle(center: Vec2(3000, 3000), radius: 200)))
+        let layer = document.current
+        document.add(Entity(layer: layer, kind: .line(a: Vec2(0, 500), b: Vec2(1000, 500))))
+        document.add(Entity(layer: layer, kind: .line(a: Vec2(500, 0), b: Vec2(500, 1000))))
+        document.add(Entity(layer: layer, kind: .circle(center: Vec2(3000, 3000), radius: 200)))
         return document
     }
 
@@ -84,11 +84,11 @@ final class SnapEngineTests: XCTestCase {
     func testIntersectionBeatsFartherEndpoint() {
         // 端点がカーソル半径内に居ても、交点の方が明確に近ければ交点が勝つ(重み付き競争)
         let document = Document()
-        let layer = document.currentLayerID
-        document.add(Entity(layerID: layer, kind: .line(a: Vec2(0, 500), b: Vec2(1000, 500))))
-        document.add(Entity(layerID: layer, kind: .line(a: Vec2(500, 0), b: Vec2(500, 1000))))
+        let layer = document.current
+        document.add(Entity(layer: layer, kind: .line(a: Vec2(0, 500), b: Vec2(1000, 500))))
+        document.add(Entity(layer: layer, kind: .line(a: Vec2(500, 0), b: Vec2(500, 1000))))
         // 交点(500,500)の近くに端点(560,500)を作る短い線
-        document.add(Entity(layerID: layer, kind: .line(a: Vec2(560, 500), b: Vec2(560, 300))))
+        document.add(Entity(layer: layer, kind: .line(a: Vec2(560, 500), b: Vec2(560, 300))))
         let engine = makeEngine(document)
         // カーソル(515,495): 交点まで15.8mm、端点560まで45.3mm — 両方半径内
         let r = engine.snap(Vec2(515, 495), radius: 60)

@@ -172,7 +172,7 @@ extension Entity {
     /// 平行移動した複製を返す(新しいid=複写用)
     public func duplicated(by delta: Vec2) -> Entity {
         var copy = translated(by: delta)
-        copy = Entity(id: EntityID(), layerID: copy.layerID, style: copy.style, kind: copy.kind)
+        copy = Entity(id: EntityID(), layer: copy.layer, style: copy.style, kind: copy.kind)
         return copy
     }
 }

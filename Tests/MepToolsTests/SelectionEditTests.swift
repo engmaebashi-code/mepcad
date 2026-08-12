@@ -2,18 +2,38 @@ import XCTest
 @testable import MepTools
 @testable import MepCore
 
-/// M4: 選択エンジンと移動・複写状態機械のテスト
+/// M4: 選択エンジンと移動・複写状態機械のテスト(16グループ×16レイヤ)
 final class SelectionEditTests: XCTestCase {
 
-    // 共通フィクスチャ: 表示レイヤ・ロックレイヤ・非表示レイヤ
-    let normalLayer = Layer(name: "基本作図")
-    let lockedLayer = Layer(name: "下敷き", isEditable: false)
-    let hiddenLayer = Layer(name: "隠し", isVisible: false)
-    var layers: [Layer] { [normalLayer, lockedLayer, hiddenLayer] }
+    // 共通フィクスチャ:
+    // 0-0=通常 / 0-1=ロック / 0-2=非表示 / グループ1=グループごと非表示
+    let normal = LayerAddress(0, 0)
+    let locked = LayerAddress(0, 1)
+    let hidden = LayerAddress(0, 2)
+    let inHiddenGroup = LayerAddress(1, 0)
+
+    var groups: [LayerGroup] {
+        var groups = (0..<16).map { _ in LayerGroup() }
+        groups[0].layers[1].isEditable = false
+        groups[0].layers[2].isVisible = false
+        groups[1].isVisible = false
+        return groups
+    }
 
     func line(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double,
-              on layer: Layer? = nil) -> Entity {
-        Entity(layerID: (layer ?? normalLayer).id, kind: .line(a: Vec2(x1, y1), b: Vec2(x2, y2)))
+              on layer: LayerAddress? = nil) -> Entity {
+        Entity(layer: layer ?? normal, kind: .line(a: Vec2(x1, y1), b: Vec2(x2, y2)))
+    }
+
+    // MARK: - 選択可能判定
+
+    func testSelectableAddresses() {
+        let selectable = SelectionEngine.selectableAddresses(groups)
+        XCTAssertTrue(selectable.contains(normal))
+        XCTAssertFalse(selectable.contains(locked))        // レイヤロック
+        XCTAssertFalse(selectable.contains(hidden))        // レイヤ非表示
+        XCTAssertFalse(selectable.contains(inHiddenGroup)) // グループ非表示
+        XCTAssertTrue(selectable.contains(LayerAddress(2, 15)))
     }
 
     // MARK: - クリック選択
@@ -22,11 +42,11 @@ final class SelectionEditTests: XCTestCase {
         let e1 = line(0, 0, 100, 0)
         let e2 = line(0, 10, 100, 10)
         let hit = SelectionEngine.topmostHit(at: Vec2(50, 1), tolerance: 5,
-                                             entities: [e1, e2], layers: layers)
+                                             entities: [e1, e2], groups: groups)
         XCTAssertEqual(hit, e1.id)
         // 許容外
         XCTAssertNil(SelectionEngine.topmostHit(at: Vec2(50, 300), tolerance: 5,
-                                                entities: [e1, e2], layers: layers))
+                                                entities: [e1, e2], groups: groups))
     }
 
     func testTopmostHitPrefersUpperEntity() {
@@ -34,15 +54,17 @@ final class SelectionEditTests: XCTestCase {
         let e1 = line(0, 0, 100, 0)
         let e2 = line(0, 0, 100, 0)
         let hit = SelectionEngine.topmostHit(at: Vec2(50, 0), tolerance: 5,
-                                             entities: [e1, e2], layers: layers)
+                                             entities: [e1, e2], groups: groups)
         XCTAssertEqual(hit, e2.id)
     }
 
     func testLockedAndHiddenLayersNotSelectable() {
-        let onLocked = line(0, 0, 100, 0, on: lockedLayer)
-        let onHidden = line(0, 0, 100, 0, on: hiddenLayer)
+        let onLocked = line(0, 0, 100, 0, on: locked)
+        let onHidden = line(0, 0, 100, 0, on: hidden)
+        let onHiddenGroup = line(0, 0, 100, 0, on: inHiddenGroup)
         XCTAssertNil(SelectionEngine.topmostHit(at: Vec2(50, 0), tolerance: 5,
-                                                entities: [onLocked, onHidden], layers: layers))
+                                                entities: [onLocked, onHidden, onHiddenGroup],
+                                                groups: groups))
     }
 
     // MARK: - 矩形選択(窓・交差)
@@ -53,19 +75,19 @@ final class SelectionEditTests: XCTestCase {
         let rect = BBox(minX: 0, minY: 0, maxX: 100, maxY: 100)
 
         let windowIDs = SelectionEngine.ids(in: rect, mode: .window,
-                                            entities: [inside, crossing], layers: layers)
+                                            entities: [inside, crossing], groups: groups)
         XCTAssertEqual(windowIDs, [inside.id])
 
         let crossingIDs = SelectionEngine.ids(in: rect, mode: .crossing,
-                                              entities: [inside, crossing], layers: layers)
+                                              entities: [inside, crossing], groups: groups)
         XCTAssertEqual(Set(crossingIDs), Set([inside.id, crossing.id]))
     }
 
     func testRectSelectionSkipsLockedLayers() {
-        let onLocked = line(10, 10, 90, 90, on: lockedLayer)
+        let onLocked = line(10, 10, 90, 90, on: locked)
         let rect = BBox(minX: 0, minY: 0, maxX: 100, maxY: 100)
         XCTAssertTrue(SelectionEngine.ids(in: rect, mode: .crossing,
-                                          entities: [onLocked], layers: layers).isEmpty)
+                                          entities: [onLocked], groups: groups).isEmpty)
     }
 
     // MARK: - 移動・複写の状態機械

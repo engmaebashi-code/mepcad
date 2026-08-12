@@ -16,22 +16,28 @@ public enum RectSelectionMode: Sendable {
 }
 
 /// 選択のヒットテスト(UI非依存・ユニットテスト対象)。
-/// 非表示レイヤ・ロックレイヤ(isEditable=false)のエンティティは選択対象外。
+/// 非表示・ロック(isEditable=false)のレイヤ/グループ上のエンティティは選択対象外。
 public enum SelectionEngine {
 
-    /// 選択可能なレイヤidの集合を作る
-    public static func selectableLayerIDs(_ layers: [Layer]) -> Set<LayerID> {
-        Set(layers.filter { $0.isVisible && $0.isEditable }.map(\.id))
+    /// 選択可能なレイヤ住所の集合(グループ・レイヤ両方が表示かつ編集可)
+    public static func selectableAddresses(_ groups: [LayerGroup]) -> Set<LayerAddress> {
+        var result = Set<LayerAddress>()
+        for (gi, g) in groups.enumerated() where g.isVisible && g.isEditable {
+            for (li, l) in g.layers.enumerated() where l.isVisible && l.isEditable {
+                result.insert(LayerAddress(gi, li))
+            }
+        }
+        return result
     }
 
     /// クリック位置に最も近いエンティティ(許容距離内)。同距離なら後から描いたものを優先
     public static func topmostHit(at p: Vec2, tolerance: Double,
-                                  entities: [Entity], layers: [Layer]) -> EntityID? {
-        let selectable = selectableLayerIDs(layers)
+                                  entities: [Entity], groups: [LayerGroup]) -> EntityID? {
+        let selectable = selectableAddresses(groups)
         var best: EntityID?
         var bestDist = tolerance
         // 後方(=上に描かれるもの)から走査し、同距離では先に見つけた方=上を保持
-        for entity in entities.reversed() where selectable.contains(entity.layerID) {
+        for entity in entities.reversed() where selectable.contains(entity.layer) {
             // バウンディングボックスで粗く除外(数万要素対応)
             let box = entity.bounds.expanded(by: tolerance)
             guard box.contains(p) else { continue }
@@ -46,10 +52,10 @@ public enum SelectionEngine {
 
     /// 矩形範囲のエンティティid(モードに応じて内包/交差)
     public static func ids(in rect: BBox, mode: RectSelectionMode,
-                           entities: [Entity], layers: [Layer]) -> [EntityID] {
-        let selectable = selectableLayerIDs(layers)
+                           entities: [Entity], groups: [LayerGroup]) -> [EntityID] {
+        let selectable = selectableAddresses(groups)
         var result: [EntityID] = []
-        for entity in entities where selectable.contains(entity.layerID) {
+        for entity in entities where selectable.contains(entity.layer) {
             // 粗い除外: バウンディングボックスが矩形と重ならないものはスキップ
             let box = entity.bounds
             guard !(box.maxX < rect.minX || box.minX > rect.maxX ||

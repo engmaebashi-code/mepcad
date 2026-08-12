@@ -88,7 +88,7 @@ public final class SnapEngine {
         segmentBuckets.removeAll(keepingCapacity: true)
 
         for entity in document.entities {
-            guard let layer = document.layer(id: entity.layerID), layer.isVisible else { continue }
+            guard document.isVisible(entity.layer) else { continue }
             switch entity.kind {
             case .line(let a, let b):
                 addPoint(a, .endpoint)

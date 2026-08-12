@@ -15,8 +15,7 @@ final class CoreTests: XCTestCase {
     }
 
     func testEntityBoundsAndSnapPoints() {
-        let layerID = LayerID()
-        let line = Entity(layerID: layerID, kind: .line(a: Vec2(0, 0), b: Vec2(100, 0)))
+        let line = Entity(layer: .zero, kind: .line(a: Vec2(0, 0), b: Vec2(100, 0)))
         XCTAssertEqual(line.bounds.width, 100)
         XCTAssertEqual(line.snapPoints.count, 3)  // 両端+中点
         XCTAssertTrue(line.snapPoints.contains(Vec2(50, 0)))
@@ -26,7 +25,7 @@ final class CoreTests: XCTestCase {
         let document = Document()
         let stack = CommandStack(document: document)
         let before = document.entities.count
-        let entity = Entity(layerID: document.currentLayerID,
+        let entity = Entity(layer: document.current,
                             kind: .line(a: Vec2(0, 0), b: Vec2(1000, 1000)))
         stack.run(AddEntityCommand(entity: entity))
         XCTAssertEqual(document.entities.count, before + 1)
@@ -41,8 +40,8 @@ final class CoreTests: XCTestCase {
         let document = Document()
         let stack = CommandStack(document: document)
         let before = document.entities.count
-        let e1 = Entity(layerID: document.currentLayerID, kind: .line(a: .zero, b: Vec2(1, 1)))
-        let e2 = Entity(layerID: document.currentLayerID, kind: .circle(center: .zero, radius: 5))
+        let e1 = Entity(layer: document.current, kind: .line(a: .zero, b: Vec2(1, 1)))
+        let e2 = Entity(layer: document.current, kind: .circle(center: .zero, radius: 5))
         stack.run(CommandGroup(name: "テスト複合", commands: [
             AddEntityCommand(entity: e1),
             AddEntityCommand(entity: e2),

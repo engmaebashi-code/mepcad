@@ -69,12 +69,13 @@ public struct Renderer {
                      viewSize: CGSize,
                      gridSpacing: Double,   // mm
                      in ctx: CGContext) {
-        draw(entities: document.entities, layers: document.layers,
+        draw(entities: document.entities, groups: document.groups,
              transform: transform, viewSize: viewSize, gridSpacing: gridSpacing, in: ctx)
     }
 
-    /// スナップショット(値コピー)ベースの描画。バックグラウンドスレッドでのキャッシュ生成に使う
-    public func draw(entities: [Entity], layers: [Layer],
+    /// スナップショット(値コピー)ベースの描画。バックグラウンドスレッドでのキャッシュ生成に使う。
+    /// 表示判定はグループ×レイヤの実効状態(両方表示のとき見える)。
+    public func draw(entities: [Entity], groups: [LayerGroup],
                      transform: ViewTransform,
                      viewSize: CGSize,
                      gridSpacing: Double,
@@ -83,11 +84,11 @@ public struct Renderer {
         ctx.fill(CGRect(origin: .zero, size: viewSize))
         drawGrid(transform: transform, viewSize: viewSize, spacing: gridSpacing, in: ctx)
 
-        var layerByID: [LayerID: Layer] = [:]
-        for layer in layers { layerByID[layer.id] = layer }
-
         for entity in entities {
-            guard let layer = layerByID[entity.layerID], layer.isVisible else { continue }
+            let g = groups[entity.layer.group]
+            guard g.isVisible else { continue }
+            let layer = g.layers[entity.layer.layer]
+            guard layer.isVisible else { continue }
             drawEntity(entity, layer: layer, transform: transform, in: ctx)
         }
     }

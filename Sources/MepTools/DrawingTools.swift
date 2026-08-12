@@ -48,7 +48,7 @@ public protocol DrawingToolDelegate: AnyObject {
 /// 実装構成設計書§5の Tool プロトコル相当を、M3では1クラスに集約して実装する。
 public final class DrawingToolController {
     public weak var delegate: DrawingToolDelegate?
-    public var currentLayerID: LayerID
+    public var currentLayer: LayerAddress
     public private(set) var kind: ToolKind = .select
     public private(set) var numericBuffer = ""
     /// 線分: 直前の確定点(連続作図) / 円: 中心
@@ -59,8 +59,8 @@ public final class DrawingToolController {
     /// 角度拘束モード(ツールバーの常設パレットから設定)
     public var angleConstraint: AngleConstraint = .free
 
-    public init(currentLayerID: LayerID) {
-        self.currentLayerID = currentLayerID
+    public init(currentLayer: LayerAddress) {
+        self.currentLayer = currentLayer
     }
 
     public var isDrawingToolActive: Bool { kind != .select }
@@ -127,7 +127,7 @@ public final class DrawingToolController {
             delegate?.toolRequestsText(at: p) { [weak self] text in
                 guard let self, let text, !text.isEmpty else { return }
                 self.delegate?.toolDidProduce(
-                    Entity(layerID: self.currentLayerID,
+                    Entity(layer: self.currentLayer,
                            kind: .text(position: p, content: text,
                                        height: self.textHeight, angle: 0)))
             }
@@ -219,11 +219,11 @@ public final class DrawingToolController {
 
     private func commitLine(_ a: Vec2, _ b: Vec2) {
         guard a.distance(to: b) > 0.01 else { return }
-        delegate?.toolDidProduce(Entity(layerID: currentLayerID, kind: .line(a: a, b: b)))
+        delegate?.toolDidProduce(Entity(layer: currentLayer, kind: .line(a: a, b: b)))
     }
 
     private func commitCircle(_ c: Vec2, _ r: Double) {
-        delegate?.toolDidProduce(Entity(layerID: currentLayerID, kind: .circle(center: c, radius: r)))
+        delegate?.toolDidProduce(Entity(layer: currentLayer, kind: .circle(center: c, radius: r)))
     }
 
     private func publishHint() {

@@ -11,9 +11,11 @@ final class CanvasUIState: ObservableObject {
     @Published var snap = "—"
     @Published var info = "⌘O=JWWを開く / クリック=選択 / 右クリック=メニュー(M4)"
     @Published var tool: ToolKind = .select
-    // M4: レイヤ・選択・パネル
-    @Published var layers: [Layer] = []
-    @Published var currentLayerID: LayerID?
+    // M4.1: レイヤ(16グループ×16レイヤ)・選択・パネル
+    @Published var groups: [LayerGroup] = []
+    @Published var current: LayerAddress = .zero
+    /// レイヤパネルで一覧表示しているグループ
+    @Published var viewingGroup: Int = 0
     @Published var selection: SelectionSummary?
     @Published var panelPinned = false
     @Published var paletteColors: [Color] = []
@@ -216,9 +218,13 @@ struct ContentView: View {
             controller.onToolChanged = { kind in
                 uiState.tool = kind
             }
-            controller.onLayersChanged = { layers, currentID in
-                uiState.layers = layers
-                uiState.currentLayerID = currentID
+            controller.onLayersChanged = { groups, current in
+                uiState.groups = groups
+                // 書込レイヤのグループが変わったらレイヤ一覧も追従
+                if uiState.current != current {
+                    uiState.viewingGroup = current.group
+                }
+                uiState.current = current
             }
             controller.onSelectionChanged = { summary in
                 uiState.selection = summary

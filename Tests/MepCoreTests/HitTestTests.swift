@@ -4,10 +4,8 @@ import XCTest
 /// M4: ヒットテスト・平行移動・一括編集コマンドのテスト
 final class HitTestTests: XCTestCase {
 
-    let layerID = LayerID()
-
     func line(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double) -> Entity {
-        Entity(layerID: layerID, kind: .line(a: Vec2(x1, y1), b: Vec2(x2, y2)))
+        Entity(layer: .zero, kind: .line(a: Vec2(x1, y1), b: Vec2(x2, y2)))
     }
 
     // MARK: - hitDistance
@@ -21,7 +19,7 @@ final class HitTestTests: XCTestCase {
     }
 
     func testCircleHitDistance() {
-        let e = Entity(layerID: layerID, kind: .circle(center: Vec2(0, 0), radius: 100))
+        let e = Entity(layer: .zero, kind: .circle(center: Vec2(0, 0), radius: 100))
         XCTAssertEqual(e.hitDistance(to: Vec2(110, 0)), 10, accuracy: 1e-9)
         XCTAssertEqual(e.hitDistance(to: Vec2(80, 0)), 20, accuracy: 1e-9)
         // 中心は半径ぶん離れている(円周が当たり判定)
@@ -30,7 +28,7 @@ final class HitTestTests: XCTestCase {
 
     func testArcHitDistance() {
         // 0°→90°の四分円(半径100)
-        let e = Entity(layerID: layerID,
+        let e = Entity(layer: .zero,
                        kind: .arc(center: Vec2(0, 0), radius: 100, startAngle: 0, endAngle: .pi / 2))
         // 弧の範囲内(45°方向)
         XCTAssertEqual(e.hitDistance(to: Vec2(cos(Double.pi / 4) * 110, sin(Double.pi / 4) * 110)),
@@ -61,13 +59,13 @@ final class HitTestTests: XCTestCase {
     func testCircleIntersectsRect() {
         let rect = BBox(minX: 0, minY: 0, maxX: 100, maxY: 100)
         // 円周が矩形にかかる
-        XCTAssertTrue(Entity(layerID: layerID, kind: .circle(center: Vec2(-20, 50), radius: 40))
+        XCTAssertTrue(Entity(layer: .zero, kind: .circle(center: Vec2(-20, 50), radius: 40))
             .intersects(rect: rect))
         // 円が遠い
-        XCTAssertFalse(Entity(layerID: layerID, kind: .circle(center: Vec2(-200, 50), radius: 40))
+        XCTAssertFalse(Entity(layer: .zero, kind: .circle(center: Vec2(-200, 50), radius: 40))
             .intersects(rect: rect))
         // 矩形全体が円の内側(円周は交差しない)
-        XCTAssertFalse(Entity(layerID: layerID, kind: .circle(center: Vec2(50, 50), radius: 1000))
+        XCTAssertFalse(Entity(layer: .zero, kind: .circle(center: Vec2(50, 50), radius: 1000))
             .intersects(rect: rect))
     }
 
@@ -146,7 +144,7 @@ final class HitTestTests: XCTestCase {
     func testTranslateUndoRestoresExactCoordinates() {
         let doc = Document()
         // 浮動小数の往復誤差が出やすい座標
-        let e = Entity(layerID: layerID, kind: .line(a: Vec2(0.1, 0.2), b: Vec2(100.3, 0.7)))
+        let e = Entity(layer: .zero, kind: .line(a: Vec2(0.1, 0.2), b: Vec2(100.3, 0.7)))
         doc.appendBulk([e])
         let stack = CommandStack(document: doc)
 
@@ -186,24 +184,65 @@ final class HitTestTests: XCTestCase {
         XCTAssertNil(doc.entity(id: e.id)?.style.colorIndex)
     }
 
-    // MARK: - Documentのレイヤ操作
-
-    func testRemoveLayersRemovesEntities() {
+    /// レイヤ間移動(属性変更コマンド経由)のUndo
+    func testMoveToLayerUndo() {
         let doc = Document()
-        let underlay = Layer(name: "下敷きG0 (1/50)", isEditable: false, isUnderlay: true)
-        doc.addLayer(underlay)
-        doc.appendBulk([Entity(layerID: underlay.id, kind: .line(a: .zero, b: Vec2(1, 1)))])
-        let before = doc.entities.count
+        let e = line(0, 0, 100, 0)
+        doc.appendBulk([e])
+        var after = e
+        after.layer = LayerAddress(2, 5)
+        let stack = CommandStack(document: doc)
 
-        doc.removeLayers(where: { $0.isUnderlay })
-        XCTAssertNil(doc.layers.first(where: { $0.isUnderlay }))
-        XCTAssertEqual(doc.entities.count, before - 1)
+        stack.run(UpdateEntitiesCommand(name: "レイヤへ移動", before: [e], after: [after]))
+        XCTAssertEqual(doc.entity(id: e.id)?.layer, LayerAddress(2, 5))
+
+        stack.undo()
+        XCTAssertEqual(doc.entity(id: e.id)?.layer, .zero)
     }
 
-    func testRemoveLayersKeepsCurrentLayer() {
+    // MARK: - 16グループ×16レイヤの構造
+
+    func testDocumentAlways16x16() {
         let doc = Document()
-        let current = doc.currentLayerID
-        doc.removeLayers(where: { _ in true })
-        XCTAssertNotNil(doc.layer(id: current))
+        XCTAssertEqual(doc.groups.count, 16)
+        XCTAssertTrue(doc.groups.allSatisfy { $0.layers.count == 16 })
+        // 既定カレントは基本作図(0-2)
+        XCTAssertEqual(doc.current, LayerAddress(0, 2))
+        XCTAssertEqual(doc.layer(at: doc.current).name, "基本作図")
+    }
+
+    func testEffectiveVisibility() {
+        let doc = Document()
+        let address = LayerAddress(0, 2)
+        XCTAssertTrue(doc.isVisible(address))
+        // レイヤ非表示
+        doc.updateLayer(at: address) { $0.isVisible = false }
+        XCTAssertFalse(doc.isVisible(address))
+        doc.updateLayer(at: address) { $0.isVisible = true }
+        // グループ非表示でもレイヤは見えない(実効状態)
+        doc.updateGroup(0) { $0.isVisible = false }
+        XCTAssertFalse(doc.isVisible(address))
+    }
+
+    func testCurrentLayerCannotBeHiddenOrLocked() {
+        let doc = Document()
+        let hidden = LayerAddress(1, 0)
+        doc.updateLayer(at: hidden) { $0.isVisible = false }
+        XCTAssertFalse(doc.setCurrent(hidden))
+
+        let locked = LayerAddress(1, 1)
+        doc.updateLayer(at: locked) { $0.isEditable = false }
+        XCTAssertFalse(doc.setCurrent(locked))
+
+        let ok = LayerAddress(1, 2)
+        XCTAssertTrue(doc.setCurrent(ok))
+        XCTAssertEqual(doc.current, ok)
+    }
+
+    func testLayerAddressDescription() {
+        XCTAssertEqual(LayerAddress(0, 2).description, "0-2")
+        XCTAssertEqual(LayerAddress(15, 10).description, "F-A")
+        // 範囲外はクランプ
+        XCTAssertEqual(LayerAddress(99, -1), LayerAddress(15, 0))
     }
 }

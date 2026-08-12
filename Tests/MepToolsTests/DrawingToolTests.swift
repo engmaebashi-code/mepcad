@@ -21,7 +21,7 @@ final class DrawingToolTests: XCTestCase {
 
     func makeTool() -> (DrawingToolController, Capture) {
         let capture = Capture()
-        let tool = DrawingToolController(currentLayerID: LayerID())
+        let tool = DrawingToolController(currentLayer: .zero)
         tool.delegate = capture
         return (tool, capture)
     }

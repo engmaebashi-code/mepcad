@@ -80,7 +80,7 @@ final class CanvasContentView: NSView {
 
         // スナップショット(配列は値型なのでコピーが安全に取れる)
         let entities = controller.document.entities
-        let layers = controller.document.layers
+        let groups = controller.document.groups
         let transform = controller.transform
         let theme = controller.theme
         let gridSpacing = controller.effectiveGridSpacing
@@ -103,7 +103,7 @@ final class CanvasContentView: NSView {
             bctx.scaleBy(x: scaleFactor, y: -scaleFactor)
 
             let renderer = Renderer(theme: theme)
-            renderer.draw(entities: entities, layers: layers,
+            renderer.draw(entities: entities, groups: groups,
                           transform: transform, viewSize: size,
                           gridSpacing: gridSpacing, in: bctx)
             let image = bctx.makeImage()

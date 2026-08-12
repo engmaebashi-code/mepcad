@@ -17,7 +17,7 @@ struct SelectionSummary: Equatable {
     var commonColorIndex: Int??
     var commonLineType: Int??
     var commonLineWeight: Double??
-    var commonLayerID: LayerID?
+    var commonLayer: LayerAddress?
 }
 
 /// キャンバスの状態と操作を束ねるコントローラ(メインスレッド専用)。
@@ -95,8 +95,8 @@ final class CanvasController: NSObject {
     var onDocumentChanged: (() -> Void)?
     /// キャンバスの現在サイズ(コンテナビューが提供)
     var viewSizeProvider: (() -> CGSize)?
-    /// レイヤ一覧の変化(レイヤパネル用)
-    var onLayersChanged: (([Layer], LayerID) -> Void)?
+    /// レイヤ構造の変化(レイヤパネル用: 16グループ+カレント)
+    var onLayersChanged: (([LayerGroup], LayerAddress) -> Void)?
     /// 選択の変化(プロパティパネル用)
     var onSelectionChanged: ((SelectionSummary?) -> Void)?
     /// パネルホバー状態の変化(カーソル矩形の更新用)
@@ -111,13 +111,15 @@ final class CanvasController: NSObject {
         let doc = Document()
         document = doc
         commandStack = CommandStack(document: doc)
-        tools = DrawingToolController(currentLayerID: doc.currentLayerID)
+        tools = DrawingToolController(currentLayer: doc.current)
         super.init()
         document.loadDemoContent()
         snapEngine.rebuild(from: document)
         document.onChange = { [weak self] in
             guard let self else { return }
             self.snapEngine.rebuild(from: self.document)
+            // 書込レイヤの変更をツールに同期
+            self.tools.currentLayer = self.document.current
             // 選択中エンティティが消えた/変わった場合に追従
             self.pruneSelection()
             self.onDocumentChanged?()
@@ -139,7 +141,7 @@ final class CanvasController: NSObject {
         let world = transform.toWorld(p)
         let hit = SelectionEngine.topmostHit(at: world, tolerance: hitToleranceMm,
                                              entities: document.entities,
-                                             layers: document.layers)
+                                             groups: document.groups)
         if let hit {
             if shiftDown {
                 if selection.contains(hit) { selection.remove(hit) } else { selection.insert(hit) }
@@ -167,7 +169,7 @@ final class CanvasController: NSObject {
                         maxX: max(w1.x, w2.x), maxY: max(w1.y, w2.y))
         let ids = SelectionEngine.ids(in: rect, mode: mode,
                                       entities: document.entities,
-                                      layers: document.layers)
+                                      groups: document.groups)
         if shiftDown {
             selection.formUnion(ids)
         } else {
@@ -177,8 +179,8 @@ final class CanvasController: NSObject {
     }
 
     func selectAll() {
-        let selectable = SelectionEngine.selectableLayerIDs(document.layers)
-        selection = Set(document.entities.filter { selectable.contains($0.layerID) }.map(\.id))
+        let selectable = SelectionEngine.selectableAddresses(document.groups)
+        selection = Set(document.entities.filter { selectable.contains($0.layer) }.map(\.id))
         selectionDidChange()
     }
 
@@ -197,15 +199,23 @@ final class CanvasController: NSObject {
         onInfo?("\(snapshot.count)個の要素を削除しました(⌘Zで取り消し)")
     }
 
-    /// ドキュメント変更後、存在しないidを選択から取り除き実体キャッシュを更新する
+    /// ドキュメント変更後、存在しないid・選択不能になったidを選択から取り除く
     private func pruneSelection() {
         guard !selection.isEmpty else {
             selectedEntities = []
             return
         }
-        let existing = Set(document.entities.map(\.id))
-        selection = selection.intersection(existing)
+        let selectable = SelectionEngine.selectableAddresses(document.groups)
+        var pruned = Set<EntityID>()
+        for e in document.entities where selection.contains(e.id) && selectable.contains(e.layer) {
+            pruned.insert(e.id)
+        }
+        selection = pruned
         selectedEntities = document.entities(ids: selection)
+        // 移動・複写の途中で選択が消えたら(レイヤロック等)操作も終了する
+        if selection.isEmpty, editOp.isActive {
+            cancelEditOperation()
+        }
         onSelectionChanged?(selectionSummary())
         needsOverlayRedraw?()
     }
@@ -249,7 +259,7 @@ final class CanvasController: NSObject {
             commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
             commonLineType: common(selectedEntities.map(\.style.lineType)),
             commonLineWeight: common(selectedEntities.map(\.style.lineWeight)),
-            commonLayerID: common(selectedEntities.map(\.layerID))
+            commonLayer: common(selectedEntities.map(\.layer))
         )
     }
 
@@ -278,8 +288,42 @@ final class CanvasController: NSObject {
         updateSelection(name: "太さ変更") { $0.style.lineWeight = weight }
     }
 
-    func moveSelectionToLayer(_ layerID: LayerID) {
-        updateSelection(name: "レイヤ移動") { $0.layerID = layerID }
+    // MARK: - レイヤ間の移動・複写(M4.1)
+
+    /// 選択をレイヤへ移動(同id・属性維持でレイヤだけ変更。Undo可)
+    func moveSelectionToLayer(_ address: LayerAddress) {
+        let count = selectedEntities.count  // 移動先が非表示/ロックだと選択が減るため先に取る
+        guard count > 0 else { return }
+        updateSelection(name: "レイヤへ移動") { $0.layer = address }
+        onInfo?("\(count)個を \(layerDisplayName(address)) へ移動しました(⌘Zで取り消し)")
+    }
+
+    /// 選択をレイヤへ複写(同位置に複製を作り、指定レイヤへ。Undo可)
+    func copySelectionToLayer(_ address: LayerAddress) {
+        guard !selectedEntities.isEmpty else { return }
+        let copies = selectedEntities.map { entity -> Entity in
+            var copy = entity.duplicated(by: .zero)
+            copy.layer = address
+            return copy
+        }
+        commandStack.run(AddEntitiesCommand(name: "レイヤへ複写", entities: copies))
+        if document.isSelectable(address) {
+            // 複写先を新しい選択にする(そのまま移動などを続けられる)
+            selection = Set(copies.map(\.id))
+            selectionDidChange()
+            onInfo?("\(copies.count)個を \(layerDisplayName(address)) へ複写しました(⌘Zで取り消し)")
+        } else {
+            // 非表示・ロック先への複写は選択を引き継がない(見えない選択を作らない)
+            selection = []
+            selectionDidChange()
+            onInfo?("\(copies.count)個を \(layerDisplayName(address)) へ複写しました(非表示/ロック中のレイヤです。⌘Zで取り消し)")
+        }
+    }
+
+    /// レイヤの表示名: 「0-3 空調配管」/ 名前が無ければ「0-3」
+    func layerDisplayName(_ address: LayerAddress) -> String {
+        let name = document.layer(at: address).name
+        return name.isEmpty ? address.description : "\(address.description) \(name)"
     }
 
     // MARK: - 移動・複写(M4)
@@ -342,6 +386,10 @@ final class CanvasController: NSObject {
             menu.addItem(menuItem("複写", #selector(menuCopy)))
             menu.addItem(menuItem("移動", #selector(menuMove)))
             menu.addItem(.separator())
+            // レイヤ間の移動・複写(グループ→レイヤの2段サブメニュー)
+            menu.addItem(layerSubmenu(title: "レイヤへ移動", action: #selector(menuMoveToLayer(_:))))
+            menu.addItem(layerSubmenu(title: "レイヤへ複写", action: #selector(menuCopyToLayer(_:))))
+            menu.addItem(.separator())
             menu.addItem(menuItem("削除", #selector(menuDelete)))
             menu.addItem(.separator())
             menu.addItem(menuItem("選択解除", #selector(menuDeselect)))
@@ -359,6 +407,42 @@ final class CanvasController: NSObject {
         return item
     }
 
+    /// グループ→レイヤの2段サブメニュー。tagにグループ×16+レイヤを入れて選択先を渡す
+    private func layerSubmenu(title: String, action: Selector) -> NSMenuItem {
+        // 共通レイヤはループの外で1回だけ計算する(大量選択で256回のO(n)走査になるのを防ぐ)
+        var commonLayer: LayerAddress?
+        if let first = selectedEntities.first?.layer,
+           selectedEntities.allSatisfy({ $0.layer == first }) {
+            commonLayer = first
+        }
+
+        let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let groupsMenu = NSMenu()
+        for g in 0..<16 {
+            let group = document.group(g)
+            let groupTitle = group.name.isEmpty
+                ? String(format: "グループ%X (%@)", g, group.scaleLabel)
+                : String(format: "%X %@ (%@)", g, group.name, group.scaleLabel)
+            let groupItem = NSMenuItem(title: groupTitle, action: nil, keyEquivalent: "")
+            let layersMenu = NSMenu()
+            for l in 0..<16 {
+                let address = LayerAddress(g, l)
+                let item = NSMenuItem(title: layerDisplayName(address), action: action, keyEquivalent: "")
+                item.target = self
+                item.tag = g * 16 + l
+                // 現在の選択が居るレイヤに印
+                if commonLayer == address {
+                    item.state = .on
+                }
+                layersMenu.addItem(item)
+            }
+            groupItem.submenu = layersMenu
+            groupsMenu.addItem(groupItem)
+        }
+        root.submenu = groupsMenu
+        return root
+    }
+
     @objc private func menuCopy() { beginEditOperation(.copy) }
     @objc private func menuMove() { beginEditOperation(.move) }
     @objc private func menuDelete() { deleteSelection() }
@@ -368,47 +452,50 @@ final class CanvasController: NSObject {
         if let size = viewSizeProvider?() { fit(viewSize: size) }
     }
     @objc private func menuToggleGrid() { toggleGrid() }
+    @objc private func menuMoveToLayer(_ sender: NSMenuItem) {
+        moveSelectionToLayer(LayerAddress(sender.tag / 16, sender.tag % 16))
+    }
+    @objc private func menuCopyToLayer(_ sender: NSMenuItem) {
+        copySelectionToLayer(LayerAddress(sender.tag / 16, sender.tag % 16))
+    }
 
     // MARK: - レイヤ操作(レイヤパネルから)
 
-    func setLayerVisible(_ id: LayerID, _ visible: Bool) {
-        guard var layer = document.layer(id: id) else { return }
-        layer.isVisible = visible
-        // 非表示レイヤの要素は選択から外す(updateLayerのonChange経由でprune済みだが
-        // 可視状態はidの存在に影響しないため明示的に外す)
-        if !visible {
-            let hiddenIDs = Set(document.entities.filter { $0.layerID == id }.map(\.id))
-            selection.subtract(hiddenIDs)
-        }
-        document.updateLayer(layer)  // onChange: スナップ再構築・キャッシュ破棄
-        selectionDidChange()
+    func setLayerVisible(_ address: LayerAddress, _ visible: Bool) {
+        document.updateLayer(at: address) { $0.isVisible = visible }
     }
 
-    func setLayerLocked(_ id: LayerID, _ locked: Bool) {
-        guard var layer = document.layer(id: id) else { return }
-        layer.isEditable = !locked
-        if locked {
-            let lockedIDs = Set(document.entities.filter { $0.layerID == id }.map(\.id))
-            selection.subtract(lockedIDs)
-        }
-        document.updateLayer(layer)
-        selectionDidChange()
+    func setLayerLocked(_ address: LayerAddress, _ locked: Bool) {
+        document.updateLayer(at: address) { $0.isEditable = !locked }
     }
 
-    func setCurrentLayer(_ id: LayerID) {
-        guard let layer = document.layer(id: id), layer.isEditable, layer.isVisible else { return }
-        document.setCurrentLayer(id: id)
-        tools.currentLayerID = id
+    func setGroupVisible(_ index: Int, _ visible: Bool) {
+        document.updateGroup(index) { $0.isVisible = visible }
+    }
+
+    func setGroupLocked(_ index: Int, _ locked: Bool) {
+        document.updateGroup(index) { $0.isEditable = !locked }
+    }
+
+    /// 書込レイヤの変更(非表示・ロックには書き込めない)。成功でtrue
+    @discardableResult
+    func setCurrentLayer(_ address: LayerAddress) -> Bool {
+        let ok = document.setCurrent(address)
+        if !ok {
+            onInfo?("\(layerDisplayName(address)) は非表示またはロック中のため書込先にできません")
+        }
+        return ok
     }
 
     private func publishLayers() {
-        onLayersChanged?(document.layers, document.currentLayerID)
+        onLayersChanged?(document.groups, document.current)
     }
 
     /// 初期表示用(SwiftUI側のonAppearから呼ぶ)
     func publishInitialState() {
         publishLayers()
         onSelectionChanged?(selectionSummary())
+        onGridChanged?(gridVisible)
     }
 
     // MARK: - 作図ツール(M3)
@@ -484,7 +571,7 @@ final class CanvasController: NSObject {
         commandStack.redo()
     }
 
-    // MARK: - JWW読込(M2)
+    // MARK: - JWW読込(M2 → M4.1で16×16展開に変更)
 
     func openJwwPanel() {
         let panel = NSOpenPanel()
@@ -510,16 +597,14 @@ final class CanvasController: NSObject {
                 let parseMs = Int(Date().timeIntervalSince(start) * 1000)
 
                 DispatchQueue.main.async {
-                    // 「開く」= 図面全体の置き換え(前回のJWW下敷きレイヤも入れ替える)
+                    // 「開く」= 図面全体の置き換え(レイヤ構造ごとJWWの16×16を展開)
                     self.selection = []
-                    self.document.removeAllEntities()
-                    self.document.removeLayers(where: { $0.isUnderlay })
                     let count = JwwReader.importDrawing(drawing, into: self.document)
                     self.selectionDidChange()
                     if let size = self.viewSizeProvider?() {
                         self.fit(viewSize: size)
                     }
-                    self.onInfo?("\(url.lastPathComponent) — 線\(drawing.lines.count) 弧\(drawing.arcs.count) 字\(drawing.texts.count) / 解析\(parseMs)ms / 計\(count)要素")
+                    self.onInfo?("\(url.lastPathComponent) — 線\(drawing.lines.count) 弧\(drawing.arcs.count) 字\(drawing.texts.count) / 解析\(parseMs)ms / 計\(count)要素(そのまま編集できます)")
                 }
             } catch {
                 DispatchQueue.main.async {

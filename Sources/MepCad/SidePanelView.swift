@@ -2,155 +2,269 @@ import SwiftUI
 import MepCore
 import MepTools
 
-// MARK: - ガラス調自動格納サイドパネル(M4)
+// MARK: - ガラス調自動格納サイドパネル(M4.1)
 //
-// モックv0.4の「Dock風パネル」の実体化。カーソルが右端に近づくと現れ、
-// 離れると自動で格納される。ピンで常時表示にもできる。
-// 収容: レイヤパネル + プロパティパネル(仕上げのアニメ調整はM5)。
+// カーソルが右端に近づくと現れ、離れると自動で格納される(ピンで常時表示)。
+// レイヤは専用カード(グループ4×4+レイヤ一覧)、プロパティは別カードに分離。
 
 struct SidePanelView: View {
     let controller: CanvasController
     @ObservedObject var uiState: CanvasUIState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // ヘッダ(ピン)
+        VStack(alignment: .trailing, spacing: 10) {
+            // ピン(共通ヘッダ)
             HStack {
-                Text("パネル")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
                 Spacer()
                 Button {
                     uiState.panelPinned.toggle()
                 } label: {
                     Image(systemName: uiState.panelPinned ? "pin.fill" : "pin")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
+                        .frame(width: 24, height: 22)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(uiState.panelPinned ? "自動格納に戻す" : "常時表示にピン留め")
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
+            .padding(.horizontal, 4)
 
-            Divider().padding(.horizontal, 8)
+            // レイヤ専用カード
+            LayerPanelView(controller: controller, uiState: uiState)
+                .glassCard()
 
-            // レイヤ
-            LayerListView(controller: controller, uiState: uiState)
-
-            Divider().padding(.horizontal, 8)
-
-            // プロパティ(オブジェクト属性用にスペースを確保)
+            // プロパティ専用カード
             PropertyPanelView(controller: controller, uiState: uiState)
+                .glassCard()
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 0)
         }
-        .frame(width: 248)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.25), radius: 14, x: -2, y: 4)
+        .frame(width: 272)
         .padding(.vertical, 12)
         .padding(.trailing, 10)
     }
 }
 
-// MARK: - レイヤパネル
+private extension View {
+    /// ガラス調カード(半透明マテリアル+角丸+枠+影)
+    func glassCard() -> some View {
+        self
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.22), radius: 12, x: -2, y: 3)
+    }
+}
 
-struct LayerListView: View {
+// MARK: - レイヤ専用パネル(グループ4×4グリッド+レイヤ一覧)
+
+struct LayerPanelView: View {
     let controller: CanvasController
     @ObservedObject var uiState: CanvasUIState
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("レイヤ")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
+    private var viewingGroup: LayerGroup {
+        uiState.groups.indices.contains(uiState.viewingGroup)
+            ? uiState.groups[uiState.viewingGroup]
+            : LayerGroup()
+    }
 
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("レイヤ")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                // 表示中グループの縮尺
+                Text("グループ\(String(format: "%X", uiState.viewingGroup))  \(viewingGroup.scaleLabel)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+
+            // グループ 4×4 グリッド(Jw_cad のグループバー相当)
+            // クリック=そのグループのレイヤを下に表示 / 右クリック=表示・ロック・書込先
+            VStack(spacing: 4) {
+                ForEach(0..<4, id: \.self) { row in
+                    HStack(spacing: 4) {
+                        ForEach(0..<4, id: \.self) { col in
+                            let g = row * 4 + col
+                            GroupCellView(index: g,
+                                          group: uiState.groups.indices.contains(g) ? uiState.groups[g] : LayerGroup(),
+                                          isViewing: g == uiState.viewingGroup,
+                                          isCurrent: g == uiState.current.group,
+                                          onSelect: { uiState.viewingGroup = g },
+                                          onToggleVisible: { v in controller.setGroupVisible(g, v) },
+                                          onToggleLock: { locked in controller.setGroupLocked(g, locked) })
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+
+            Divider().padding(.horizontal, 8)
+
+            // 表示中グループの16レイヤ
             ScrollView {
                 VStack(spacing: 1) {
-                    ForEach(uiState.layers) { layer in
-                        LayerRowView(layer: layer,
-                                     isCurrent: layer.id == uiState.currentLayerID,
+                    ForEach(0..<16, id: \.self) { l in
+                        let address = LayerAddress(uiState.viewingGroup, l)
+                        LayerRowView(index: l,
+                                     layer: viewingGroup.layers.indices.contains(l) ? viewingGroup.layers[l] : Layer(),
+                                     isCurrent: address == uiState.current,
+                                     groupDimmed: !viewingGroup.isVisible,
                                      colorProvider: { uiState.paletteColor($0) },
-                                     onToggleVisible: { controller.setLayerVisible(layer.id, !layer.isVisible) },
-                                     onToggleLock: { controller.setLayerLocked(layer.id, layer.isEditable) },
-                                     onSetCurrent: { controller.setCurrentLayer(layer.id) })
+                                     onToggleVisible: { v in controller.setLayerVisible(address, v) },
+                                     onToggleLock: { locked in controller.setLayerLocked(address, locked) },
+                                     onSetCurrent: { controller.setCurrentLayer(address) })
                     }
                 }
                 .padding(.horizontal, 6)
             }
-            .frame(maxHeight: 236)
-            .padding(.bottom, 6)
+            .frame(maxHeight: 300)
+            .padding(.bottom, 8)
         }
     }
 }
 
+/// グループグリッドの1セル
+struct GroupCellView: View {
+    let index: Int
+    let group: LayerGroup
+    let isViewing: Bool
+    let isCurrent: Bool
+    let onSelect: () -> Void
+    let onToggleVisible: (Bool) -> Void
+    let onToggleLock: (Bool) -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            ZStack(alignment: .bottomTrailing) {
+                Text(String(format: "%X", index))
+                    .font(.system(size: 13, weight: isCurrent ? .bold : .medium, design: .monospaced))
+                    .foregroundStyle(cellForeground)
+                    .frame(maxWidth: .infinity, minHeight: 26)
+                if !group.isEditable {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 7))
+                        .foregroundStyle(.orange)
+                        .padding(2)
+                }
+            }
+            .background(cellBackground, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(isViewing ? Color.blue : Color.primary.opacity(0.12),
+                                  lineWidth: isViewing ? 1.5 : 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("グループ\(String(format: "%X", index)) (\(group.scaleLabel)) — クリックでレイヤ一覧を表示 / 右クリックで表示・ロック")
+        .contextMenu {
+            Button(group.isVisible ? "グループを非表示" : "グループを表示") {
+                onToggleVisible(!group.isVisible)
+            }
+            Button(group.isEditable ? "グループをロック" : "ロックを解除") {
+                onToggleLock(group.isEditable)
+            }
+        }
+    }
+
+    private var cellForeground: Color {
+        if isCurrent { return .white }
+        return group.isVisible ? .primary : Color.primary.opacity(0.25)
+    }
+
+    private var cellBackground: Color {
+        if isCurrent { return .blue }
+        if !group.isVisible { return Color.primary.opacity(0.04) }
+        return Color.primary.opacity(0.07)
+    }
+}
+
+/// レイヤ一覧の1行(ボタンは大きめのクリック領域を確保)
 struct LayerRowView: View {
+    let index: Int
     let layer: Layer
     let isCurrent: Bool
+    let groupDimmed: Bool
     let colorProvider: (Int) -> Color
-    let onToggleVisible: () -> Void
-    let onToggleLock: () -> Void
+    let onToggleVisible: (Bool) -> Void
+    let onToggleLock: (Bool) -> Void
     let onSetCurrent: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            // 表示/非表示
-            Button(action: onToggleVisible) {
+        HStack(spacing: 4) {
+            Text(String(format: "%X", index))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 14)
+
+            // 表示/非表示(クリック領域 26×24)
+            Button {
+                onToggleVisible(!layer.isVisible)
+            } label: {
                 Image(systemName: layer.isVisible ? "eye" : "eye.slash")
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                     .foregroundStyle(layer.isVisible ? .primary : .tertiary)
-                    .frame(width: 16)
+                    .frame(width: 26, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("表示/非表示")
 
-            // ロック
-            Button(action: onToggleLock) {
+            // ロック(クリック領域 26×24)
+            Button {
+                onToggleLock(layer.isEditable)
+            } label: {
                 Image(systemName: layer.isEditable ? "lock.open" : "lock.fill")
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                     .foregroundStyle(layer.isEditable ? Color.secondary : Color.orange)
-                    .frame(width: 16)
+                    .frame(width: 26, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("ロック(選択・編集の対象外にする)")
 
-            // 既定色
             Circle()
                 .fill(colorProvider(layer.defaultColorIndex))
                 .frame(width: 8, height: 8)
 
-            // 名前(クリックでカレントに)
-            Text(layer.name)
-                .font(.system(size: 11, weight: isCurrent ? .semibold : .regular))
+            Text(layer.name.isEmpty ? "レイヤ\(String(format: "%X", index))" : layer.name)
+                .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundStyle(layer.isVisible ? .primary : .secondary)
+                .foregroundStyle(rowTextStyle)
 
             Spacer(minLength: 0)
 
             if isCurrent {
                 Image(systemName: "pencil.circle.fill")
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(.blue)
-                    .help("カレントレイヤ(作図先)")
+                    .help("書込レイヤ(作図先)")
             }
         }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
+        .padding(.vertical, 1)
+        .padding(.horizontal, 4)
         .background(isCurrent ? Color.blue.opacity(0.10) : .clear,
                     in: RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onTapGesture(perform: onSetCurrent)
+        .help("クリックで書込レイヤにする")
+    }
+
+    private var rowTextStyle: Color {
+        if groupDimmed || !layer.isVisible { return Color.primary.opacity(0.35) }
+        return layer.name.isEmpty ? Color.primary.opacity(0.6) : .primary
     }
 }
 
-// MARK: - プロパティパネル
+// MARK: - プロパティ専用パネル
 
 struct PropertyPanelView: View {
     let controller: CanvasController
@@ -169,7 +283,7 @@ struct PropertyPanelView: View {
             Text("プロパティ")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .padding(.top, 8)
+                .padding(.top, 10)
 
             if let sel = uiState.selection {
                 Text(summaryText(sel))
@@ -180,11 +294,7 @@ struct PropertyPanelView: View {
                     Menu {
                         Button("レイヤ既定") { controller.applyColorIndex(nil) }
                         ForEach(0..<10, id: \.self) { i in
-                            Button {
-                                controller.applyColorIndex(i)
-                            } label: {
-                                Label("色 \(i)", systemImage: "circle.fill")
-                            }
+                            Button("色 \(i)") { controller.applyColorIndex(i) }
                         }
                     } label: {
                         HStack(spacing: 5) {
@@ -222,15 +332,17 @@ struct PropertyPanelView: View {
                 }
 
                 propertyRow("レイヤ") {
-                    Menu {
-                        ForEach(uiState.layers.filter { $0.isEditable && !$0.isUnderlay }) { layer in
-                            Button(layer.name) { controller.moveSelectionToLayer(layer.id) }
-                        }
-                    } label: {
-                        Text(layerLabel(sel)).font(.system(size: 11))
-                            .lineLimit(1)
-                    }
+                    Text(layerLabel(sel))
+                        .font(.system(size: 11))
+                        .lineLimit(1)
                 }
+
+                // レイヤ間の移動・複写(グループ→レイヤの2段メニュー)
+                HStack(spacing: 6) {
+                    layerPickerMenu("レイヤへ移動") { controller.moveSelectionToLayer($0) }
+                    layerPickerMenu("レイヤへ複写") { controller.copySelectionToLayer($0) }
+                }
+                .padding(.top, 2)
 
                 // クイック操作(右クリックと同じ)
                 HStack(spacing: 6) {
@@ -254,7 +366,34 @@ struct PropertyPanelView: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// グループ→レイヤの2段選択メニュー
+    private func layerPickerMenu(_ title: String, action: @escaping (LayerAddress) -> Void) -> some View {
+        Menu(title) {
+            ForEach(0..<16, id: \.self) { g in
+                let group = uiState.groups.indices.contains(g) ? uiState.groups[g] : LayerGroup()
+                Menu(groupMenuTitle(g, group)) {
+                    ForEach(0..<16, id: \.self) { l in
+                        let address = LayerAddress(g, l)
+                        Button(layerMenuTitle(address, group)) { action(address) }
+                    }
+                }
+            }
+        }
+        .controlSize(.small)
+    }
+
+    private func groupMenuTitle(_ g: Int, _ group: LayerGroup) -> String {
+        let name = group.name.isEmpty ? "グループ\(String(format: "%X", g))" : group.name
+        return "\(name) (\(group.scaleLabel))"
+    }
+
+    private func layerMenuTitle(_ address: LayerAddress, _ group: LayerGroup) -> String {
+        let layer = group.layers.indices.contains(address.layer) ? group.layers[address.layer] : Layer()
+        return layer.name.isEmpty ? address.description : "\(address.description) \(layer.name)"
     }
 
     private func propertyRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
@@ -295,7 +434,7 @@ struct PropertyPanelView: View {
     }
 
     private func layerLabel(_ sel: SelectionSummary) -> String {
-        guard let layerID = sel.commonLayerID else { return "混在" }
-        return uiState.layers.first(where: { $0.id == layerID })?.name ?? "—"
+        guard let address = sel.commonLayer else { return "混在" }
+        return controller.layerDisplayName(address)
     }
 }
