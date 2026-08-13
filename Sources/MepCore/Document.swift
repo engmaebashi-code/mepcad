@@ -12,6 +12,8 @@ public final class Document {
     public private(set) var showAuxiliary = true
     /// ブロック定義(配置はEntityKind.blockRefが参照する)
     public private(set) var blockDefinitions: [BlockDefinition] = []
+    /// 用紙サイズ(横置き基準。用紙枠表示とJWW互換用)
+    public private(set) var paperSize: PaperSize = .a3
 
     /// 変更通知(再描画トリガ用)。UIが差し替える。
     public var onChange: (() -> Void)?
@@ -54,6 +56,36 @@ public final class Document {
     public func setShowAuxiliary(_ show: Bool) {
         guard show != showAuxiliary else { return }
         showAuxiliary = show
+        onChange?()
+    }
+
+    /// 用紙サイズの変更(用紙枠の表示が変わる)
+    public func setPaperSize(_ size: PaperSize) {
+        guard size != paperSize else { return }
+        paperSize = size
+        onChange?()
+    }
+
+    /// 書込グループの縮尺変更(実寸固定: 図形の実寸は変えず、用紙が覆う範囲が変わる)
+    public func setCurrentScale(_ denominator: Double) {
+        let d = min(max(denominator, 0.1), 100000)
+        guard abs(groups[current.group].scale - d) > 1e-12 else { return }
+        groups[current.group].scale = d
+        onChange?()
+    }
+
+    /// 新規図面に置き換える(用紙・縮尺を指定して白紙から)。
+    /// 全グループの縮尺を指定値に揃え、レイヤ構成は標準に戻す。onChangeは1回だけ発火
+    public func resetForNewDrawing(paperSize: PaperSize, scaleDenominator: Double) {
+        var newGroups = DefaultLayers.standardGroups()
+        let d = min(max(scaleDenominator, 0.1), 100000)
+        for i in newGroups.indices { newGroups[i].scale = d }
+        groups = newGroups
+        current = DefaultLayers.standardCurrent
+        entities = []
+        blockDefinitions = []
+        showAuxiliary = true
+        self.paperSize = paperSize
         onChange?()
     }
 

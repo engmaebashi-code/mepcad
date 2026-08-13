@@ -34,6 +34,18 @@ final class CanvasUIState: ObservableObject {
     @Published var gridOn = true
     @Published var gridSpacing: Double = 250
     @Published var auxOn = true
+    /// 用紙サイズと書込グループの縮尺分母(フッター表示)
+    @Published var paperSize: PaperSize = .a3
+    @Published var scaleDenominator: Double = 50
+
+    /// 「1/50」形式の縮尺表記
+    var scaleLabel: String {
+        let d = scaleDenominator
+        if abs(d - d.rounded()) < 1e-9 {
+            return "1/\(Int(d.rounded()))"
+        }
+        return String(format: "1/%.1f", d)
+    }
     /// 実行中の編集操作(コマンドプロパティカードの表示用)
     @Published var activeEditOp: EditOpKind?
     /// 移動・複写の角度プロパティ(度)
@@ -174,6 +186,39 @@ struct ContentView: View {
                 Text(uiState.coords)
                     .monospacedDigit()
                     .frame(width: 190, alignment: .leading)
+                // 用紙サイズ(クリックで変更。枠=作図範囲)
+                Menu {
+                    ForEach(PaperSize.allCases, id: \.self) { size in
+                        Button((uiState.paperSize == size ? "✓ " : "   ") + "\(size.label)(横)  \(Int(size.widthMm))×\(Int(size.heightMm))") {
+                            controller.setPaperSize(size)
+                        }
+                    }
+                } label: {
+                    Text("用紙 \(uiState.paperSize.label)")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("用紙サイズ(横置き)。キャンバスの枠が用紙の作図範囲です")
+                // 縮尺(書込グループ。クリックで変更・実寸固定)
+                Menu {
+                    ForEach([1, 2, 5, 10, 20, 30, 50, 100, 200, 500], id: \.self) { d in
+                        Button((Int(uiState.scaleDenominator) == d ? "✓ " : "   ") + "1/\(d)") {
+                            controller.setScaleDenominator(Double(d))
+                        }
+                    }
+                    Divider()
+                    Button("カスタム…") {
+                        controller.promptCustomScale()
+                    }
+                } label: {
+                    Text("縮尺 \(uiState.scaleLabel)")
+                        .monospacedDigit()
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("書込グループの縮尺。変更は実寸固定(図形の実寸は変わらず用紙枠の範囲が変わります)")
                 // グリッド: 表示切替+間隔選択(50刻みプリセット/自由入力)
                 Menu {
                     Button(uiState.gridOn ? "グリッドを隠す" : "グリッドを表示") {
@@ -293,6 +338,14 @@ struct ContentView: View {
 
             ToolbarItemGroup {
                 Button {
+                    controller.newDrawingPanel()
+                } label: {
+                    Image(systemName: "doc.badge.plus")
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                .help("新規図面(⌘N)— 用紙と縮尺を決めてから白紙で開始")
+
+                Button {
                     controller.openJwwPanel()
                 } label: {
                     Image(systemName: "folder")
@@ -359,6 +412,10 @@ struct ContentView: View {
             }
             controller.onAuxiliaryChanged = { visible in
                 uiState.auxOn = visible
+            }
+            controller.onDrawingSetupChanged = { paper, scale in
+                uiState.paperSize = paper
+                uiState.scaleDenominator = scale
             }
             controller.onEditOpChanged = { kind in
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {

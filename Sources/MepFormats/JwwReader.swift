@@ -258,6 +258,10 @@ public struct JwwReader {
 
         document.removeAllEntities()
         document.replaceGroups(groups, current: current)
+        // 用紙サイズ(A0〜A4のみ。2A以上・特殊サイズは既定のまま)
+        if let code = drawing.paperCode, let paper = PaperSize(jwwCode: code) {
+            document.setPaperSize(paper)
+        }
         document.appendBulk(entities)
         return JwwImportStats(entityCount: entities.count,
                               visibilityRelaxed: visibilityRelaxed,

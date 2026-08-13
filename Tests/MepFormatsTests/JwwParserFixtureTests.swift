@@ -104,6 +104,9 @@ final class JwwParserFixtureTests: XCTestCase {
             let name = url.lastPathComponent
             let drawing = try JwwParser(data: Data(contentsOf: url)).parse()
 
+            // 用紙コードが読めていること(サンプル4図面はすべてA1施工図=コード1)
+            XCTAssertEqual(drawing.paperCode, 1, "\(name): 用紙コードがA1(1)でない")
+
             // 状態が読めていること・値が正規範囲(0〜3)であること
             let layerStates = try XCTUnwrap(drawing.layerStates, "\(name): レイヤ状態が読めない")
             let groupStates = try XCTUnwrap(drawing.groupStates, "\(name): グループ状態が読めない")

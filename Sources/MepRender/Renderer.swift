@@ -13,6 +13,8 @@ public struct RenderTheme {
     public var gridMinor: CGColor
     public var gridMajor: CGColor
     public var defaultStroke: CGColor
+    /// 用紙枠の線色
+    public var paperFrame: CGColor
     /// 色番号→色(スタイルテーブル。環境設定で編集可能にする予定)
     public var palette: [CGColor]
 
@@ -23,6 +25,7 @@ public struct RenderTheme {
             gridMinor: CGColor(gray: 0, alpha: 0.06),
             gridMajor: CGColor(gray: 0, alpha: 0.12),
             defaultStroke: CGColor(gray: 0.1, alpha: 1),
+            paperFrame: CGColor(red: 0.45, green: 0.52, blue: 0.65, alpha: 0.75),
             palette: [
                 CGColor(gray: 0.1, alpha: 1),                                  // 0 黒
                 CGColor(red: 0.82, green: 0.20, blue: 0.17, alpha: 1),          // 1 赤(冷温水往)
@@ -45,6 +48,7 @@ public struct RenderTheme {
         t.gridMinor = CGColor(gray: 1, alpha: 0.05)
         t.gridMajor = CGColor(gray: 1, alpha: 0.10)
         t.defaultStroke = CGColor(gray: 0.92, alpha: 1)
+        t.paperFrame = CGColor(red: 0.55, green: 0.62, blue: 0.78, alpha: 0.7)
         t.palette[0] = CGColor(gray: 0.92, alpha: 1)
         return t
     }
@@ -72,7 +76,8 @@ public struct Renderer {
         draw(entities: document.entities, groups: document.groups,
              transform: transform, viewSize: viewSize, gridSpacing: gridSpacing,
              showAuxiliary: document.showAuxiliary,
-             blockDefinitions: document.blockDefinitions, in: ctx)
+             blockDefinitions: document.blockDefinitions,
+             paperFrame: document.paperFrame, in: ctx)
     }
 
     /// スナップショット(値コピー)ベースの描画。バックグラウンドスレッドでのキャッシュ生成に使う。
@@ -83,10 +88,12 @@ public struct Renderer {
                      gridSpacing: Double,
                      showAuxiliary: Bool = true,
                      blockDefinitions: [BlockDefinition] = [],
+                     paperFrame: BBox? = nil,
                      in ctx: CGContext) {
         ctx.setFillColor(theme.background)
         ctx.fill(CGRect(origin: .zero, size: viewSize))
         drawGrid(transform: transform, viewSize: viewSize, spacing: gridSpacing, in: ctx)
+        drawPaperFrame(paperFrame, transform: transform, in: ctx)
 
         let defs = Dictionary(uniqueKeysWithValues: blockDefinitions.map { ($0.id, $0) })
         for entity in entities {
@@ -97,6 +104,21 @@ public struct Renderer {
             if !showAuxiliary, entity.isAuxiliary { continue }
             drawEntity(entity, layer: layer, transform: transform, definitions: defs, in: ctx)
         }
+    }
+
+    // MARK: - 用紙枠(M4.10)
+
+    /// 作図範囲=用紙の枠(実寸mm。用紙中心=原点)
+    private func drawPaperFrame(_ frame: BBox?, transform: ViewTransform, in ctx: CGContext) {
+        guard let frame, !frame.isEmpty else { return }
+        let p0 = transform.toScreen(Vec2(frame.minX, frame.minY))
+        let p1 = transform.toScreen(Vec2(frame.maxX, frame.maxY))
+        let rect = CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y),
+                          width: abs(p1.x - p0.x), height: abs(p1.y - p0.y))
+        ctx.setStrokeColor(theme.paperFrame)
+        ctx.setLineWidth(1)
+        ctx.setLineDash(phase: 0, lengths: [])
+        ctx.stroke(rect)
     }
 
     // MARK: - グリッド

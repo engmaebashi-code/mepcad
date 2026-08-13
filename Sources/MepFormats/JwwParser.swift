@@ -399,6 +399,13 @@ public final class JwwParser {
         var groupStates = [UInt8](repeating: 2, count: 16)
         var statesValid = true
         if let nameR = readCStr(12) {
+            // メモ直後のDWORD=用紙コード(0=A0…4=A4)。サンプル4図面(いずれもA1施工図)で検証
+            if nameR.end + 4 <= len {
+                let code = Int(u32(nameR.end))
+                if code >= 0 && code <= 15 {
+                    drawing.paperCode = code
+                }
+            }
             let firstScale = nameR.end + 16
             for gi in 0..<16 {
                 let sOff = firstScale + gi * 148

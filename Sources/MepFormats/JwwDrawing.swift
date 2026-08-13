@@ -37,6 +37,7 @@ public struct JwwDrawing: Sendable {
     public var solids: [JwwSolid] = []
     public var texts: [JwwText] = []
     public var scales: [Double] = []          // グループ別縮尺(16)
+    public var paperCode: Int? = nil          // 用紙コード(0=A0…4=A4。メモ直後のDWORD)。読取不能はnil
     public var layerStates: [UInt8]? = nil    // 256スロット(0=非表示 1=表示のみ 2=編集可 3=書込)。nil=読取不能
     public var groupStates: [UInt8]? = nil    // 16グループ(同コード。3=書込グループ)。nil=読取不能
 

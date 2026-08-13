@@ -116,6 +116,8 @@ final class CanvasController: NSObject {
     var onAuxiliaryChanged: ((Bool) -> Void)?
     /// 編集操作の開始/終了(コマンドプロパティカードの表示用。nil=非アクティブ)
     var onEditOpChanged: ((EditOpKind?) -> Void)?
+    /// 用紙・縮尺の変化(フッター表示の同期用: 用紙サイズ+書込グループの縮尺分母)
+    var onDrawingSetupChanged: ((PaperSize, Double) -> Void)?
 
     override init() {
         let doc = Document()
@@ -902,6 +904,95 @@ final class CanvasController: NSObject {
             counts[e.layer.group * 16 + e.layer.layer] += 1
         }
         onLayersChanged?(document.groups, document.current, counts)
+        // 用紙・縮尺表示も同期(書込グループの変更で縮尺表示が変わるため)
+        onDrawingSetupChanged?(document.paperSize, document.currentScale)
+    }
+
+    // MARK: - 用紙・縮尺・新規作成(M4.10)
+
+    /// 用紙サイズの変更(用紙枠の表示が変わる。図形はそのまま)
+    func setPaperSize(_ size: PaperSize) {
+        document.setPaperSize(size)  // onChange経由でキャッシュ破棄・フッター同期
+        onInfo?("用紙を \(size.label)(横)にしました — 枠=用紙の作図範囲")
+    }
+
+    /// 書込グループの縮尺変更(実寸固定: 図形の実寸は変わらず、用紙が覆う範囲が変わる)
+    func setScaleDenominator(_ denominator: Double) {
+        guard denominator > 0 else { return }
+        document.setCurrentScale(denominator)
+        onInfo?("グループ\(String(format: "%X", document.current.group))の縮尺を \(document.currentScaleLabel) にしました(実寸固定 — 用紙枠の範囲が変わります)")
+    }
+
+    /// 自由入力の縮尺(1/○の分母)
+    func promptCustomScale() {
+        let alert = NSAlert()
+        alert.messageText = "縮尺(1/○の分母)"
+        alert.informativeText = "例: 30 → 1/30、150 → 1/150(書込グループに適用・実寸固定)"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+        field.stringValue = String(Int(document.currentScale))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "設定")
+        alert.addButton(withTitle: "キャンセル")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let value = Double(field.stringValue.trimmingCharacters(in: .whitespaces)),
+              value >= 0.1, value <= 100000 else { return }
+        setScaleDenominator(value)
+    }
+
+    /// 新規作成(⌘N): 用紙と縮尺を決めてから白紙図面に置き換える
+    /// (作図範囲が最初から明確になるように)
+    func newDrawingPanel() {
+        let alert = NSAlert()
+        alert.messageText = "新規図面"
+        alert.informativeText = "用紙と縮尺を選んでください。現在の図面は置き換わります(取り消しできません)。"
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 56))
+        let paperLabel = NSTextField(labelWithString: "用紙:")
+        paperLabel.frame = NSRect(x: 0, y: 32, width: 50, height: 20)
+        let paperPopup = NSPopUpButton(frame: NSRect(x: 54, y: 28, width: 110, height: 26))
+        for size in PaperSize.allCases {
+            paperPopup.addItem(withTitle: "\(size.label)(横)")
+        }
+        paperPopup.selectItem(at: PaperSize.allCases.firstIndex(of: .a1) ?? 0)
+
+        let scaleLabel = NSTextField(labelWithString: "縮尺:")
+        scaleLabel.frame = NSRect(x: 0, y: 4, width: 50, height: 20)
+        let scalePopup = NSPopUpButton(frame: NSRect(x: 54, y: 0, width: 110, height: 26))
+        let presets: [Double] = [1, 2, 5, 10, 20, 30, 50, 100, 200, 500]
+        for d in presets {
+            scalePopup.addItem(withTitle: "1/\(Int(d))")
+        }
+        scalePopup.selectItem(at: presets.firstIndex(of: 50) ?? 0)
+
+        container.addSubview(paperLabel)
+        container.addSubview(paperPopup)
+        container.addSubview(scaleLabel)
+        container.addSubview(scalePopup)
+        alert.accessoryView = container
+        alert.addButton(withTitle: "作成")
+        alert.addButton(withTitle: "キャンセル")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let paper = PaperSize.allCases[max(0, paperPopup.indexOfSelectedItem)]
+        let scale = presets[max(0, scalePopup.indexOfSelectedItem)]
+        newDrawing(paper: paper, scaleDenominator: scale)
+    }
+
+    private func newDrawing(paper: PaperSize, scaleDenominator: Double) {
+        // 進行中の操作をすべて中止してから置き換える
+        cancelGripDrag()
+        cancelBlockify()
+        cancelEditOperation()
+        tools.cancel()
+        selection = []
+        document.resetForNewDrawing(paperSize: paper, scaleDenominator: scaleDenominator)
+        commandStack.clear()  // 前の図面へのUndoは残さない
+        selectionDidChange()
+        if let size = viewSizeProvider?() {
+            fit(viewSize: size)
+        }
+        onInfo?("新規図面: \(paper.label)(横)・1/\(Int(scaleDenominator)) — 枠が用紙の作図範囲です")
     }
 
     /// グリッド間隔の変更(50刻みプリセット/自由入力)。選択したら非表示中でも表示に戻す
@@ -954,6 +1045,7 @@ final class CanvasController: NSObject {
         onGridChanged?(gridVisible)
         onGridSpacingChanged?(gridSpacing)
         onAuxiliaryChanged?(document.showAuxiliary)
+        onDrawingSetupChanged?(document.paperSize, document.currentScale)
     }
 
     // MARK: - 作図ツール(M3)
@@ -1107,7 +1199,8 @@ final class CanvasController: NSObject {
 
     func fit(viewSize: CGSize) {
         var box = document.bounds
-        if box.isEmpty { box = BBox(minX: 0, minY: 0, maxX: 10000, maxY: 8000) }
+        // 空図面は用紙枠に合わせる(新規作成直後に作図範囲が見えるように)
+        if box.isEmpty { box = document.paperFrame }
         transform.fit(box.expanded(by: 500), in: Vec2(Double(viewSize.width), Double(viewSize.height)))
         needsContentRedraw?()
         needsOverlayRedraw?()

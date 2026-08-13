@@ -172,6 +172,21 @@ final class JwwGroupLayerTests: XCTestCase {
         XCTAssertTrue(doc.isSelectable(doc.current))
     }
 
+    func testPaperCodeImported() {
+        var d = makeDrawing()
+        d.paperCode = 2
+        let doc = Document()
+        JwwReader.importDrawing(d, into: doc)
+        XCTAssertEqual(doc.paperSize, .a2)
+
+        // 対応外コード(2A等)は既定のまま
+        var d2 = makeDrawing()
+        d2.paperCode = 9
+        let doc2 = Document()
+        JwwReader.importDrawing(d2, into: doc2)
+        XCTAssertEqual(doc2.paperSize, .a3)
+    }
+
     func testFallbackCurrentWhenAllLocked() {
         var d = makeDrawing()
         // 全レイヤ・全グループ表示のみ(書込不能)にする

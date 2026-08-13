@@ -86,6 +86,7 @@ final class CanvasContentView: NSView {
         let gridSpacing = controller.effectiveGridSpacing
         let showAuxiliary = controller.document.showAuxiliary
         let blockDefinitions = controller.document.blockDefinitions
+        let paperFrame = controller.document.paperFrame
         let size = bounds.size
         let scaleFactor = window?.backingScaleFactor ?? 2
 
@@ -108,7 +109,8 @@ final class CanvasContentView: NSView {
             renderer.draw(entities: entities, groups: groups,
                           transform: transform, viewSize: size,
                           gridSpacing: gridSpacing, showAuxiliary: showAuxiliary,
-                          blockDefinitions: blockDefinitions, in: bctx)
+                          blockDefinitions: blockDefinitions,
+                          paperFrame: paperFrame, in: bctx)
             let image = bctx.makeImage()
 
             DispatchQueue.main.async {

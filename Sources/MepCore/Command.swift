@@ -211,6 +211,12 @@ public final class CommandStack {
     public var canUndo: Bool { !undoStack.isEmpty }
     public var canRedo: Bool { !redoStack.isEmpty }
 
+    /// 履歴を全消去する(新規作成・ファイルを開いた時。前の図面への取り消しを残さない)
+    public func clear() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+    }
+
     public func run(_ command: Command) {
         command.execute(on: document)
         undoStack.append(command)
