@@ -70,8 +70,8 @@ final class CanvasController: NSObject {
         guard let s = marqueeStartScreen, let c = marqueeCurrentScreen else { return .window }
         return c.x >= s.x ? .window : .crossing
     }
-    /// 移動/複写ゴーストの移動量(ワールド)。nilなら非表示
-    var ghostDelta: Vec2?
+    /// 移動/複写/回転ゴーストの変換(ワールド)。nilなら非表示
+    var ghostTransform: EditTransform?
     /// SwiftUIパネル上にカーソルがある間true(十字カーソルを消して矢印に戻す)
     var uiHovering = false {
         didSet {
@@ -358,8 +358,9 @@ final class CanvasController: NSObject {
         guard !selection.isEmpty else { return }
         // 作図ツール中なら選択ツールへ戻してから開始
         if tools.kind != .select { tools.select(.select) }
+        editOp.angleConstraint = tools.angleConstraint  // パレットの角度拘束を移動・複写にも効かせる
         editOp.begin(kind, hasSelection: true)
-        ghostDelta = nil
+        ghostTransform = nil
         onInfo?(editOp.hint)
         needsOverlayRedraw?()
     }
@@ -369,34 +370,51 @@ final class CanvasController: NSObject {
         guard editOp.isActive, let cursor = cursorScreen else { return }
         let effective = snappedScreen ?? cursor
         let world = transform.toWorld(effective)
-        if let delta = editOp.click(at: world) {
-            commitEditDelta(delta)  // 結果メッセージはコミット側が出す
+        if let result = editOp.click(at: world) {
+            commitEditTransform(result)  // 結果メッセージはコミット側が出す
         } else if editOp.isActive {
             onInfo?(editOp.hint)
         }
-        ghostDelta = editOp.previewDelta(cursor: world)
+        ghostTransform = editOp.previewTransform(cursor: world)
         needsOverlayRedraw?()
     }
 
-    private func commitEditDelta(_ delta: Vec2) {
+    private func commitEditTransform(_ result: EditTransform) {
         guard !selection.isEmpty else { return }
-        switch editOp.kind {
-        case .move:
+        switch (editOp.kind, result) {
+        case (.move, .translate(let delta)):
             commandStack.run(TranslateEntitiesCommand(ids: selection, delta: delta))
             onInfo?("\(selection.count)個を移動しました(⌘Zで取り消し)")
-        case .copy:
+        case (.copy, .translate(let delta)):
             let copies = selectedEntities.map { $0.duplicated(by: delta) }
             commandStack.run(AddEntitiesCommand(name: "複写", entities: copies))
             onInfo?("\(copies.count)個を複写しました — 続けてクリックで連続配置 / escで終了")
+        case (.rotate, .rotate(let center, let angle)):
+            commandStack.run(RotateEntitiesCommand(ids: selection, center: center, angle: angle))
+            onInfo?(String(format: "%d個を %.1f° 回転しました(⌘Zで取り消し)", selection.count, angle * 180 / .pi))
+        case (.rotateCopy, .rotate(let center, let angle)):
+            let copies = selectedEntities.map {
+                $0.duplicated(by: .zero).rotated(around: center, byRadians: angle)
+            }
+            commandStack.run(AddEntitiesCommand(name: "回転複写", entities: copies))
+            onInfo?(String(format: "%d個を %.1f° 回転複写しました — 続けてクリックで連続配置 / escで終了", copies.count, angle * 180 / .pi))
+        default:
+            break
         }
     }
 
     func cancelEditOperation() {
         guard editOp.isActive else { return }
         editOp.cancel()
-        ghostDelta = nil
+        ghostTransform = nil
         publishSelectionHint()
         needsOverlayRedraw?()
+    }
+
+    /// 角度拘束の変更(ツールバーのパレットから。作図と編集の両方に効く)
+    func setAngleConstraint(_ constraint: AngleConstraint) {
+        tools.angleConstraint = constraint
+        editOp.angleConstraint = constraint
     }
 
     // MARK: - 右クリックメニュー(M4)
@@ -411,6 +429,8 @@ final class CanvasController: NSObject {
             // 最上段: 複写・移動(一番使うため)
             menu.addItem(menuItem("複写", #selector(menuCopy)))
             menu.addItem(menuItem("移動", #selector(menuMove)))
+            menu.addItem(menuItem("回転", #selector(menuRotate)))
+            menu.addItem(menuItem("回転複写", #selector(menuRotateCopy)))
             menu.addItem(.separator())
             // レイヤ間の移動・複写(グループ→レイヤの2段サブメニュー)
             menu.addItem(layerSubmenu(title: "レイヤへ移動", action: #selector(menuMoveToLayer(_:))))
@@ -471,6 +491,8 @@ final class CanvasController: NSObject {
 
     @objc private func menuCopy() { beginEditOperation(.copy) }
     @objc private func menuMove() { beginEditOperation(.move) }
+    @objc private func menuRotate() { beginEditOperation(.rotate) }
+    @objc private func menuRotateCopy() { beginEditOperation(.rotateCopy) }
     @objc private func menuDelete() { deleteSelection() }
     @objc private func menuDeselect() { clearSelection() }
     @objc private func menuSelectAll() { selectAll() }
@@ -607,10 +629,10 @@ final class CanvasController: NSObject {
         // 編集操作(移動・複写)の数値入力を優先
         if editOp.isActive {
             var committed = false
-            let handled = editOp.keyInput(character) { [weak self] delta in
+            let handled = editOp.keyInput(character) { [weak self] result in
                 committed = true
-                self?.commitEditDelta(delta)
-                self?.ghostDelta = nil
+                self?.commitEditTransform(result)
+                self?.ghostTransform = nil
             }
             if handled {
                 // コミット時は結果メッセージ(commitEditDelta側)を残す
@@ -746,12 +768,12 @@ final class CanvasController: NSObject {
         } else {
             previewShape = .none
         }
-        // 移動・複写のゴースト更新(スナップ点優先)
+        // 移動・複写・回転のゴースト更新(スナップ点優先)
         if editOp.isActive {
             let effective = snappedScreen ?? p
-            ghostDelta = editOp.previewDelta(cursor: transform.toWorld(effective))
+            ghostTransform = editOp.previewTransform(cursor: transform.toWorld(effective))
         } else {
-            ghostDelta = nil
+            ghostTransform = nil
         }
         needsOverlayRedraw?()
         publishStatus()

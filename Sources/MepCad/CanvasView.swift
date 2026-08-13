@@ -157,9 +157,9 @@ final class CrosshairOverlayView: NSView {
             drawSelectionHighlight(controller: controller, in: ctx)
         }
 
-        // 移動・複写のゴースト
-        if let delta = controller.ghostDelta, !controller.selectedEntities.isEmpty {
-            drawGhost(controller: controller, delta: delta, in: ctx)
+        // 移動・複写・回転のゴースト
+        if let transform = controller.ghostTransform, !controller.selectedEntities.isEmpty {
+            drawGhost(controller: controller, ghost: transform, in: ctx)
         }
 
         // 矩形選択(マーキー)
@@ -248,12 +248,12 @@ final class CrosshairOverlayView: NSView {
             drawOverlayLabel(String(format: "R%.0f", r),
                              at: CGPoint(x: sc.x + 10, y: sc.y - 10), in: ctx)
 
-        case .doubleLine(let a, let b, let width):
+        case .doubleLine(let a, let b, let offsetA, let offsetB):
             let d = Vec2(b.x - a.x, b.y - a.y)
             let len = d.length
             if len > 1e-9 {
-                let n = Vec2(-d.y / len, d.x / len) * (width / 2)
-                for offset in [n, Vec2(-n.x, -n.y)] {
+                let n = Vec2(-d.y / len, d.x / len)
+                for offset in [n * offsetA, n * (-offsetB)] {
                     let sa = controller.transform.toScreen(a + offset)
                     let sb = controller.transform.toScreen(b + offset)
                     ctx.move(to: CGPoint(x: sa.x, y: sa.y))
@@ -261,7 +261,7 @@ final class CrosshairOverlayView: NSView {
                 }
                 ctx.strokePath()
                 let sm = controller.transform.toScreen(Vec2((a.x + b.x) / 2, (a.y + b.y) / 2))
-                drawOverlayLabel(String(format: "L%.0f  幅%.0f", len, width),
+                drawOverlayLabel(String(format: "L%.0f  A%.0f/B%.0f", len, offsetA, offsetB),
                                  at: CGPoint(x: sm.x + 8, y: sm.y - 8), in: ctx)
             }
         }
@@ -300,15 +300,24 @@ final class CrosshairOverlayView: NSView {
         }
     }
 
-    private func drawGhost(controller: CanvasController, delta: Vec2, in ctx: CGContext) {
+    private func drawGhost(controller: CanvasController, ghost: EditTransform, in ctx: CGContext) {
         let renderer = Renderer(theme: controller.theme)
         let ghostColor = CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.45)
         let entities = controller.selectedEntities
+
+        // 変換後のゴースト本体
         if entities.count <= outlineDrawLimit {
-            let moved = entities.map { $0.translated(by: delta) }
+            let moved: [Entity]
+            switch ghost {
+            case .translate(let delta):
+                moved = entities.map { $0.translated(by: delta) }
+            case .rotate(let center, let angle):
+                moved = entities.map { $0.rotated(around: center, byRadians: angle) }
+            }
             renderer.drawOutlines(moved, transform: controller.transform,
                                   color: ghostColor, lineWidth: 1.5, in: ctx)
-        } else {
+        } else if case .translate(let delta) = ghost {
+            // 大量選択の移動はバウンディングボックスで示す(回転は省略)
             var box = BBox.empty
             for e in entities { box.union(e.bounds) }
             guard !box.isEmpty else { return }
@@ -321,13 +330,16 @@ final class CrosshairOverlayView: NSView {
                               width: abs(p1.x - p0.x), height: abs(p1.y - p0.y)))
             ctx.setLineDash(phase: 0, lengths: [])
         }
-        // 基準点→カーソルのガイド線と移動量表示
-        if let base = controller.editOp.basePoint {
-            let sb = controller.transform.toScreen(base)
+
+        // ガイド線とラベル
+        guard let base = controller.editOp.basePoint else { return }
+        let sb = controller.transform.toScreen(base)
+        ctx.setStrokeColor(ghostColor)
+        ctx.setLineWidth(1)
+        ctx.setLineDash(phase: 0, lengths: [4, 3])
+        switch ghost {
+        case .translate(let delta):
             let st = controller.transform.toScreen(base + delta)
-            ctx.setStrokeColor(ghostColor)
-            ctx.setLineWidth(1)
-            ctx.setLineDash(phase: 0, lengths: [4, 3])
             ctx.move(to: CGPoint(x: sb.x, y: sb.y))
             ctx.addLine(to: CGPoint(x: st.x, y: st.y))
             ctx.strokePath()
@@ -335,6 +347,17 @@ final class CrosshairOverlayView: NSView {
             drawOverlayLabel(String(format: "dx %.0f  dy %.0f", delta.x, delta.y),
                              at: CGPoint(x: (sb.x + st.x) / 2 + 8, y: (sb.y + st.y) / 2 - 8),
                              in: ctx)
+        case .rotate(_, let angle):
+            // 回転中心の十字と角度表示
+            let r: CGFloat = 6
+            ctx.move(to: CGPoint(x: sb.x - r, y: sb.y))
+            ctx.addLine(to: CGPoint(x: sb.x + r, y: sb.y))
+            ctx.move(to: CGPoint(x: sb.x, y: sb.y - r))
+            ctx.addLine(to: CGPoint(x: sb.x, y: sb.y + r))
+            ctx.strokePath()
+            ctx.setLineDash(phase: 0, lengths: [])
+            drawOverlayLabel(String(format: "∠ %.1f°", angle * 180 / .pi),
+                             at: CGPoint(x: sb.x + 10, y: sb.y - 22), in: ctx)
         }
     }
 

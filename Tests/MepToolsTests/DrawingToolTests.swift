@@ -216,13 +216,14 @@ final class DrawingToolTests: XCTestCase {
         }
     }
 
-    func testDoubleLineWidthAndParallel() {
+    func testDoubleLineHalfSplitWidth() {
         let (tool, cap) = makeTool()
         tool.select(.doubleLine)
-        // 幅を150に変更(始点前の数値入力)
+        // 単独数値=振分半々(全幅150 → 各75)
         for ch in "150" { XCTAssertTrue(tool.keyInput(ch)) }
         _ = tool.keyInput("\r")
-        XCTAssertEqual(tool.doubleLineWidth, 150, accuracy: 1e-9)
+        XCTAssertEqual(tool.doubleLineOffsetA, 75, accuracy: 1e-9)
+        XCTAssertEqual(tool.doubleLineOffsetB, 75, accuracy: 1e-9)
 
         tool.click(at: Vec2(0, 0), shiftDown: false)
         tool.click(at: Vec2(1000, 0), shiftDown: false)
@@ -232,12 +233,61 @@ final class DrawingToolTests: XCTestCase {
         XCTAssertEqual(lines.count, 2)
         guard case .line(let a1, _) = lines[0].kind,
               case .line(let a2, _) = lines[1].kind else { return XCTFail() }
-        // 基準線の両側に半幅ずつ(y = +75 / -75)
         XCTAssertEqual(abs(a1.y - a2.y), 150, accuracy: 1e-9)
         XCTAssertEqual(a1.y + a2.y, 0, accuracy: 1e-9)
         // 連続作図: 次の始点は基準線の終点
         tool.click(at: Vec2(1000, 800), shiftDown: false)
         XCTAssertEqual(cap.groups.count, 2)
+    }
+
+    func testDoubleLineAsymmetricOffsets() {
+        let (tool, cap) = makeTool()
+        tool.select(.doubleLine)
+        // `a,b⏎` = A側100 / B側50
+        for ch in "100,50" { XCTAssertTrue(tool.keyInput(ch)) }
+        _ = tool.keyInput("\r")
+        XCTAssertEqual(tool.doubleLineOffsetA, 100, accuracy: 1e-9)
+        XCTAssertEqual(tool.doubleLineOffsetB, 50, accuracy: 1e-9)
+
+        // +X方向の基準線 → A側=左(+y)に100 / B側=右(-y)に50
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 0), shiftDown: false)
+        let lines = cap.groups[0].entities
+        guard case .line(let a1, _) = lines[0].kind,
+              case .line(let a2, _) = lines[1].kind else { return XCTFail() }
+        XCTAssertEqual(a1.y, 100, accuracy: 1e-9)
+        XCTAssertEqual(a2.y, -50, accuracy: 1e-9)
+    }
+
+    func testRectSizeFirstPlacement() {
+        let (tool, cap) = makeTool()
+        tool.select(.rect)
+        // 寸法先行指定: 900×600 → クリック位置を中心に配置(連続配置可)
+        for ch in "900,600" { XCTAssertTrue(tool.keyInput(ch)) }
+        _ = tool.keyInput("\r")
+        XCTAssertEqual(tool.pendingRectSize, Vec2(900, 600))
+
+        tool.click(at: Vec2(1000, 1000), shiftDown: false)
+        XCTAssertEqual(cap.groups.count, 1)
+        var minX = Double.infinity, maxX = -Double.infinity
+        var minY = Double.infinity, maxY = -Double.infinity
+        for e in cap.groups[0].entities {
+            if case .line(let a, let b) = e.kind {
+                minX = min(minX, a.x, b.x); maxX = max(maxX, a.x, b.x)
+                minY = min(minY, a.y, b.y); maxY = max(maxY, a.y, b.y)
+            }
+        }
+        XCTAssertEqual(minX, 550, accuracy: 1e-9)   // 1000 - 450
+        XCTAssertEqual(maxX, 1450, accuracy: 1e-9)
+        XCTAssertEqual(minY, 700, accuracy: 1e-9)   // 1000 - 300
+        XCTAssertEqual(maxY, 1300, accuracy: 1e-9)
+
+        // 連続配置できる
+        tool.click(at: Vec2(3000, 1000), shiftDown: false)
+        XCTAssertEqual(cap.groups.count, 2)
+        // escで解除
+        tool.cancel()
+        XCTAssertNil(tool.pendingRectSize)
     }
 
     func testCenterlineUsesChainLineType() {

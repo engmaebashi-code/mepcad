@@ -178,6 +178,31 @@ extension Entity {
         return copy
     }
 
+    /// 基準点まわりに回転したコピーを返す(idは維持=回転用。angleはラジアン・反時計回り正)
+    public func rotated(around center: Vec2, byRadians angle: Double) -> Entity {
+        func rot(_ p: Vec2) -> Vec2 {
+            let dx = p.x - center.x
+            let dy = p.y - center.y
+            let c = cos(angle)
+            let s = sin(angle)
+            return Vec2(center.x + dx * c - dy * s, center.y + dx * s + dy * c)
+        }
+        var copy = self
+        switch kind {
+        case .line(let a, let b):
+            copy.kind = .line(a: rot(a), b: rot(b))
+        case .circle(let c, let r):
+            copy.kind = .circle(center: rot(c), radius: r)
+        case .arc(let c, let r, let sa, let ea):
+            copy.kind = .arc(center: rot(c), radius: r, startAngle: sa + angle, endAngle: ea + angle)
+        case .text(let p, let content, let h, let textAngle):
+            copy.kind = .text(position: rot(p), content: content, height: h, angle: textAngle + angle)
+        case .point(let p):
+            copy.kind = .point(position: rot(p))
+        }
+        return copy
+    }
+
     /// 平行移動した複製を返す(新しいid=複写用)
     public func duplicated(by delta: Vec2) -> Entity {
         var copy = translated(by: delta)

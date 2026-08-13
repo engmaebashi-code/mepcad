@@ -231,9 +231,10 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .help("角度拘束: 作図中の線の角度を丸める(自由/90°/45°/15°)")
+                .help("角度拘束: 作図・移動・複写の方向を丸める(自由/90°/45°/15°)")
                 .onChange(of: angle) { _, newValue in
-                    controller.tools.angleConstraint = newValue
+                    // 作図と移動・複写の両方に効かせる
+                    controller.setAngleConstraint(newValue)
                 }
             }
 

@@ -80,6 +80,44 @@ final class HitTestTests: XCTestCase {
         XCTAssertEqual(b, Vec2(110, 20))
     }
 
+    func testRotatedAroundCenter() {
+        let e = line(100, 0, 200, 0)
+        // 原点まわりに90°回転(反時計回り)
+        let rotated = e.rotated(around: .zero, byRadians: .pi / 2)
+        XCTAssertEqual(rotated.id, e.id)
+        guard case .line(let a, let b) = rotated.kind else { return XCTFail() }
+        XCTAssertEqual(a.x, 0, accuracy: 1e-9)
+        XCTAssertEqual(a.y, 100, accuracy: 1e-9)
+        XCTAssertEqual(b.x, 0, accuracy: 1e-9)
+        XCTAssertEqual(b.y, 200, accuracy: 1e-9)
+    }
+
+    func testRotatedArcShiftsAngles() {
+        let e = Entity(layer: .zero,
+                       kind: .arc(center: Vec2(100, 0), radius: 50, startAngle: 0, endAngle: .pi / 2))
+        let rotated = e.rotated(around: .zero, byRadians: .pi / 2)
+        guard case .arc(let c, let r, let sa, let ea) = rotated.kind else { return XCTFail() }
+        XCTAssertEqual(c.x, 0, accuracy: 1e-9)
+        XCTAssertEqual(c.y, 100, accuracy: 1e-9)
+        XCTAssertEqual(r, 50, accuracy: 1e-9)
+        XCTAssertEqual(sa, .pi / 2, accuracy: 1e-9)
+        XCTAssertEqual(ea, .pi, accuracy: 1e-9)
+    }
+
+    func testRotateEntitiesCommandUndoExact() {
+        let doc = Document()
+        let e = line(0.1, 0.2, 100.3, 0.7)
+        doc.appendBulk([e])
+        let stack = CommandStack(document: doc)
+
+        stack.run(RotateEntitiesCommand(ids: [e.id], center: Vec2(50, 50), angle: .pi / 3))
+        stack.undo()
+        guard case .line(let a, let b) = doc.entity(id: e.id)!.kind else { return XCTFail() }
+        // スナップショット復元なのでビット単位で一致
+        XCTAssertEqual(a, Vec2(0.1, 0.2))
+        XCTAssertEqual(b, Vec2(100.3, 0.7))
+    }
+
     func testDuplicatedNewID() {
         let e = line(0, 0, 100, 0)
         let copy = e.duplicated(by: Vec2(10, 0))

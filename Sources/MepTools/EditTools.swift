@@ -1,36 +1,56 @@
 import Foundation
 import MepCore
 
-/// 編集操作の種類(右クリックメニュー最上段の複写・移動)
+/// 編集操作の種類(右クリックメニューから開始)
 public enum EditOpKind: Sendable {
-    case move   // 移動: 基準点→移動先(1回で終了)
-    case copy   // 複写: 基準点→配置先(escまで連続配置)
+    case move        // 移動: 基準点→移動先(1回で終了)
+    case copy        // 複写: 基準点→配置先(escまで連続配置)
+    case rotate      // 回転: 基準点→方向1→方向2(または数値角)
+    case rotateCopy  // 回転複写: 同上、escまで連続配置
 
     public var label: String {
         switch self {
         case .move: return "移動"
         case .copy: return "複写"
+        case .rotate: return "回転"
+        case .rotateCopy: return "回転複写"
         }
     }
+
+    var isCopy: Bool { self == .copy || self == .rotateCopy }
+    var isRotation: Bool { self == .rotate || self == .rotateCopy }
 }
 
-/// 移動・複写の状態機械(UI非依存・ユニットテスト対象)。
-/// 基準点→目標点の2クリックで確定。複写は連続配置に対応する。
-/// 数値入力にも対応: "dx,dy"=相対移動量、単独数値=カーソル方向へ指定距離。
+/// 編集操作の確定内容(呼び出し側がコマンドに変換する)
+public enum EditTransform: Equatable, Sendable {
+    case translate(Vec2)
+    /// 角度はラジアン・反時計回り正
+    case rotate(center: Vec2, angle: Double)
+}
+
+/// 移動・複写・回転の状態機械(UI非依存・ユニットテスト対象)。
+/// 移動/複写: 基準点→目標点。角度拘束パレット(自由/90/45/15°)が方向に効く。
+/// 回転: 基準点→方向1→方向2(2方向のなす角)または数値⏎で角度指定(度・反時計回り正)。
 public final class EditOperation {
 
     public enum Phase: Equatable, Sendable {
         case idle
-        case awaitingBase    // 基準点待ち
-        case awaitingTarget  // 目標点待ち
+        case awaitingBase         // 基準点待ち
+        case awaitingTarget       // 移動先/配置先待ち(移動・複写)
+        case awaitingAngleRef     // 回転の方向1待ち
+        case awaitingAngleTarget  // 回転の方向2待ち
     }
 
     public private(set) var phase: Phase = .idle
     public private(set) var kind: EditOpKind = .move
     public private(set) var basePoint: Vec2?
+    /// 回転の方向1の方位角(rad)
+    public private(set) var referenceAngle: Double?
     public private(set) var numericBuffer = ""
     /// 数値入力の距離指定で使う「最後のカーソル位置」
     public private(set) var lastCursor: Vec2 = .zero
+    /// 角度拘束(ツールバーのパレットと連動。移動・複写の方向に効く)
+    public var angleConstraint: AngleConstraint = .free
 
     public init() {}
 
@@ -42,63 +62,105 @@ public final class EditOperation {
         self.kind = kind
         phase = .awaitingBase
         basePoint = nil
+        referenceAngle = nil
         numericBuffer = ""
     }
 
     public func cancel() {
         phase = .idle
         basePoint = nil
+        referenceAngle = nil
         numericBuffer = ""
     }
 
-    /// クリック処理。移動量が確定したらdeltaを返す(呼び出し側がコマンド実行)。
-    /// 複写は確定後もawaitingTargetに留まり連続配置できる。移動は確定で終了する。
-    public func click(at p: Vec2) -> Vec2? {
+    /// クリック処理。変換が確定したら返す(呼び出し側がコマンド実行)。
+    /// 複写系は確定後も継続し連続配置できる。移動・回転は確定で終了する。
+    public func click(at p: Vec2) -> EditTransform? {
         numericBuffer = ""
         switch phase {
         case .idle:
             return nil
+
         case .awaitingBase:
             basePoint = p
-            phase = .awaitingTarget
+            phase = kind.isRotation ? .awaitingAngleRef : .awaitingTarget
             return nil
+
         case .awaitingTarget:
             guard let base = basePoint else { return nil }
-            let delta = p - base
+            let target = constrained(from: base, to: p)
+            let delta = target - base
             if kind == .move {
-                phase = .idle
-                basePoint = nil
+                finishIfSingleShot()
             }
-            // 複写: 基準点は変えず、次のクリックでも同じ基準から配置できる
-            return delta
+            return .translate(delta)
+
+        case .awaitingAngleRef:
+            guard let base = basePoint else { return nil }
+            let d = p - base
+            guard d.length > 1e-9 else { return nil }
+            referenceAngle = atan2(d.y, d.x)
+            phase = .awaitingAngleTarget
+            return nil
+
+        case .awaitingAngleTarget:
+            guard let base = basePoint, let ref = referenceAngle else { return nil }
+            let d = p - base
+            guard d.length > 1e-9 else { return nil }
+            let angle = normalized(atan2(d.y, d.x) - ref)
+            if kind == .rotate {
+                finishIfSingleShot()
+            }
+            return .rotate(center: base, angle: angle)
         }
     }
 
-    /// プレビュー用の移動量(基準点が決まっていれば cursor - base)
-    public func previewDelta(cursor: Vec2) -> Vec2? {
+    /// プレビュー用の変換(基準点などが決まっていれば)
+    public func previewTransform(cursor: Vec2) -> EditTransform? {
         lastCursor = cursor
-        guard phase == .awaitingTarget, let base = basePoint else { return nil }
-        return cursor - base
+        guard let base = basePoint else { return nil }
+        switch phase {
+        case .awaitingTarget:
+            let target = constrained(from: base, to: cursor)
+            return .translate(target - base)
+        case .awaitingAngleTarget:
+            guard let ref = referenceAngle else { return nil }
+            let d = cursor - base
+            guard d.length > 1e-9 else { return nil }
+            return .rotate(center: base, angle: normalized(atan2(d.y, d.x) - ref))
+        default:
+            return nil
+        }
     }
 
-    // MARK: - 数値入力("dx,dy"=相対 / 単独数値=カーソル方向へ距離)
+    // MARK: - 数値入力
 
-    /// キー入力。処理した場合true。⏎で確定したdeltaはonCommitで返す
+    /// 移動・複写: "dx,dy"=相対 / 単独数値=拘束方向へ距離。
+    /// 回転・回転複写: 単独数値=角度(度・反時計回り正。負で時計回り)。
     @discardableResult
-    public func keyInput(_ character: Character, onCommit: (Vec2) -> Void) -> Bool {
-        guard phase == .awaitingTarget else { return false }
+    public func keyInput(_ character: Character, onCommit: (EditTransform) -> Void) -> Bool {
+        let capable: Bool
+        switch phase {
+        case .awaitingTarget:
+            capable = true
+        case .awaitingAngleRef, .awaitingAngleTarget:
+            capable = true   // 回転は方向1の指示前でも数値角で確定できる
+        default:
+            capable = false
+        }
+        guard capable else { return false }
+
         if character.isNumber || character == "." || character == "," || character == "-" {
             numericBuffer.append(character)
             return true
         }
         if character == "\r" || character == "\n" {
-            if let delta = parseNumericDelta() {
-                if kind == .move {
-                    phase = .idle
-                    basePoint = nil
+            if let transform = parseNumeric() {
+                if kind == .move || kind == .rotate {
+                    finishIfSingleShot()
                 }
                 numericBuffer = ""
-                onCommit(delta)
+                onCommit(transform)
             } else {
                 numericBuffer = ""
             }
@@ -113,33 +175,73 @@ public final class EditOperation {
         return false
     }
 
-    private func parseNumericDelta() -> Vec2? {
+    private func parseNumeric() -> EditTransform? {
         guard let base = basePoint, !numericBuffer.isEmpty else { return nil }
         let comps = numericBuffer.split(separator: ",").map(String.init)
+
+        if kind.isRotation {
+            guard comps.count == 1, let degrees = Double(comps[0]), abs(degrees) > 1e-9 else { return nil }
+            return .rotate(center: base, angle: degrees * .pi / 180)
+        }
+
         if comps.count == 2, let dx = Double(comps[0]), let dy = Double(comps[1]) {
-            return Vec2(dx, dy)
+            return .translate(Vec2(dx, dy))
         }
         if comps.count == 1, let dist = Double(comps[0]), abs(dist) > 0.001 {
-            let dir = lastCursor - base
+            let target = constrained(from: base, to: lastCursor)
+            let dir = target - base
             let len = dir.length
             guard len > 1e-9 else { return nil }
-            return dir * (dist / len)
+            return .translate(dir * (dist / len))
         }
         return nil
+    }
+
+    // MARK: - 内部
+
+    private func finishIfSingleShot() {
+        phase = .idle
+        basePoint = nil
+        referenceAngle = nil
+    }
+
+    /// 角度拘束(パレット連動)。移動・複写の方向を丸める
+    private func constrained(from a: Vec2, to p: Vec2) -> Vec2 {
+        guard let step = angleConstraint.step else { return p }
+        let d = p - a
+        let len = d.length
+        guard len > 1e-9 else { return p }
+        let snapped = (atan2(d.y, d.x) / step).rounded() * step
+        return Vec2(a.x + cos(snapped) * len, a.y + sin(snapped) * len)
+    }
+
+    /// -π..π に正規化
+    private func normalized(_ angle: Double) -> Double {
+        var a = angle.truncatingRemainder(dividingBy: 2 * .pi)
+        if a > .pi { a -= 2 * .pi }
+        if a < -.pi { a += 2 * .pi }
+        return a
     }
 
     // MARK: - ステータスヒント
 
     public var hint: String {
         let num = numericBuffer.isEmpty ? "" : "  入力: \(numericBuffer)"
+        let constraint = (!kind.isRotation && angleConstraint != .free)
+            ? " [\(angleConstraint.rawValue)拘束]" : ""
         switch phase {
         case .idle:
             return ""
         case .awaitingBase:
-            return "\(kind.label): 基準点を指示"
+            return "\(kind.label): 基準点(回転中心)を指示"
         case .awaitingTarget:
             let cont = kind == .copy ? "(クリックで連続配置 / esc終了)" : ""
-            return "\(kind.label): \(kind == .move ? "移動先" : "配置先")を指示\(cont) — 数値=距離 / x,y=相対 / ⏎確定" + num
+            return "\(kind.label): \(kind == .move ? "移動先" : "配置先")を指示\(cont) — 数値=距離 / x,y=相対 / ⏎確定" + constraint + num
+        case .awaitingAngleRef:
+            return "\(kind.label): 方向1を指示(または角度を数値⏎ 例: 90=反時計回り90°)" + num
+        case .awaitingAngleTarget:
+            let cont = kind == .rotateCopy ? "(クリックで連続配置 / esc終了)" : ""
+            return "\(kind.label): 方向2を指示\(cont) — 数値⏎=角度(度)" + num
         }
     }
 }

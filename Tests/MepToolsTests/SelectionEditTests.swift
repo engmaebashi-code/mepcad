@@ -100,8 +100,8 @@ final class SelectionEditTests: XCTestCase {
         XCTAssertNil(op.click(at: Vec2(100, 100)))       // 基準点
         XCTAssertEqual(op.phase, .awaitingTarget)
 
-        let delta = op.click(at: Vec2(150, 130))          // 移動先
-        XCTAssertEqual(delta, Vec2(50, 30))
+        let result = op.click(at: Vec2(150, 130))         // 移動先
+        XCTAssertEqual(result, .translate(Vec2(50, 30)))
         XCTAssertEqual(op.phase, .idle)                   // 移動は1回で終了
     }
 
@@ -111,13 +111,79 @@ final class SelectionEditTests: XCTestCase {
         XCTAssertNil(op.click(at: Vec2(0, 0)))            // 基準点
 
         // 連続配置: 毎回同じ基準点からのdeltaが返り、状態は継続する
-        XCTAssertEqual(op.click(at: Vec2(100, 0)), Vec2(100, 0))
+        XCTAssertEqual(op.click(at: Vec2(100, 0)), .translate(Vec2(100, 0)))
         XCTAssertEqual(op.phase, .awaitingTarget)
-        XCTAssertEqual(op.click(at: Vec2(200, 50)), Vec2(200, 50))
+        XCTAssertEqual(op.click(at: Vec2(200, 50)), .translate(Vec2(200, 50)))
         XCTAssertEqual(op.phase, .awaitingTarget)
 
         op.cancel()
         XCTAssertEqual(op.phase, .idle)
+    }
+
+    func testMoveRespectsAngleConstraint() {
+        let op = EditOperation()
+        op.angleConstraint = .deg90
+        op.begin(.move, hasSelection: true)
+        _ = op.click(at: Vec2(0, 0))
+        // ほぼ水平の移動先 → 完全水平に拘束
+        let result = op.click(at: Vec2(1000, 40))
+        guard case .translate(let delta)? = result else { return XCTFail() }
+        XCTAssertEqual(delta.y, 0, accuracy: 1e-9)
+        XCTAssertGreaterThan(delta.x, 999)
+    }
+
+    // MARK: - 回転・回転複写
+
+    func testRotateByTwoDirections() {
+        let op = EditOperation()
+        op.begin(.rotate, hasSelection: true)
+        XCTAssertNil(op.click(at: Vec2(100, 100)))        // 基準点(回転中心)
+        XCTAssertEqual(op.phase, .awaitingAngleRef)
+        XCTAssertNil(op.click(at: Vec2(200, 100)))        // 方向1(0°)
+        XCTAssertEqual(op.phase, .awaitingAngleTarget)
+
+        let result = op.click(at: Vec2(100, 200))         // 方向2(90°)
+        guard case .rotate(let center, let angle)? = result else { return XCTFail() }
+        XCTAssertEqual(center, Vec2(100, 100))
+        XCTAssertEqual(angle, .pi / 2, accuracy: 1e-9)
+        XCTAssertEqual(op.phase, .idle)                   // 回転(移動)は1回で終了
+    }
+
+    func testRotateCopyContinuous() {
+        let op = EditOperation()
+        op.begin(.rotateCopy, hasSelection: true)
+        _ = op.click(at: Vec2(0, 0))                      // 中心
+        _ = op.click(at: Vec2(100, 0))                    // 方向1
+        XCTAssertNotNil(op.click(at: Vec2(0, 100)))       // 90°で1個目
+        XCTAssertEqual(op.phase, .awaitingAngleTarget)    // 連続配置
+        let second = op.click(at: Vec2(-100, 0))          // 180°で2個目
+        guard case .rotate(_, let angle)? = second else { return XCTFail() }
+        XCTAssertEqual(abs(angle), .pi, accuracy: 1e-9)
+    }
+
+    func testRotateNumericAngle() {
+        let op = EditOperation()
+        op.begin(.rotate, hasSelection: true)
+        _ = op.click(at: Vec2(50, 50))                    // 中心
+        var committed: EditTransform?
+        for ch in "90" { XCTAssertTrue(op.keyInput(ch) { _ in }) }
+        _ = op.keyInput("\r") { committed = $0 }
+        guard case .rotate(let center, let angle)? = committed else { return XCTFail() }
+        XCTAssertEqual(center, Vec2(50, 50))
+        XCTAssertEqual(angle, .pi / 2, accuracy: 1e-9)
+        XCTAssertEqual(op.phase, .idle)
+    }
+
+    func testRotateNumericNegativeIsClockwise() {
+        let op = EditOperation()
+        op.begin(.rotateCopy, hasSelection: true)
+        _ = op.click(at: Vec2(0, 0))
+        var committed: EditTransform?
+        for ch in "-45" { _ = op.keyInput(ch) { _ in } }
+        _ = op.keyInput("\r") { committed = $0 }
+        guard case .rotate(_, let angle)? = committed else { return XCTFail() }
+        XCTAssertEqual(angle, -.pi / 4, accuracy: 1e-9)
+        XCTAssertEqual(op.phase, .awaitingAngleRef)       // 回転複写は継続
     }
 
     func testBeginRequiresSelection() {
@@ -126,12 +192,12 @@ final class SelectionEditTests: XCTestCase {
         XCTAssertEqual(op.phase, .idle)
     }
 
-    func testPreviewDelta() {
+    func testPreviewTransform() {
         let op = EditOperation()
         op.begin(.move, hasSelection: true)
-        XCTAssertNil(op.previewDelta(cursor: Vec2(10, 10)))  // 基準点前はプレビューなし
+        XCTAssertNil(op.previewTransform(cursor: Vec2(10, 10)))  // 基準点前はプレビューなし
         _ = op.click(at: Vec2(100, 100))
-        XCTAssertEqual(op.previewDelta(cursor: Vec2(120, 90)), Vec2(20, -10))
+        XCTAssertEqual(op.previewTransform(cursor: Vec2(120, 90)), .translate(Vec2(20, -10)))
     }
 
     func testNumericRelativeInput() {
@@ -139,10 +205,10 @@ final class SelectionEditTests: XCTestCase {
         op.begin(.move, hasSelection: true)
         _ = op.click(at: Vec2(100, 100))
 
-        var committed: Vec2?
+        var committed: EditTransform?
         for ch in "50,-25" { XCTAssertTrue(op.keyInput(ch) { _ in }) }
         XCTAssertTrue(op.keyInput("\r") { committed = $0 })
-        XCTAssertEqual(committed, Vec2(50, -25))
+        XCTAssertEqual(committed, .translate(Vec2(50, -25)))
         XCTAssertEqual(op.phase, .idle)
     }
 
@@ -150,14 +216,14 @@ final class SelectionEditTests: XCTestCase {
         let op = EditOperation()
         op.begin(.copy, hasSelection: true)
         _ = op.click(at: Vec2(0, 0))
-        _ = op.previewDelta(cursor: Vec2(100, 0))  // カーソルは+X方向
+        _ = op.previewTransform(cursor: Vec2(100, 0))  // カーソルは+X方向
 
-        var committed: Vec2?
+        var committed: EditTransform?
         for ch in "250" { _ = op.keyInput(ch) { _ in } }
         _ = op.keyInput("\n") { committed = $0 }
-        XCTAssertNotNil(committed)
-        XCTAssertEqual(committed!.x, 250, accuracy: 1e-9)
-        XCTAssertEqual(committed!.y, 0, accuracy: 1e-9)
+        guard case .translate(let delta)? = committed else { return XCTFail() }
+        XCTAssertEqual(delta.x, 250, accuracy: 1e-9)
+        XCTAssertEqual(delta.y, 0, accuracy: 1e-9)
         // 複写は確定後も継続
         XCTAssertEqual(op.phase, .awaitingTarget)
     }

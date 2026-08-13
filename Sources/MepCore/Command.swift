@@ -109,6 +109,31 @@ public final class TranslateEntitiesCommand: Command {
     }
 }
 
+/// 複数エンティティの回転(回転コマンド)。
+/// Undoはスナップショット復元(三角関数の往復誤差を残さない)。
+public final class RotateEntitiesCommand: Command {
+    public let name = "回転"
+    private let ids: Set<EntityID>
+    private let center: Vec2
+    private let angle: Double   // rad, CCW
+    private var before: [Entity] = []
+
+    public init(ids: Set<EntityID>, center: Vec2, angle: Double) {
+        self.ids = ids
+        self.center = center
+        self.angle = angle
+    }
+
+    public func execute(on document: Document) {
+        before = document.entities(ids: ids)
+        document.replaceBulk(before.map { $0.rotated(around: center, byRadians: angle) })
+    }
+
+    public func undo(on document: Document) {
+        document.replaceBulk(before)
+    }
+}
+
 /// 複数エンティティの属性変更(プロパティパネルからの一括変更)
 public struct UpdateEntitiesCommand: Command {
     public let name: String

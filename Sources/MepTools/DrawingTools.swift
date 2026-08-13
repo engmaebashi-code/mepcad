@@ -21,7 +21,7 @@ public enum PreviewShape {
     case circle(Vec2, Double)
     case rect(Vec2, Vec2)                                  // 対角2点
     case arc(Vec2, Double, Double, Double)                 // 中心, 半径, 開始角, 終了角(CCW)
-    case doubleLine(Vec2, Vec2, Double)                    // 基準線a-b, 全幅
+    case doubleLine(Vec2, Vec2, Double, Double)            // 基準線a-b, A側/B側オフセット
 }
 
 /// 角度拘束モード(常設パレットで切替。⇧押下は一時的に45°拘束)
@@ -67,8 +67,11 @@ public final class DrawingToolController {
     public private(set) var lastCursor: Vec2 = .zero
     /// 文字の既定高さ(実寸mm。1/50印刷で紙面6mm相当)
     public var textHeight: Double = 300
-    /// 2線の全幅(実寸mm)。数値入力で変更でき、次回も記憶される
-    public private(set) var doubleLineWidth: Double = 100
+    /// 2線のA側/B側オフセット(実寸mm・基準線からの距離)。`a,b⏎`で個別、`w⏎`で振分半々。記憶される
+    public private(set) var doubleLineOffsetA: Double = 50
+    public private(set) var doubleLineOffsetB: Double = 50
+    /// 矩形の寸法先行指定(`X,Y⏎`)。設定中はカーソル中心にぶら下がりクリックで配置
+    public private(set) var pendingRectSize: Vec2?
     /// 角度拘束モード(ツールバーの常設パレットから設定)
     public var angleConstraint: AngleConstraint = .free
 
@@ -91,11 +94,12 @@ public final class DrawingToolController {
     private func resetPoints() {
         anchor = nil
         arcStart = nil
+        pendingRectSize = nil
     }
 
     /// esc/右クリック: 作図中なら現在の作図を終了、待機中なら選択ツールへ戻る
     public func cancel() {
-        if anchor != nil || arcStart != nil || !numericBuffer.isEmpty {
+        if anchor != nil || arcStart != nil || pendingRectSize != nil || !numericBuffer.isEmpty {
             resetPoints()
             numericBuffer = ""
         } else if kind != .select {
@@ -116,10 +120,16 @@ public final class DrawingToolController {
             return .line(a, constrained(from: a, to: cursor, active: shiftDown))
         case .doubleLine:
             guard let a = anchor else { return .none }
-            return .doubleLine(a, constrained(from: a, to: cursor, active: shiftDown), doubleLineWidth)
+            return .doubleLine(a, constrained(from: a, to: cursor, active: shiftDown),
+                               doubleLineOffsetA, doubleLineOffsetB)
         case .rect:
-            guard let a = anchor else { return .none }
-            return .rect(a, cursor)
+            if let a = anchor { return .rect(a, cursor) }
+            if let size = pendingRectSize {
+                // 寸法先行指定: カーソル中心にぶら下がる
+                return .rect(Vec2(cursor.x - size.x / 2, cursor.y - size.y / 2),
+                             Vec2(cursor.x + size.x / 2, cursor.y + size.y / 2))
+            }
+            return .none
         case .circle:
             guard let c = anchor else { return .none }
             return .circle(c, c.distance(to: cursor))
@@ -156,7 +166,11 @@ public final class DrawingToolController {
             }
 
         case .rect:
-            if let a = anchor {
+            if let size = pendingRectSize, anchor == nil {
+                // 寸法先行指定: クリック位置を中心に配置(escまで連続配置)
+                commitRect(Vec2(p.x - size.x / 2, p.y - size.y / 2),
+                           Vec2(p.x + size.x / 2, p.y + size.y / 2))
+            } else if let a = anchor {
                 commitRect(a, p)
                 anchor = nil
             } else {
@@ -218,10 +232,12 @@ public final class DrawingToolController {
     public func keyInput(_ character: Character) -> Bool {
         let numericCapable: Bool
         switch kind {
-        case .line, .centerline, .circle, .rect, .arc:
+        case .line, .centerline, .circle, .arc:
             numericCapable = anchor != nil
+        case .rect:
+            numericCapable = true   // 寸法(X,Y)は第1コーナー前でも指定できる
         case .doubleLine:
-            numericCapable = true   // 幅は始点前でも変更できる
+            numericCapable = true   // 振分は始点前でも変更できる
         default:
             numericCapable = false
         }
@@ -265,25 +281,23 @@ public final class DrawingToolController {
             anchor = b
 
         case .doubleLine:
-            // 単独数値は「幅の変更」(始点前後どちらでも)。x,y=相対で次点確定
-            if comps.count == 1, let w = Double(comps[0]) {
-                if w > 0.01 { doubleLineWidth = w }
-                return
+            // `a,b`=A側/B側オフセット、単独数値=振分半々(w/2ずつ)
+            if comps.count == 2, let oa = Double(comps[0]), let ob = Double(comps[1]),
+               oa > 0.001, ob > 0.001 {
+                doubleLineOffsetA = oa
+                doubleLineOffsetB = ob
+            } else if comps.count == 1, let w = Double(comps[0]), w > 0.01 {
+                doubleLineOffsetA = w / 2
+                doubleLineOffsetB = w / 2
             }
-            guard let a = anchor, let b = numericTarget(from: a, comps: comps) else { return }
-            commitDoubleLine(a, b)
-            anchor = b
 
         case .rect:
-            guard let a = anchor else { return }
+            // `X,Y⏎`=寸法指定(第1コーナー前なら先行指定、後ならそこから作図)。単独数値=正方形
             if comps.count == 2, let w = Double(comps[0]), let h = Double(comps[1]),
                abs(w) > 0.01, abs(h) > 0.01 {
-                commitRect(a, Vec2(a.x + w, a.y + h))
-                anchor = nil
+                applyRectSize(Vec2(abs(w), abs(h)))
             } else if comps.count == 1, let w = Double(comps[0]), abs(w) > 0.01 {
-                // 単独数値は正方形
-                commitRect(a, Vec2(a.x + w, a.y + w))
-                anchor = nil
+                applyRectSize(Vec2(abs(w), abs(w)))
             }
 
         case .circle:
@@ -303,6 +317,16 @@ public final class DrawingToolController {
 
         default:
             break
+        }
+    }
+
+    /// 矩形の寸法入力: 第1コーナー確定済みならそこから作図、未確定なら寸法先行指定にする
+    private func applyRectSize(_ size: Vec2) {
+        if let a = anchor {
+            commitRect(a, Vec2(a.x + size.x, a.y + size.y))
+            anchor = nil
+        } else {
+            pendingRectSize = size
         }
     }
 
@@ -361,14 +385,16 @@ public final class DrawingToolController {
     }
 
     private func commitDoubleLine(_ a: Vec2, _ b: Vec2) {
-        guard a.distance(to: b) > 0.01, doubleLineWidth > 0.01 else { return }
+        guard a.distance(to: b) > 0.01, doubleLineOffsetA > 0.001, doubleLineOffsetB > 0.001 else { return }
         let d = b - a
         let len = d.length
-        // 左向き法線 × 半幅(振分は半々)
-        let n = Vec2(-d.y / len, d.x / len) * (doubleLineWidth / 2)
+        // 左向き単位法線。A側=進行方向左、B側=右
+        let n = Vec2(-d.y / len, d.x / len)
+        let offsetA = n * doubleLineOffsetA
+        let offsetB = n * (-doubleLineOffsetB)
         let lines = [
-            Entity(layer: currentLayer, kind: .line(a: a + n, b: b + n)),
-            Entity(layer: currentLayer, kind: .line(a: a - n, b: b - n)),
+            Entity(layer: currentLayer, kind: .line(a: a + offsetA, b: b + offsetA)),
+            Entity(layer: currentLayer, kind: .line(a: a + offsetB, b: b + offsetB)),
         ]
         delegate?.toolDidProduceGroup(lines, name: "2線")
     }
@@ -403,14 +429,17 @@ public final class DrawingToolController {
                 ? "中心線: 始点を指示(一点鎖線で作図)" + constraint
                 : "中心線: 次点を指示 — 数値=距離 / x,y=相対 / esc終了" + constraint + num
         case .doubleLine:
-            let w = String(format: "%.0f", doubleLineWidth)
+            let ab = String(format: "A%.0f/B%.0f", doubleLineOffsetA, doubleLineOffsetB)
             return anchor == nil
-                ? "2線(幅\(w)): 始点を指示 — 数値⏎=幅変更" + constraint + num
-                : "2線(幅\(w)): 次点を指示 — 数値⏎=幅変更 / x,y=相対 / esc終了" + constraint + num
+                ? "2線(\(ab)): 始点を指示 — a,b⏎=振分指定 / w⏎=半々" + constraint + num
+                : "2線(\(ab)): 次点を指示 — a,b⏎=振分変更 / esc終了" + constraint + num
         case .rect:
+            if let size = pendingRectSize {
+                return String(format: "矩形 %.0f×%.0f: クリックで配置(中心基準・連続配置可 / esc解除)", size.x, size.y) + num
+            }
             return anchor == nil
-                ? "矩形: 第1コーナーを指示"
-                : "矩形: 対角コーナーを指示 — 幅,高さ⏎でも可(単独数値=正方形)" + num
+                ? "矩形: 第1コーナーを指示 — X,Y⏎=寸法先行指定(カーソル配置)" + num
+                : "矩形: 対角コーナーを指示 — X,Y⏎でも可(単独数値=正方形)" + num
         case .circle:
             return anchor == nil
                 ? "円: 中心を指示"
