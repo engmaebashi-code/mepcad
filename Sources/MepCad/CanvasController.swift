@@ -13,6 +13,7 @@ struct SelectionSummary: Equatable {
     var circleCount: Int
     var arcCount: Int
     var textCount: Int
+    var pointCount: Int
     /// 全選択で共通ならその値(内側nil=byLayer)、混在なら外側nil
     var commonColorIndex: Int??
     var commonLineType: Int??
@@ -106,6 +107,8 @@ final class CanvasController: NSObject {
     private var lastEdgeProximity = false
     /// グリッド表示状態の変化(ステータスバー表示の同期用)
     var onGridChanged: ((Bool) -> Void)?
+    /// グリッド間隔の変化(ステータスバー表示の同期用)
+    var onGridSpacingChanged: ((Double) -> Void)?
     /// 補助線表示状態の変化(ステータスバー表示の同期用)
     var onAuxiliaryChanged: ((Bool) -> Void)?
 
@@ -261,13 +264,14 @@ final class CanvasController: NSObject {
 
     private func selectionSummary() -> SelectionSummary? {
         guard !selectedEntities.isEmpty else { return nil }
-        var lines = 0, circles = 0, arcs = 0, texts = 0
+        var lines = 0, circles = 0, arcs = 0, texts = 0, points = 0
         for e in selectedEntities {
             switch e.kind {
             case .line: lines += 1
             case .circle: circles += 1
             case .arc: arcs += 1
             case .text: texts += 1
+            case .point: points += 1
             }
         }
         func common<T: Equatable>(_ values: [T]) -> T? {
@@ -277,6 +281,7 @@ final class CanvasController: NSObject {
         return SelectionSummary(
             count: selectedEntities.count,
             lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
+            pointCount: points,
             commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
             commonLineType: common(selectedEntities.map(\.style.lineType)),
             commonLineWeight: common(selectedEntities.map(\.style.lineWeight)),
@@ -517,6 +522,39 @@ final class CanvasController: NSObject {
         onLayersChanged?(document.groups, document.current, counts)
     }
 
+    /// グリッド間隔の変更(50刻みプリセット/自由入力)。選択したら非表示中でも表示に戻す
+    func setGridSpacing(_ mm: Double) {
+        gridSpacing = max(1, mm)
+        snapEngine.gridSpacing = gridSpacing
+        if !gridVisible {
+            gridVisible = true
+            snapEngine.gridEnabled = true
+            onGridChanged?(gridVisible)
+        }
+        // グリッドはキャッシュに焼き込まれているため破棄が必要
+        onDocumentChanged?()
+        needsContentRedraw?()
+        onGridSpacingChanged?(gridSpacing)
+        onInfo?("グリッド間隔を \(Int(gridSpacing))mm にしました(グリッドスナップも連動)")
+    }
+
+    /// 自由入力のグリッド間隔(910などのモジュール寸法用)
+    func promptGridSpacing() {
+        let alert = NSAlert()
+        alert.messageText = "グリッド間隔(実寸mm)"
+        alert.informativeText = "例: 910(モジュール)、455、303 など"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+        field.stringValue = String(Int(gridSpacing))
+        alert.accessoryView = field
+        alert.addButton(withTitle: "設定")
+        alert.addButton(withTitle: "キャンセル")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let value = Double(field.stringValue.trimmingCharacters(in: .whitespaces)),
+              value >= 1, value <= 100000 else { return }
+        setGridSpacing(value)
+    }
+
     /// 補助線(補助線種・補助線色)の表示切替。
     /// 非表示中は描画・スナップ・選択のすべてから外れる(JWWビューワーと同じ考え方)
     func toggleAuxiliary() {
@@ -532,6 +570,7 @@ final class CanvasController: NSObject {
         publishLayers()
         onSelectionChanged?(selectionSummary())
         onGridChanged?(gridVisible)
+        onGridSpacingChanged?(gridSpacing)
         onAuxiliaryChanged?(document.showAuxiliary)
     }
 
@@ -752,6 +791,10 @@ extension CanvasController: DrawingToolDelegate {
 
     func toolDidProduce(_ entity: Entity) {
         commandStack.run(AddEntityCommand(entity: entity))
+    }
+
+    func toolDidProduceGroup(_ entities: [Entity], name: String) {
+        commandStack.run(AddEntitiesCommand(name: name, entities: entities))
     }
 
     func toolRequestsText(at point: Vec2, completion: @escaping (String?) -> Void) {

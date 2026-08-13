@@ -24,6 +24,7 @@ public enum EntityKind: Equatable, Codable, Sendable {
     case circle(center: Vec2, radius: Double)
     case arc(center: Vec2, radius: Double, startAngle: Double, endAngle: Double)  // rad, CCW
     case text(position: Vec2, content: String, height: Double, angle: Double)     // height=紙面mm
+    case point(position: Vec2)                                                    // 点(画面上は固定サイズで描画)
 }
 
 public struct Entity: Identifiable, Equatable, Codable, Sendable {
@@ -52,6 +53,8 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             box.union(point: Vec2(c.x + r, c.y + r))
         case .text(let p, _, _, _):
             box.union(point: p)
+        case .point(let p):
+            box.union(point: p)
         }
         return box
     }
@@ -68,6 +71,8 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
                     Vec2(c.x + r * cos(sa), c.y + r * sin(sa)),
                     Vec2(c.x + r * cos(ea), c.y + r * sin(ea))]
         case .text(let p, _, _, _):
+            return [p]
+        case .point(let p):
             return [p]
         }
     }

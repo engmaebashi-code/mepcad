@@ -103,6 +103,8 @@ public final class SnapEngine {
                 addPoint(Vec2(c.x + r * cos(ea), c.y + r * sin(ea)), .endpoint)
             case .text(let p, _, _, _):
                 addPoint(p, .endpoint)
+            case .point(let p):
+                addPoint(p, .endpoint)
             }
         }
     }

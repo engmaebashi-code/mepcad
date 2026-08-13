@@ -174,6 +174,14 @@ public struct Renderer {
         case .text(let position, let content, let height, let angle):
             drawText(content, at: position, height: height, angle: angle,
                      colorIndex: colorIndex, transform: transform, in: ctx)
+
+        case .point(let position):
+            // 点は画面上の固定サイズ(小さな塗り丸)で描く
+            let sp = transform.toScreen(position)
+            ctx.setLineDash(phase: 0, lengths: [])
+            ctx.setFillColor(theme.color(forIndex: colorIndex))
+            let r: CGFloat = 2.5
+            ctx.fillEllipse(in: CGRect(x: sp.x - r, y: sp.y - r, width: r * 2, height: r * 2))
         }
     }
 
@@ -214,6 +222,10 @@ public struct Renderer {
                 let p1 = transform.toScreen(Vec2(position.x + widthMm, position.y + height))
                 ctx.stroke(CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y),
                                   width: abs(p1.x - p0.x), height: abs(p1.y - p0.y)))
+            case .point(let position):
+                let sp = transform.toScreen(position)
+                let r: CGFloat = 4
+                ctx.strokeEllipse(in: CGRect(x: sp.x - r, y: sp.y - r, width: r * 2, height: r * 2))
             }
         }
         ctx.restoreGState()

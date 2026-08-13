@@ -1,11 +1,16 @@
 import Foundation
 import MepCore
 
-/// 作図ツールの種類(M3: 選択はプレースホルダ、M4で実装)
+/// 作図ツールの種類(M4.5: 矩形・円弧・2線・中心線・点を追加)
 public enum ToolKind: String, CaseIterable, Sendable {
     case select = "選択"
     case line = "線分"
+    case rect = "矩形"
     case circle = "円"
+    case arc = "円弧"
+    case doubleLine = "2線"
+    case centerline = "中心線"
+    case point = "点"
     case text = "文字"
 }
 
@@ -14,6 +19,9 @@ public enum PreviewShape {
     case none
     case line(Vec2, Vec2)
     case circle(Vec2, Double)
+    case rect(Vec2, Vec2)                                  // 対角2点
+    case arc(Vec2, Double, Double, Double)                 // 中心, 半径, 開始角, 終了角(CCW)
+    case doubleLine(Vec2, Vec2, Double)                    // 基準線a-b, 全幅
 }
 
 /// 角度拘束モード(常設パレットで切替。⇧押下は一時的に45°拘束)
@@ -36,6 +44,8 @@ public enum AngleConstraint: String, CaseIterable, Sendable {
 public protocol DrawingToolDelegate: AnyObject {
     /// 作図確定(呼び出し側でUndo可能なコマンドとして実行する)
     func toolDidProduce(_ entity: Entity)
+    /// 複数要素の一括確定(矩形・2線など。1回のUndoでまとめて戻る)
+    func toolDidProduceGroup(_ entities: [Entity], name: String)
     /// 文字ツール: テキスト入力UIの表示を依頼
     func toolRequestsText(at point: Vec2, completion: @escaping (String?) -> Void)
     /// 状態ヒントの変化(ステータスバー表示用)
@@ -45,17 +55,20 @@ public protocol DrawingToolDelegate: AnyObject {
 }
 
 /// 作図ツールの状態機械(UI非依存・ユニットテスト対象)。
-/// 実装構成設計書§5の Tool プロトコル相当を、M3では1クラスに集約して実装する。
 public final class DrawingToolController {
     public weak var delegate: DrawingToolDelegate?
     public var currentLayer: LayerAddress
     public private(set) var kind: ToolKind = .select
     public private(set) var numericBuffer = ""
-    /// 線分: 直前の確定点(連続作図) / 円: 中心
+    /// 第1点(線分・中心線・2線: 直前の確定点 / 円・円弧: 中心 / 矩形: 第1コーナー)
     private var anchor: Vec2?
+    /// 円弧: 始点(中心の次に指示。半径が確定する)
+    private var arcStart: Vec2?
     public private(set) var lastCursor: Vec2 = .zero
     /// 文字の既定高さ(実寸mm。1/50印刷で紙面6mm相当)
     public var textHeight: Double = 300
+    /// 2線の全幅(実寸mm)。数値入力で変更でき、次回も記憶される
+    public private(set) var doubleLineWidth: Double = 100
     /// 角度拘束モード(ツールバーの常設パレットから設定)
     public var angleConstraint: AngleConstraint = .free
 
@@ -69,16 +82,21 @@ public final class DrawingToolController {
 
     public func select(_ newKind: ToolKind) {
         kind = newKind
-        anchor = nil
+        resetPoints()
         numericBuffer = ""
         delegate?.toolKindChanged(kind)
         publishHint()
     }
 
-    /// esc/右クリック: 作図中なら現在の連続作図を終了、待機中なら選択ツールへ戻る
+    private func resetPoints() {
+        anchor = nil
+        arcStart = nil
+    }
+
+    /// esc/右クリック: 作図中なら現在の作図を終了、待機中なら選択ツールへ戻る
     public func cancel() {
-        if anchor != nil || !numericBuffer.isEmpty {
-            anchor = nil
+        if anchor != nil || arcStart != nil || !numericBuffer.isEmpty {
+            resetPoints()
             numericBuffer = ""
         } else if kind != .select {
             kind = .select
@@ -92,12 +110,27 @@ public final class DrawingToolController {
     /// カーソル移動。プレビュー形状(ワールド座標)を返す
     public func preview(cursor: Vec2, shiftDown: Bool) -> PreviewShape {
         lastCursor = cursor
-        guard let a = anchor else { return .none }
         switch kind {
-        case .line:
+        case .line, .centerline:
+            guard let a = anchor else { return .none }
             return .line(a, constrained(from: a, to: cursor, active: shiftDown))
+        case .doubleLine:
+            guard let a = anchor else { return .none }
+            return .doubleLine(a, constrained(from: a, to: cursor, active: shiftDown), doubleLineWidth)
+        case .rect:
+            guard let a = anchor else { return .none }
+            return .rect(a, cursor)
         case .circle:
-            return .circle(a, a.distance(to: cursor))
+            guard let c = anchor else { return .none }
+            return .circle(c, c.distance(to: cursor))
+        case .arc:
+            guard let c = anchor else { return .none }
+            if let s = arcStart {
+                let a1 = atan2(s.y - c.y, s.x - c.x)
+                let a2 = atan2(cursor.y - c.y, cursor.x - c.x)
+                return .arc(c, c.distance(to: s), a1, a2)
+            }
+            return .circle(c, c.distance(to: cursor))
         default:
             return .none
         }
@@ -107,14 +140,29 @@ public final class DrawingToolController {
         switch kind {
         case .select:
             break
+
         case .line:
+            clickLineLike(at: p, shiftDown: shiftDown) { a, b in self.commitLine(a, b) }
+
+        case .centerline:
+            // 中心線: 一点鎖1で作図(機器・ダクトの芯押さえ)
+            clickLineLike(at: p, shiftDown: shiftDown) { a, b in
+                self.commitLine(a, b, style: Style(lineType: 4))
+            }
+
+        case .doubleLine:
+            clickLineLike(at: p, shiftDown: shiftDown) { a, b in
+                self.commitDoubleLine(a, b)
+            }
+
+        case .rect:
             if let a = anchor {
-                let b = constrained(from: a, to: p, active: shiftDown)
-                commitLine(a, b)
-                anchor = b  // 連続作図(前の終点が次の始点)
+                commitRect(a, p)
+                anchor = nil
             } else {
                 anchor = p
             }
+
         case .circle:
             if let c = anchor {
                 let r = c.distance(to: p)
@@ -123,6 +171,22 @@ public final class DrawingToolController {
             } else {
                 anchor = p
             }
+
+        case .arc:
+            if anchor == nil {
+                anchor = p                      // 中心
+            } else if arcStart == nil {
+                if let c = anchor, c.distance(to: p) > 0.01 {
+                    arcStart = p                // 始点(半径が決まる)
+                }
+            } else if let c = anchor, let s = arcStart {
+                commitArc(center: c, start: s, endDirection: p)
+                resetPoints()
+            }
+
+        case .point:
+            delegate?.toolDidProduce(Entity(layer: currentLayer, kind: .point(position: p)))
+
         case .text:
             delegate?.toolRequestsText(at: p) { [weak self] text in
                 guard let self, let text, !text.isEmpty else { return }
@@ -136,12 +200,33 @@ public final class DrawingToolController {
         publishHint()
     }
 
+    /// 線分系(線分・中心線・2線)の共通クリック処理: 連続作図(前の終点が次の始点)
+    private func clickLineLike(at p: Vec2, shiftDown: Bool, commit: (Vec2, Vec2) -> Void) {
+        if let a = anchor {
+            let b = constrained(from: a, to: p, active: shiftDown)
+            commit(a, b)
+            anchor = b
+        } else {
+            anchor = p
+        }
+    }
+
     // MARK: - 数値入力
 
     /// キー入力。処理した場合true(未処理はビューが他用途に使う)
     @discardableResult
     public func keyInput(_ character: Character) -> Bool {
-        guard kind == .line || kind == .circle, anchor != nil else { return false }
+        let numericCapable: Bool
+        switch kind {
+        case .line, .centerline, .circle, .rect, .arc:
+            numericCapable = anchor != nil
+        case .doubleLine:
+            numericCapable = true   // 幅は始点前でも変更できる
+        default:
+            numericCapable = false
+        }
+        guard numericCapable else { return false }
+
         if character.isNumber || character == "." || character == "," || character == "-" {
             numericBuffer.append(character)
             publishHint()
@@ -170,31 +255,70 @@ public final class DrawingToolController {
 
         switch kind {
         case .line:
-            guard let a = anchor else { return }
-            if comps.count == 2, let dx = Double(comps[0]), let dy = Double(comps[1]) {
-                // 相対座標入力 "dx,dy"
-                let b = Vec2(a.x + dx, a.y + dy)
-                commitLine(a, b)
-                anchor = b
-            } else if comps.count == 1, let dist = Double(comps[0]), abs(dist) > 0.001 {
-                // 距離入力: 角度拘束を適用した後のカーソル方向へ指定距離
-                // (プレビューで見えている拘束済みの線と同じ方向に確定させる)
-                let target = constrained(from: a, to: lastCursor, active: false)
-                let dir = target - a
-                let len = dir.length
-                guard len > 1e-9 else { return }
-                let b = a + dir * (dist / len)
-                commitLine(a, b)
-                anchor = b
+            guard let a = anchor, let b = numericTarget(from: a, comps: comps) else { return }
+            commitLine(a, b)
+            anchor = b
+
+        case .centerline:
+            guard let a = anchor, let b = numericTarget(from: a, comps: comps) else { return }
+            commitLine(a, b, style: Style(lineType: 4))
+            anchor = b
+
+        case .doubleLine:
+            // 単独数値は「幅の変更」(始点前後どちらでも)。x,y=相対で次点確定
+            if comps.count == 1, let w = Double(comps[0]) {
+                if w > 0.01 { doubleLineWidth = w }
+                return
             }
+            guard let a = anchor, let b = numericTarget(from: a, comps: comps) else { return }
+            commitDoubleLine(a, b)
+            anchor = b
+
+        case .rect:
+            guard let a = anchor else { return }
+            if comps.count == 2, let w = Double(comps[0]), let h = Double(comps[1]),
+               abs(w) > 0.01, abs(h) > 0.01 {
+                commitRect(a, Vec2(a.x + w, a.y + h))
+                anchor = nil
+            } else if comps.count == 1, let w = Double(comps[0]), abs(w) > 0.01 {
+                // 単独数値は正方形
+                commitRect(a, Vec2(a.x + w, a.y + w))
+                anchor = nil
+            }
+
         case .circle:
             guard let c = anchor, comps.count == 1,
                   let r = Double(comps[0]), r > 0.001 else { return }
             commitCircle(c, r)
             anchor = nil
+
+        case .arc:
+            // 中心決定後の単独数値=半径(始点はカーソル方向に取る)
+            guard let c = anchor, arcStart == nil, comps.count == 1,
+                  let r = Double(comps[0]), r > 0.001 else { return }
+            let dir = lastCursor - c
+            let len = dir.length
+            guard len > 1e-9 else { return }
+            arcStart = c + dir * (r / len)
+
         default:
             break
         }
+    }
+
+    /// "dx,dy"=相対座標 / 単独数値=拘束方向へ距離、の共通解釈
+    private func numericTarget(from a: Vec2, comps: [String]) -> Vec2? {
+        if comps.count == 2, let dx = Double(comps[0]), let dy = Double(comps[1]) {
+            return Vec2(a.x + dx, a.y + dy)
+        }
+        if comps.count == 1, let dist = Double(comps[0]), abs(dist) > 0.001 {
+            let target = constrained(from: a, to: lastCursor, active: false)
+            let dir = target - a
+            let len = dir.length
+            guard len > 1e-9 else { return nil }
+            return a + dir * (dist / len)
+        }
+        return nil
     }
 
     // MARK: - 内部
@@ -217,13 +341,47 @@ public final class DrawingToolController {
         return Vec2(a.x + cos(snapped) * len, a.y + sin(snapped) * len)
     }
 
-    private func commitLine(_ a: Vec2, _ b: Vec2) {
+    private func commitLine(_ a: Vec2, _ b: Vec2, style: Style = .byLayer) {
         guard a.distance(to: b) > 0.01 else { return }
-        delegate?.toolDidProduce(Entity(layer: currentLayer, kind: .line(a: a, b: b)))
+        delegate?.toolDidProduce(Entity(layer: currentLayer, style: style, kind: .line(a: a, b: b)))
     }
 
     private func commitCircle(_ c: Vec2, _ r: Double) {
         delegate?.toolDidProduce(Entity(layer: currentLayer, kind: .circle(center: c, radius: r)))
+    }
+
+    private func commitRect(_ p1: Vec2, _ p2: Vec2) {
+        guard abs(p2.x - p1.x) > 0.01, abs(p2.y - p1.y) > 0.01 else { return }
+        let corners = [p1, Vec2(p2.x, p1.y), p2, Vec2(p1.x, p2.y)]
+        let lines = (0..<4).map { i in
+            Entity(layer: currentLayer,
+                   kind: .line(a: corners[i], b: corners[(i + 1) % 4]))
+        }
+        delegate?.toolDidProduceGroup(lines, name: "矩形")
+    }
+
+    private func commitDoubleLine(_ a: Vec2, _ b: Vec2) {
+        guard a.distance(to: b) > 0.01, doubleLineWidth > 0.01 else { return }
+        let d = b - a
+        let len = d.length
+        // 左向き法線 × 半幅(振分は半々)
+        let n = Vec2(-d.y / len, d.x / len) * (doubleLineWidth / 2)
+        let lines = [
+            Entity(layer: currentLayer, kind: .line(a: a + n, b: b + n)),
+            Entity(layer: currentLayer, kind: .line(a: a - n, b: b - n)),
+        ]
+        delegate?.toolDidProduceGroup(lines, name: "2線")
+    }
+
+    private func commitArc(center: Vec2, start: Vec2, endDirection p: Vec2) {
+        let r = center.distance(to: start)
+        guard r > 0.01 else { return }
+        let a1 = atan2(start.y - center.y, start.x - center.x)
+        let a2 = atan2(p.y - center.y, p.x - center.x)
+        guard abs(a1 - a2) > 1e-9 else { return }
+        delegate?.toolDidProduce(Entity(layer: currentLayer,
+                                        kind: .arc(center: center, radius: r,
+                                                   startAngle: a1, endAngle: a2)))
     }
 
     private func publishHint() {
@@ -232,18 +390,37 @@ public final class DrawingToolController {
 
     public var hint: String {
         let num = numericBuffer.isEmpty ? "" : "  入力: \(numericBuffer)"
+        let constraint = angleConstraint == .free ? "" : " [\(angleConstraint.rawValue)拘束]"
         switch kind {
         case .select:
-            return "ツールバーで作図ツールを選択(選択・編集はM4)"
+            return "クリック=選択 / 左→右ドラッグ=窓選択 / 右→左=交差選択 / 右クリック=メニュー"
         case .line:
-            let constraint = angleConstraint == .free ? "" : " [\(angleConstraint.rawValue)拘束]"
             return anchor == nil
                 ? "線分: 始点を指示" + constraint
                 : "線分: 次点を指示 — 数値=距離 / x,y=相対 / ⏎確定 / esc終了" + constraint + num
+        case .centerline:
+            return anchor == nil
+                ? "中心線: 始点を指示(一点鎖線で作図)" + constraint
+                : "中心線: 次点を指示 — 数値=距離 / x,y=相対 / esc終了" + constraint + num
+        case .doubleLine:
+            let w = String(format: "%.0f", doubleLineWidth)
+            return anchor == nil
+                ? "2線(幅\(w)): 始点を指示 — 数値⏎=幅変更" + constraint + num
+                : "2線(幅\(w)): 次点を指示 — 数値⏎=幅変更 / x,y=相対 / esc終了" + constraint + num
+        case .rect:
+            return anchor == nil
+                ? "矩形: 第1コーナーを指示"
+                : "矩形: 対角コーナーを指示 — 幅,高さ⏎でも可(単独数値=正方形)" + num
         case .circle:
             return anchor == nil
                 ? "円: 中心を指示"
                 : "円: 半径を指示(数値入力→⏎でも可)" + num
+        case .arc:
+            if anchor == nil { return "円弧: 中心を指示" }
+            if arcStart == nil { return "円弧: 始点を指示(半径が決まる。数値⏎=半径)" + num }
+            return "円弧: 終点方向を指示(始点から反時計回り)"
+        case .point:
+            return "点: 配置位置をクリック"
         case .text:
             return "文字: 配置位置をクリック"
         }

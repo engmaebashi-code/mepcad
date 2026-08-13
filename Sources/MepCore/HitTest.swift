@@ -103,6 +103,9 @@ extension Entity {
             let dx = max(box.minX - p.x, 0, p.x - box.maxX)
             let dy = max(box.minY - p.y, 0, p.y - box.maxY)
             return (dx * dx + dy * dy).squareRoot()
+
+        case .point(let pos):
+            return pos.distance(to: p)
         }
     }
 
@@ -119,6 +122,8 @@ extension Entity {
         case .text:
             guard let box = approximateTextBounds else { return false }
             return rect.contains(Vec2(box.minX, box.minY)) && rect.contains(Vec2(box.maxX, box.maxY))
+        case .point(let pos):
+            return rect.contains(pos)
         }
     }
 
@@ -150,6 +155,8 @@ extension Entity {
             guard let box = approximateTextBounds else { return false }
             return !(box.maxX < rect.minX || box.minX > rect.maxX ||
                      box.maxY < rect.minY || box.minY > rect.maxY)
+        case .point(let pos):
+            return rect.contains(pos)
         }
     }
 
@@ -165,6 +172,8 @@ extension Entity {
             copy.kind = .arc(center: c + delta, radius: r, startAngle: sa, endAngle: ea)
         case .text(let p, let content, let h, let angle):
             copy.kind = .text(position: p + delta, content: content, height: h, angle: angle)
+        case .point(let p):
+            copy.kind = .point(position: p + delta)
         }
         return copy
     }

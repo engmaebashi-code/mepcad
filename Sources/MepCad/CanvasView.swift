@@ -229,6 +229,41 @@ final class CrosshairOverlayView: NSView {
             ctx.strokeEllipse(in: CGRect(x: sc.x - sr, y: sc.y - sr, width: sr * 2, height: sr * 2))
             drawOverlayLabel(String(format: "R%.0f", r),
                              at: CGPoint(x: sc.x + 10, y: sc.y - 10), in: ctx)
+
+        case .rect(let p1, let p2):
+            let s1 = controller.transform.toScreen(p1)
+            let s2 = controller.transform.toScreen(p2)
+            ctx.stroke(CGRect(x: min(s1.x, s2.x), y: min(s1.y, s2.y),
+                              width: abs(s2.x - s1.x), height: abs(s2.y - s1.y)))
+            drawOverlayLabel(String(format: "%.0f × %.0f", abs(p2.x - p1.x), abs(p2.y - p1.y)),
+                             at: CGPoint(x: (s1.x + s2.x) / 2 + 8, y: (s1.y + s2.y) / 2 - 8), in: ctx)
+
+        case .arc(let c, let r, let a1, let a2):
+            let sc = controller.transform.toScreen(c)
+            let sr = r * controller.transform.scale
+            // スクリーンはY反転しているため角度符号を反転(RendererのCCW描画と同じ流儀)
+            ctx.addArc(center: CGPoint(x: sc.x, y: sc.y), radius: sr,
+                       startAngle: -a1, endAngle: -a2, clockwise: true)
+            ctx.strokePath()
+            drawOverlayLabel(String(format: "R%.0f", r),
+                             at: CGPoint(x: sc.x + 10, y: sc.y - 10), in: ctx)
+
+        case .doubleLine(let a, let b, let width):
+            let d = Vec2(b.x - a.x, b.y - a.y)
+            let len = d.length
+            if len > 1e-9 {
+                let n = Vec2(-d.y / len, d.x / len) * (width / 2)
+                for offset in [n, Vec2(-n.x, -n.y)] {
+                    let sa = controller.transform.toScreen(a + offset)
+                    let sb = controller.transform.toScreen(b + offset)
+                    ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                    ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                }
+                ctx.strokePath()
+                let sm = controller.transform.toScreen(Vec2((a.x + b.x) / 2, (a.y + b.y) / 2))
+                drawOverlayLabel(String(format: "L%.0f  幅%.0f", len, width),
+                                 at: CGPoint(x: sm.x + 8, y: sm.y - 8), in: ctx)
+            }
         }
         ctx.setLineDash(phase: 0, lengths: [])
 

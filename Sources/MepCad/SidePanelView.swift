@@ -237,7 +237,9 @@ struct LayerRowView: View {
             } label: {
                 Image(systemName: layer.isEditable ? "lock.open" : "lock.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(layer.isEditable ? Color.secondary : Color.orange)
+                    // 三項演算子の両辺は同じShapeStyle型にする必要がある
+                    // (.tertiary=Hierarchical / .orange=Color の混在は型エラー)
+                    .foregroundStyle(layer.isEditable ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.orange))
                     .frame(width: 26, height: 24)
                     .contentShape(Rectangle())
             }
@@ -462,6 +464,7 @@ struct PropertyPanelView: View {
         if sel.circleCount > 0 { parts.append("円\(sel.circleCount)") }
         if sel.arcCount > 0 { parts.append("弧\(sel.arcCount)") }
         if sel.textCount > 0 { parts.append("字\(sel.textCount)") }
+        if sel.pointCount > 0 { parts.append("点\(sel.pointCount)") }
         return "\(sel.count)個選択中(\(parts.joined(separator: " ")))"
     }
 

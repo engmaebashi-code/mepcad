@@ -7,11 +7,16 @@ final class DrawingToolTests: XCTestCase {
 
     final class Capture: DrawingToolDelegate {
         var produced: [Entity] = []
+        var groups: [(entities: [Entity], name: String)] = []
         var hints: [String] = []
         var kinds: [ToolKind] = []
         var textToReturn: String? = "テスト"
 
         func toolDidProduce(_ entity: Entity) { produced.append(entity) }
+        func toolDidProduceGroup(_ entities: [Entity], name: String) {
+            groups.append((entities, name))
+            produced.append(contentsOf: entities)
+        }
         func toolRequestsText(at point: Vec2, completion: @escaping (String?) -> Void) {
             completion(textToReturn)
         }
@@ -145,6 +150,103 @@ final class DrawingToolTests: XCTestCase {
         } else {
             XCTFail("文字でない")
         }
+    }
+
+    // MARK: - M4.5: 矩形・円弧・点・2線・中心線
+
+    func testRectProducesFourLinesAsGroup() {
+        let (tool, cap) = makeTool()
+        tool.select(.rect)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 500), shiftDown: false)
+        XCTAssertEqual(cap.groups.count, 1)
+        XCTAssertEqual(cap.groups[0].name, "矩形")
+        XCTAssertEqual(cap.groups[0].entities.count, 4)
+        // 4隅が正しい(周長で確認)
+        let total = cap.groups[0].entities.reduce(0.0) { sum, e in
+            if case .line(let a, let b) = e.kind { return sum + a.distance(to: b) }
+            return sum
+        }
+        XCTAssertEqual(total, 3000, accuracy: 1e-9)
+    }
+
+    func testRectNumericWH() {
+        let (tool, cap) = makeTool()
+        tool.select(.rect)
+        tool.click(at: Vec2(100, 100), shiftDown: false)
+        for ch in "600,300" { _ = tool.keyInput(ch) }
+        _ = tool.keyInput("\r")
+        XCTAssertEqual(cap.groups.count, 1)
+        var maxX = -Double.infinity, maxY = -Double.infinity
+        for e in cap.groups[0].entities {
+            if case .line(let a, let b) = e.kind {
+                maxX = max(maxX, a.x, b.x); maxY = max(maxY, a.y, b.y)
+            }
+        }
+        XCTAssertEqual(maxX, 700, accuracy: 1e-9)
+        XCTAssertEqual(maxY, 400, accuracy: 1e-9)
+    }
+
+    func testArcCenterStartEnd() {
+        let (tool, cap) = makeTool()
+        tool.select(.arc)
+        tool.click(at: Vec2(0, 0), shiftDown: false)      // 中心
+        tool.click(at: Vec2(100, 0), shiftDown: false)    // 始点(半径100, 0°)
+        tool.click(at: Vec2(0, 50), shiftDown: false)     // 終点方向(90°)
+        XCTAssertEqual(cap.produced.count, 1)
+        if case .arc(let c, let r, let a1, let a2) = cap.produced[0].kind {
+            XCTAssertEqual(c, Vec2(0, 0))
+            XCTAssertEqual(r, 100, accuracy: 1e-9)
+            XCTAssertEqual(a1, 0, accuracy: 1e-9)
+            XCTAssertEqual(a2, .pi / 2, accuracy: 1e-9)
+        } else {
+            XCTFail("円弧でない")
+        }
+    }
+
+    func testPointPlacement() {
+        let (tool, cap) = makeTool()
+        tool.select(.point)
+        tool.click(at: Vec2(300, 400), shiftDown: false)
+        XCTAssertEqual(cap.produced.count, 1)
+        if case .point(let p) = cap.produced[0].kind {
+            XCTAssertEqual(p, Vec2(300, 400))
+        } else {
+            XCTFail("点でない")
+        }
+    }
+
+    func testDoubleLineWidthAndParallel() {
+        let (tool, cap) = makeTool()
+        tool.select(.doubleLine)
+        // 幅を150に変更(始点前の数値入力)
+        for ch in "150" { XCTAssertTrue(tool.keyInput(ch)) }
+        _ = tool.keyInput("\r")
+        XCTAssertEqual(tool.doubleLineWidth, 150, accuracy: 1e-9)
+
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 0), shiftDown: false)
+        XCTAssertEqual(cap.groups.count, 1)
+        XCTAssertEqual(cap.groups[0].name, "2線")
+        let lines = cap.groups[0].entities
+        XCTAssertEqual(lines.count, 2)
+        guard case .line(let a1, _) = lines[0].kind,
+              case .line(let a2, _) = lines[1].kind else { return XCTFail() }
+        // 基準線の両側に半幅ずつ(y = +75 / -75)
+        XCTAssertEqual(abs(a1.y - a2.y), 150, accuracy: 1e-9)
+        XCTAssertEqual(a1.y + a2.y, 0, accuracy: 1e-9)
+        // 連続作図: 次の始点は基準線の終点
+        tool.click(at: Vec2(1000, 800), shiftDown: false)
+        XCTAssertEqual(cap.groups.count, 2)
+    }
+
+    func testCenterlineUsesChainLineType() {
+        let (tool, cap) = makeTool()
+        tool.select(.centerline)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(2000, 0), shiftDown: false)
+        XCTAssertEqual(cap.produced.count, 1)
+        XCTAssertEqual(cap.produced[0].style.lineType, 4)  // 一点鎖1
     }
 
     func testEscEndsChainThenReturnsToSelect() {

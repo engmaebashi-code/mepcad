@@ -32,6 +32,7 @@ final class CanvasUIState: ObservableObject {
     @Published var panelPinned = false
     @Published var paletteColors: [Color] = []
     @Published var gridOn = true
+    @Published var gridSpacing: Double = 250
     @Published var auxOn = true
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
@@ -100,7 +101,12 @@ private func toolIcon(_ kind: ToolKind) -> String {
     switch kind {
     case .select: return "cursorarrow"
     case .line: return "line.diagonal"
+    case .rect: return "rectangle"
     case .circle: return "circle"
+    case .arc: return "point.topleft.down.curvedto.point.bottomright.up"
+    case .doubleLine: return "equal"
+    case .centerline: return "align.horizontal.center"
+    case .point: return "smallcircle.filled.circle"
     case .text: return "textformat"
     }
 }
@@ -150,15 +156,29 @@ struct ContentView: View {
                 Text(uiState.coords)
                     .monospacedDigit()
                     .frame(width: 190, alignment: .leading)
-                // クリックでグリッド表示切替(状態はコントローラから同期)
-                Button {
-                    controller.toggleGrid()
+                // グリッド: 表示切替+間隔選択(50刻みプリセット/自由入力)
+                Menu {
+                    Button(uiState.gridOn ? "グリッドを隠す" : "グリッドを表示") {
+                        controller.toggleGrid()
+                    }
+                    Divider()
+                    ForEach(Array(stride(from: 50, through: 500, by: 50)), id: \.self) { v in
+                        Button((Int(uiState.gridSpacing) == v ? "✓ " : "   ") + "\(v) mm") {
+                            controller.setGridSpacing(Double(v))
+                        }
+                    }
+                    Divider()
+                    Button("カスタム…(910など)") {
+                        controller.promptGridSpacing()
+                    }
                 } label: {
-                    Text(uiState.gridOn ? "グリッド 250" : "グリッド OFF")
+                    Text(uiState.gridOn ? "グリッド \(Int(uiState.gridSpacing))" : "グリッド OFF")
                         .foregroundStyle(uiState.gridOn ? .primary : .tertiary)
                 }
-                .buttonStyle(.plain)
-                .help("クリックでグリッド表示/非表示")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("グリッドの表示/非表示と間隔(スナップも連動)")
                 // 補助線(補助線種・補助線色)の表示切替 — JWWビューワーと同じ考え方
                 Button {
                     controller.toggleAuxiliary()
@@ -314,6 +334,9 @@ struct ContentView: View {
             }
             controller.onGridChanged = { visible in
                 uiState.gridOn = visible
+            }
+            controller.onGridSpacingChanged = { spacing in
+                uiState.gridSpacing = spacing
             }
             controller.onAuxiliaryChanged = { visible in
                 uiState.auxOn = visible
