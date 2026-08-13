@@ -25,6 +25,10 @@ public enum EntityKind: Equatable, Codable, Sendable {
     case arc(center: Vec2, radius: Double, startAngle: Double, endAngle: Double)  // rad, CCW
     case text(position: Vec2, content: String, height: Double, angle: Double)     // height=紙面mm
     case point(position: Vec2)                                                    // 点(画面上は固定サイズで描画)
+    /// ブロック配置(定義への参照)。cachedBoundsは配置時に計算し変換のたびに更新する
+    /// (定義を引かずにbounds/ヒットテストできるようにするため)
+    case blockRef(definitionID: UUID, insert: Vec2, rotation: Double, scale: Double,
+                  mirrored: Bool, cachedBounds: BBox)
 }
 
 public struct Entity: Identifiable, Equatable, Codable, Sendable {
@@ -55,6 +59,12 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             box.union(point: p)
         case .point(let p):
             box.union(point: p)
+        case .blockRef(_, let insert, _, _, _, let cached):
+            if cached.isEmpty {
+                box.union(point: insert)
+            } else {
+                box.union(cached)
+            }
         }
         return box
     }
@@ -74,6 +84,9 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             return [p]
         case .point(let p):
             return [p]
+        case .blockRef(_, let insert, _, _, _, _):
+            // 挿入点のみ(中身の端点等はSnapEngineが定義を実体化して索引する)
+            return [insert]
         }
     }
 }

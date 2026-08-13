@@ -10,6 +10,8 @@ public final class Document {
     public private(set) var current: LayerAddress
     /// 補助線(補助線種・補助線色)の表示。falseで描画・スナップ・選択から外れる
     public private(set) var showAuxiliary = true
+    /// ブロック定義(配置はEntityKind.blockRefが参照する)
+    public private(set) var blockDefinitions: [BlockDefinition] = []
 
     /// 変更通知(再描画トリガ用)。UIが差し替える。
     public var onChange: (() -> Void)?
@@ -96,6 +98,20 @@ public final class Document {
         current = address
         onChange?()
         return true
+    }
+
+    // MARK: - ブロック定義の管理
+
+    public func addBlockDefinition(_ definition: BlockDefinition) {
+        // 同idの再登録(Redo)は置き換え
+        blockDefinitions.removeAll { $0.id == definition.id }
+        blockDefinitions.append(definition)
+        onChange?()
+    }
+
+    public func removeBlockDefinition(id: UUID) {
+        blockDefinitions.removeAll { $0.id == id }
+        onChange?()
     }
 
     // MARK: - エンティティ変更(CommandStack経由で呼ばれる想定。直接呼んでも動く)

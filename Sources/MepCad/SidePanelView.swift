@@ -382,6 +382,14 @@ struct PropertyPanelView: View {
                     }
                 }
 
+                if let blockName = sel.commonBlockName {
+                    propertyRow("ブロック") {
+                        Text(sel.blockCount > 1 ? "\(blockName) ×\(sel.blockCount)" : blockName)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                    }
+                }
+
                 propertyRow("レイヤ") {
                     Text(layerLabel(sel))
                         .font(.system(size: 11))
@@ -465,6 +473,7 @@ struct PropertyPanelView: View {
         if sel.arcCount > 0 { parts.append("弧\(sel.arcCount)") }
         if sel.textCount > 0 { parts.append("字\(sel.textCount)") }
         if sel.pointCount > 0 { parts.append("点\(sel.pointCount)") }
+        if sel.blockCount > 0 { parts.append("ブロック\(sel.blockCount)") }
         return "\(sel.count)個選択中(\(parts.joined(separator: " ")))"
     }
 

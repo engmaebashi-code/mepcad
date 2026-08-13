@@ -106,6 +106,14 @@ extension Entity {
 
         case .point(let pos):
             return pos.distance(to: p)
+
+        case .blockRef(_, let insert, _, _, _, let cached):
+            // 粗い判定: バウンディングボックス内=ヒット(シンボルは塊で掴めれば良い)
+            if cached.isEmpty { return insert.distance(to: p) }
+            if cached.contains(p) { return 0 }
+            let dx = max(cached.minX - p.x, 0, p.x - cached.maxX)
+            let dy = max(cached.minY - p.y, 0, p.y - cached.maxY)
+            return (dx * dx + dy * dy).squareRoot()
         }
     }
 
@@ -124,6 +132,10 @@ extension Entity {
             return rect.contains(Vec2(box.minX, box.minY)) && rect.contains(Vec2(box.maxX, box.maxY))
         case .point(let pos):
             return rect.contains(pos)
+        case .blockRef(_, let insert, _, _, _, let cached):
+            if cached.isEmpty { return rect.contains(insert) }
+            return rect.contains(Vec2(cached.minX, cached.minY))
+                && rect.contains(Vec2(cached.maxX, cached.maxY))
         }
     }
 
@@ -157,6 +169,10 @@ extension Entity {
                      box.maxY < rect.minY || box.minY > rect.maxY)
         case .point(let pos):
             return rect.contains(pos)
+        case .blockRef(_, let insert, _, _, _, let cached):
+            if cached.isEmpty { return rect.contains(insert) }
+            return !(cached.maxX < rect.minX || cached.minX > rect.maxX ||
+                     cached.maxY < rect.minY || cached.minY > rect.maxY)
         }
     }
 
@@ -174,6 +190,14 @@ extension Entity {
             copy.kind = .text(position: p + delta, content: content, height: h, angle: angle)
         case .point(let p):
             copy.kind = .point(position: p + delta)
+        case .blockRef(let defID, let insert, let rot, let scale, let mir, let cached):
+            var box = cached
+            if !box.isEmpty {
+                box = BBox(minX: box.minX + delta.x, minY: box.minY + delta.y,
+                           maxX: box.maxX + delta.x, maxY: box.maxY + delta.y)
+            }
+            copy.kind = .blockRef(definitionID: defID, insert: insert + delta,
+                                  rotation: rot, scale: scale, mirrored: mir, cachedBounds: box)
         }
         return copy
     }
@@ -199,8 +223,23 @@ extension Entity {
             copy.kind = .text(position: rot(p), content: content, height: h, angle: textAngle + angle)
         case .point(let p):
             copy.kind = .point(position: rot(p))
+        case .blockRef(let defID, let insert, let refRot, let scale, let mir, let cached):
+            copy.kind = .blockRef(definitionID: defID, insert: rot(insert),
+                                  rotation: refRot + angle, scale: scale, mirrored: mir,
+                                  cachedBounds: Self.transformedBounds(cached, rot))
         }
         return copy
+    }
+
+    /// バウンディングボックスの4隅を写像してAABBを取り直す(blockRefの境界キャッシュ更新用)
+    static func transformedBounds(_ box: BBox, _ map: (Vec2) -> Vec2) -> BBox {
+        guard !box.isEmpty else { return box }
+        var out = BBox.empty
+        out.union(point: map(Vec2(box.minX, box.minY)))
+        out.union(point: map(Vec2(box.maxX, box.minY)))
+        out.union(point: map(Vec2(box.maxX, box.maxY)))
+        out.union(point: map(Vec2(box.minX, box.maxY)))
+        return out
     }
 
     /// 基準線(a-b)に対して鏡映したコピーを返す(idは維持)。
@@ -243,6 +282,39 @@ extension Entity {
                               height: h, angle: reflectAngle(angle))
         case .point(let p):
             copy.kind = .point(position: reflect(p))
+        case .blockRef(let defID, let insert, let rot, let scale, let mir, let cached):
+            // 合成則(検証済): 反転後は 回転' = 2φ - 回転 - π、ローカル反転フラグはトグル
+            // (ローカル反転=縦軸鏡映 Refl(π/2) を基準にした場合の閉形式)
+            copy.kind = .blockRef(definitionID: defID, insert: reflect(insert),
+                                  rotation: 2 * axisAngle - rot - .pi,
+                                  scale: scale, mirrored: !mir,
+                                  cachedBounds: Self.transformedBounds(cached, reflect))
+        }
+        return copy
+    }
+
+    /// 等倍率で拡大縮小したコピーを返す(idは維持。ブロック実体化・将来の倍率複写用)
+    public func scaled(by factor: Double, around center: Vec2) -> Entity {
+        let f = abs(factor) < 1e-12 ? 1 : factor
+        func sc(_ p: Vec2) -> Vec2 {
+            Vec2(center.x + (p.x - center.x) * f, center.y + (p.y - center.y) * f)
+        }
+        var copy = self
+        switch kind {
+        case .line(let a, let b):
+            copy.kind = .line(a: sc(a), b: sc(b))
+        case .circle(let c, let r):
+            copy.kind = .circle(center: sc(c), radius: r * abs(f))
+        case .arc(let c, let r, let sa, let ea):
+            copy.kind = .arc(center: sc(c), radius: r * abs(f), startAngle: sa, endAngle: ea)
+        case .text(let p, let content, let h, let angle):
+            copy.kind = .text(position: sc(p), content: content, height: h * abs(f), angle: angle)
+        case .point(let p):
+            copy.kind = .point(position: sc(p))
+        case .blockRef(let defID, let insert, let rot, let scale, let mir, let cached):
+            copy.kind = .blockRef(definitionID: defID, insert: sc(insert),
+                                  rotation: rot, scale: scale * abs(f), mirrored: mir,
+                                  cachedBounds: Self.transformedBounds(cached, sc))
         }
         return copy
     }

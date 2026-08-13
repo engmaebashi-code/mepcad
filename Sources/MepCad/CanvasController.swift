@@ -14,6 +14,9 @@ struct SelectionSummary: Equatable {
     var arcCount: Int
     var textCount: Int
     var pointCount: Int
+    var blockCount: Int
+    /// 選択中のブロックが全て同じ定義ならその名前
+    var commonBlockName: String?
     /// 全選択で共通ならその値(内側nil=byLayer)、混在なら外側nil
     var commonColorIndex: Int??
     var commonLineType: Int??
@@ -266,7 +269,8 @@ final class CanvasController: NSObject {
 
     private func selectionSummary() -> SelectionSummary? {
         guard !selectedEntities.isEmpty else { return nil }
-        var lines = 0, circles = 0, arcs = 0, texts = 0, points = 0
+        var lines = 0, circles = 0, arcs = 0, texts = 0, points = 0, blocks = 0
+        var blockDefIDs = Set<UUID>()
         for e in selectedEntities {
             switch e.kind {
             case .line: lines += 1
@@ -274,7 +278,14 @@ final class CanvasController: NSObject {
             case .arc: arcs += 1
             case .text: texts += 1
             case .point: points += 1
+            case .blockRef(let defID, _, _, _, _, _):
+                blocks += 1
+                blockDefIDs.insert(defID)
             }
+        }
+        var blockName: String?
+        if blocks > 0, blockDefIDs.count == 1, let defID = blockDefIDs.first {
+            blockName = document.blockDefinition(id: defID)?.name
         }
         func common<T: Equatable>(_ values: [T]) -> T? {
             guard let first = values.first else { return nil }
@@ -283,7 +294,7 @@ final class CanvasController: NSObject {
         return SelectionSummary(
             count: selectedEntities.count,
             lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
-            pointCount: points,
+            pointCount: points, blockCount: blocks, commonBlockName: blockName,
             commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
             commonLineType: common(selectedEntities.map(\.style.lineType)),
             commonLineWeight: common(selectedEntities.map(\.style.lineWeight)),
@@ -468,6 +479,12 @@ final class CanvasController: NSObject {
             menu.addItem(.separator())
             menu.addItem(menuItem("削除", #selector(menuDelete)))
             menu.addItem(.separator())
+            // ブロック
+            menu.addItem(menuItem("ブロック化…", #selector(menuBlockify)))
+            if selectedEntities.contains(where: { if case .blockRef = $0.kind { return true }; return false }) {
+                menu.addItem(menuItem("ブロック解除", #selector(menuExplodeBlocks)))
+            }
+            menu.addItem(.separator())
             menu.addItem(menuItem("選択解除", #selector(menuDeselect)))
         } else {
             menu.addItem(menuItem("すべて選択", #selector(menuSelectAll)))
@@ -525,6 +542,8 @@ final class CanvasController: NSObject {
     @objc private func menuRotateCopy() { beginEditOperation(.rotateCopy) }
     @objc private func menuMirror() { beginEditOperation(.mirror) }
     @objc private func menuMirrorCopy() { beginEditOperation(.mirrorCopy) }
+    @objc private func menuBlockify() { startBlockify() }
+    @objc private func menuExplodeBlocks() { explodeSelectedBlocks() }
     @objc private func menuDelete() { deleteSelection() }
     @objc private func menuDeselect() { clearSelection() }
     @objc private func menuSelectAll() { selectAll() }
@@ -537,6 +556,111 @@ final class CanvasController: NSObject {
     }
     @objc private func menuCopyToLayer(_ sender: NSMenuItem) {
         copySelectionToLayer(LayerAddress(sender.tag / 16, sender.tag % 16))
+    }
+
+    // MARK: - ブロック化・ブロック解除(M4.8)
+
+    /// ブロック化: 名前入力→基準点指示待ちに入る
+    private(set) var pendingBlockifyName: String?
+
+    func startBlockify() {
+        guard !selection.isEmpty else { return }
+        cancelEditOperation()
+        let alert = NSAlert()
+        alert.messageText = "ブロック化"
+        alert.informativeText = "選択中の\(selection.count)個をブロックにします。名前を入力してください。"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "例: FCU-1 / 大便器 / 仕切弁50A"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "次へ(基準点を指示)")
+        alert.addButton(withTitle: "キャンセル")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        pendingBlockifyName = name.isEmpty ? "ブロック" : name
+        onInfo?("ブロック化: 基準点(挿入点・接続点)をクリック — スナップ有効 / escで中止")
+    }
+
+    /// 基準点クリック(CanvasViewから。スナップが効いていればスナップ点)
+    func blockifyBasePointClick() {
+        guard pendingBlockifyName != nil, let cursor = cursorScreen else { return }
+        let effective = snappedScreen ?? cursor
+        performBlockify(base: transform.toWorld(effective))
+    }
+
+    private func performBlockify(base: Vec2) {
+        guard let name = pendingBlockifyName, !selectedEntities.isEmpty else {
+            pendingBlockifyName = nil
+            return
+        }
+        pendingBlockifyName = nil
+
+        // 入れ子ブロックは展開して取り込む(定義の中にblockRefを入れない)
+        let defs = document.blockDefinitionsByID
+        var members: [Entity] = []
+        for e in selectedEntities {
+            if case .blockRef(let defID, let insert, let rot, let scale, let mir, _) = e.kind,
+               let d = defs[defID] {
+                members.append(contentsOf: d.instantiate(insert: insert, rotation: rot,
+                                                         scale: scale, mirrored: mir,
+                                                         layer: e.layer, freshIDs: true))
+            } else {
+                members.append(e)
+            }
+        }
+
+        // 基準点を原点とするローカル座標へ(定義エンティティは新idにする)
+        let localEntities = members.map { member -> Entity in
+            let moved = member.translated(by: Vec2(-base.x, -base.y))
+            return Entity(layer: moved.layer, style: moved.style, kind: moved.kind)
+        }
+        let definition = BlockDefinition(name: name, entities: localEntities)
+
+        var worldBounds = BBox.empty
+        for m in members { worldBounds.union(m.bounds) }
+
+        let summary = selectionSummary()
+        let refLayer = summary?.commonLayer ?? document.current
+        let reference = Entity(layer: refLayer,
+                               kind: .blockRef(definitionID: definition.id, insert: base,
+                                               rotation: 0, scale: 1, mirrored: false,
+                                               cachedBounds: worldBounds))
+
+        let memberIDs = selection
+        selection = []
+        commandStack.run(BlockifyCommand(definition: definition,
+                                         memberIDs: memberIDs,
+                                         reference: reference))
+        selection = [reference.id]
+        selectionDidChange()
+        onInfo?("ブロック「\(name)」を作成しました(以後は1クリックで塊として選択できます。⌘Zで取り消し)")
+    }
+
+    func cancelBlockify() {
+        guard pendingBlockifyName != nil else { return }
+        pendingBlockifyName = nil
+        publishSelectionHint()
+    }
+
+    /// 選択中のブロック配置を基本図形へ分解する(定義は残す)
+    func explodeSelectedBlocks() {
+        let defs = document.blockDefinitionsByID
+        var commands: [Command] = []
+        var newSelection = Set<EntityID>()
+        for e in selectedEntities {
+            guard case .blockRef(let defID, let insert, let rot, let scale, let mir, _) = e.kind,
+                  let d = defs[defID] else { continue }
+            let expanded = d.instantiate(insert: insert, rotation: rot, scale: scale,
+                                         mirrored: mir, layer: e.layer, freshIDs: true)
+            commands.append(ExplodeBlockCommand(reference: e, expanded: expanded))
+            newSelection.formUnion(expanded.map(\.id))
+        }
+        guard !commands.isEmpty else { return }
+        selection = []
+        commandStack.run(CommandGroup(name: "ブロック解除", commands: commands))
+        selection = newSelection
+        selectionDidChange()
+        onInfo?("\(commands.count)個のブロックを分解しました(⌘Zで取り消し)")
     }
 
     // MARK: - レイヤ操作(レイヤパネルから)
@@ -644,6 +768,10 @@ final class CanvasController: NSObject {
     }
 
     func toolCancel() {
+        if pendingBlockifyName != nil {
+            cancelBlockify()
+            return
+        }
         if editOp.isActive {
             cancelEditOperation()
             return

@@ -85,6 +85,7 @@ final class CanvasContentView: NSView {
         let theme = controller.theme
         let gridSpacing = controller.effectiveGridSpacing
         let showAuxiliary = controller.document.showAuxiliary
+        let blockDefinitions = controller.document.blockDefinitions
         let size = bounds.size
         let scaleFactor = window?.backingScaleFactor ?? 2
 
@@ -106,7 +107,8 @@ final class CanvasContentView: NSView {
             let renderer = Renderer(theme: theme)
             renderer.draw(entities: entities, groups: groups,
                           transform: transform, viewSize: size,
-                          gridSpacing: gridSpacing, showAuxiliary: showAuxiliary, in: bctx)
+                          gridSpacing: gridSpacing, showAuxiliary: showAuxiliary,
+                          blockDefinitions: blockDefinitions, in: bctx)
             let image = bctx.makeImage()
 
             DispatchQueue.main.async {
@@ -283,7 +285,8 @@ final class CrosshairOverlayView: NSView {
         let entities = controller.selectedEntities
         if entities.count <= outlineDrawLimit {
             renderer.drawOutlines(entities, transform: controller.transform,
-                                  color: highlight, lineWidth: 2.5, in: ctx)
+                                  color: highlight, lineWidth: 2.5,
+                                  blockDefinitions: controller.document.blockDefinitions, in: ctx)
         } else {
             // 大量選択はバウンディングボックスで示す
             var box = BBox.empty
@@ -309,7 +312,8 @@ final class CrosshairOverlayView: NSView {
         if entities.count <= outlineDrawLimit {
             let moved = entities.map { $0.applying(ghost) }
             renderer.drawOutlines(moved, transform: controller.transform,
-                                  color: ghostColor, lineWidth: 1.5, in: ctx)
+                                  color: ghostColor, lineWidth: 1.5,
+                                  blockDefinitions: controller.document.blockDefinitions, in: ctx)
         } else if case .translate(let delta) = ghost {
             // 大量選択の移動はバウンディングボックスで示す(回転は省略)
             var box = BBox.empty
@@ -590,6 +594,11 @@ final class CanvasContainerView: NSView {
         if controller.tools.isDrawingToolActive {
             // 作図ツール: クリック=点の指示
             controller.toolClick(shiftDown: event.modifierFlags.contains(.shift))
+            return
+        }
+        // ブロック化の基準点指示中(スナップ有効)
+        if controller.pendingBlockifyName != nil {
+            controller.blockifyBasePointClick()
             return
         }
         // 選択ツール

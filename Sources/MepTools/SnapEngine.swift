@@ -87,8 +87,24 @@ public final class SnapEngine {
         segments.removeAll(keepingCapacity: true)
         segmentBuckets.removeAll(keepingCapacity: true)
 
+        let defs = document.blockDefinitionsByID
         for entity in document.entities {
             guard document.isEntityVisible(entity) else { continue }
+            // ブロック配置は実体化して中身の端点・線分を索引(器具の接続点にスナップできる)
+            if case .blockRef(let defID, let insert, let rotation, let scale, let mirrored, _) = entity.kind,
+               let def = defs[defID] {
+                for sub in def.instantiate(insert: insert, rotation: rotation,
+                                           scale: scale, mirrored: mirrored, layer: entity.layer) {
+                    index(sub)
+                }
+                continue
+            }
+            index(entity)
+        }
+    }
+
+    /// 1エンティティ分の索引追加(blockRefの中身は事前に実体化して渡す)
+    private func index(_ entity: Entity) {
             switch entity.kind {
             case .line(let a, let b):
                 addPoint(a, .endpoint)
@@ -105,8 +121,9 @@ public final class SnapEngine {
                 addPoint(p, .endpoint)
             case .point(let p):
                 addPoint(p, .endpoint)
+            case .blockRef(_, let insert, _, _, _, _):
+                addPoint(insert, .endpoint)  // 挿入点(定義が引けない場合の保険)
             }
-        }
     }
 
     private func addPoint(_ p: Vec2, _ kind: SnapKind) {

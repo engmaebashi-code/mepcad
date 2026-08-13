@@ -71,7 +71,8 @@ public struct Renderer {
                      in ctx: CGContext) {
         draw(entities: document.entities, groups: document.groups,
              transform: transform, viewSize: viewSize, gridSpacing: gridSpacing,
-             showAuxiliary: document.showAuxiliary, in: ctx)
+             showAuxiliary: document.showAuxiliary,
+             blockDefinitions: document.blockDefinitions, in: ctx)
     }
 
     /// スナップショット(値コピー)ベースの描画。バックグラウンドスレッドでのキャッシュ生成に使う。
@@ -81,18 +82,20 @@ public struct Renderer {
                      viewSize: CGSize,
                      gridSpacing: Double,
                      showAuxiliary: Bool = true,
+                     blockDefinitions: [BlockDefinition] = [],
                      in ctx: CGContext) {
         ctx.setFillColor(theme.background)
         ctx.fill(CGRect(origin: .zero, size: viewSize))
         drawGrid(transform: transform, viewSize: viewSize, spacing: gridSpacing, in: ctx)
 
+        let defs = Dictionary(uniqueKeysWithValues: blockDefinitions.map { ($0.id, $0) })
         for entity in entities {
             let g = groups[entity.layer.group]
             guard g.isVisible else { continue }
             let layer = g.layers[entity.layer.layer]
             guard layer.isVisible else { continue }
             if !showAuxiliary, entity.isAuxiliary { continue }
-            drawEntity(entity, layer: layer, transform: transform, in: ctx)
+            drawEntity(entity, layer: layer, transform: transform, definitions: defs, in: ctx)
         }
     }
 
@@ -138,7 +141,8 @@ public struct Renderer {
 
     // MARK: - エンティティ
 
-    private func drawEntity(_ entity: Entity, layer: Layer, transform: ViewTransform, in ctx: CGContext) {
+    private func drawEntity(_ entity: Entity, layer: Layer, transform: ViewTransform,
+                            definitions: [UUID: BlockDefinition] = [:], in ctx: CGContext) {
         let colorIndex = entity.style.colorIndex ?? layer.defaultColorIndex
         let weight = entity.style.lineWeight ?? layer.defaultLineWeight
         let lineType = entity.style.lineType ?? layer.defaultLineType
@@ -182,6 +186,15 @@ public struct Renderer {
             ctx.setFillColor(theme.color(forIndex: colorIndex))
             let r: CGFloat = 2.5
             ctx.fillEllipse(in: CGRect(x: sp.x - r, y: sp.y - r, width: r * 2, height: r * 2))
+
+        case .blockRef(let defID, let insert, let rotation, let scale, let mirrored, _):
+            // 定義を実体化して描画(中身はblockRefを含まない=再帰しない)
+            guard let def = definitions[defID] else { break }
+            ctx.setLineDash(phase: 0, lengths: [])
+            for sub in def.instantiate(insert: insert, rotation: rotation, scale: scale,
+                                       mirrored: mirrored, layer: entity.layer) {
+                drawEntity(sub, layer: layer, transform: transform, in: ctx)
+            }
         }
     }
 
@@ -193,11 +206,26 @@ public struct Renderer {
                              transform: ViewTransform,
                              color: CGColor,
                              lineWidth: CGFloat,
+                             blockDefinitions: [BlockDefinition] = [],
                              in ctx: CGContext) {
+        let defs = Dictionary(uniqueKeysWithValues: blockDefinitions.map { ($0.id, $0) })
+        // blockRefは中身に展開してから輪郭描画(1段のみ・再帰なし)
+        var flat: [Entity] = []
+        flat.reserveCapacity(entities.count)
+        for e in entities {
+            if case .blockRef(let defID, let insert, let rotation, let scale, let mirrored, _) = e.kind,
+               let def = defs[defID] {
+                flat.append(contentsOf: def.instantiate(insert: insert, rotation: rotation,
+                                                        scale: scale, mirrored: mirrored,
+                                                        layer: e.layer))
+            } else {
+                flat.append(e)
+            }
+        }
         ctx.saveGState()
         ctx.setStrokeColor(color)
         ctx.setLineWidth(lineWidth)
-        for entity in entities {
+        for entity in flat {
             switch entity.kind {
             case .line(let a, let b):
                 let sa = transform.toScreen(a)
@@ -226,6 +254,14 @@ public struct Renderer {
                 let sp = transform.toScreen(position)
                 let r: CGFloat = 4
                 ctx.strokeEllipse(in: CGRect(x: sp.x - r, y: sp.y - r, width: r * 2, height: r * 2))
+            case .blockRef(_, _, _, _, _, let cached):
+                // 定義が引けない場合のフォールバック(通常はflat展開済みでここへ来ない)
+                if !cached.isEmpty {
+                    let p0 = transform.toScreen(Vec2(cached.minX, cached.minY))
+                    let p1 = transform.toScreen(Vec2(cached.maxX, cached.maxY))
+                    ctx.stroke(CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y),
+                                      width: abs(p1.x - p0.x), height: abs(p1.y - p0.y)))
+                }
             }
         }
         ctx.restoreGState()
