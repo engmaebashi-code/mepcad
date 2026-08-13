@@ -32,14 +32,67 @@ final class CanvasUIState: ObservableObject {
     @Published var panelPinned = false
     @Published var paletteColors: [Color] = []
     @Published var gridOn = true
+    @Published var auxOn = true
+
+    /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
+    @Published var colorSwatches: [NSImage] = []
+    /// メニュー項目用の線種パターン(テンプレート画像なのでテーマ非依存)
+    let lineTypeSwatches: [NSImage] = (0..<LineTypeTable.count).map { SwatchFactory.lineTypeSwatch($0) }
 
     func paletteColor(_ index: Int) -> Color {
         guard index >= 0, index < paletteColors.count else { return .primary }
         return paletteColors[index]
     }
 
+    func colorSwatch(_ index: Int) -> NSImage {
+        guard index >= 0, index < colorSwatches.count else { return NSImage() }
+        return colorSwatches[index]
+    }
+
+    func lineTypeSwatch(_ index: Int) -> NSImage {
+        guard index >= 0, index < lineTypeSwatches.count else { return NSImage() }
+        return lineTypeSwatches[index]
+    }
+
     func updatePalette(from theme: RenderTheme) {
         paletteColors = theme.palette.map { Color(cgColor: $0) }
+        colorSwatches = theme.palette.map { SwatchFactory.colorSwatch($0) }
+    }
+}
+
+/// メニュー項目に出す小さな画像(色丸・線種パターン)の生成
+enum SwatchFactory {
+
+    /// 色見本の丸(実際のパレット色)
+    static func colorSwatch(_ color: CGColor, diameter: CGFloat = 13) -> NSImage {
+        NSImage(size: NSSize(width: diameter, height: diameter), flipped: false) { rect in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            let inset = rect.insetBy(dx: 0.75, dy: 0.75)
+            ctx.setFillColor(color)
+            ctx.fillEllipse(in: inset)
+            // 背景色と同化しないよう薄い縁取り
+            ctx.setStrokeColor(CGColor(gray: 0.5, alpha: 0.45))
+            ctx.setLineWidth(0.75)
+            ctx.strokeEllipse(in: inset)
+            return true
+        }
+    }
+
+    /// 線種パターンの横線(テンプレート画像: メニューの文字色で自動着色される)
+    static func lineTypeSwatch(_ index: Int, width: CGFloat = 58, height: CGFloat = 12) -> NSImage {
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            ctx.setStrokeColor(CGColor(gray: 0, alpha: 1))
+            ctx.setLineWidth(1.6)
+            let dash = LineTypeTable.dashPattern(index).map { CGFloat($0) }
+            ctx.setLineDash(phase: 0, lengths: dash)
+            ctx.move(to: CGPoint(x: 1.5, y: rect.midY))
+            ctx.addLine(to: CGPoint(x: rect.maxX - 1.5, y: rect.midY))
+            ctx.strokePath()
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 }
 
@@ -106,6 +159,15 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .help("クリックでグリッド表示/非表示")
+                // 補助線(補助線種・補助線色)の表示切替 — JWWビューワーと同じ考え方
+                Button {
+                    controller.toggleAuxiliary()
+                } label: {
+                    Text(uiState.auxOn ? "補助線" : "補助線 OFF")
+                        .foregroundStyle(uiState.auxOn ? .primary : .tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("補助線(補助線種・補助線色)の表示/非表示。非表示中はスナップ・選択からも外れます")
                 Text("スナップ: \(uiState.snap)")
                     .frame(width: 110, alignment: .leading)
                 Text("ズーム \(uiState.zoom)")
@@ -252,6 +314,9 @@ struct ContentView: View {
             }
             controller.onGridChanged = { visible in
                 uiState.gridOn = visible
+            }
+            controller.onAuxiliaryChanged = { visible in
+                uiState.auxOn = visible
             }
             uiState.updatePalette(from: controller.theme)
             controller.publishInitialState()

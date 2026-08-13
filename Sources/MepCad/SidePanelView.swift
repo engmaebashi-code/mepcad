@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import MepCore
 import MepTools
 
@@ -292,9 +293,6 @@ struct PropertyPanelView: View {
     let controller: CanvasController
     @ObservedObject var uiState: CanvasUIState
 
-    private let lineTypes: [(Int?, String)] = [
-        (nil, "レイヤ既定"), (0, "実線"), (1, "破線"), (2, "一点鎖線"),
-    ]
     private let lineWeights: [(Double?, String)] = [
         (nil, "レイヤ既定"), (0.1, "0.1"), (0.15, "0.15"), (0.25, "0.25"),
         (0.35, "0.35"), (0.5, "0.5"), (0.7, "0.7"),
@@ -315,8 +313,18 @@ struct PropertyPanelView: View {
                 propertyRow("色") {
                     Menu {
                         Button("レイヤ既定") { controller.applyColorIndex(nil) }
+                        Divider()
+                        // 各項目に実際のパレット色の丸を表示(Jw_cadの線属性ダイアログ相当)
                         ForEach(0..<10, id: \.self) { i in
-                            Button("色 \(i)") { controller.applyColorIndex(i) }
+                            Button {
+                                controller.applyColorIndex(i)
+                            } label: {
+                                Label {
+                                    Text("色 \(i)")
+                                } icon: {
+                                    Image(nsImage: uiState.colorSwatch(i))
+                                }
+                            }
                         }
                     } label: {
                         HStack(spacing: 5) {
@@ -335,11 +343,30 @@ struct PropertyPanelView: View {
 
                 propertyRow("線種") {
                     Menu {
-                        ForEach(lineTypes.indices, id: \.self) { i in
-                            Button(lineTypes[i].1) { controller.applyLineType(lineTypes[i].0) }
+                        Button("レイヤ既定") { controller.applyLineType(nil) }
+                        Divider()
+                        // Jw_cad標準の9線種。各項目に線のパターンを表示
+                        ForEach(0..<LineTypeTable.count, id: \.self) { i in
+                            Button {
+                                controller.applyLineType(i)
+                            } label: {
+                                Label {
+                                    Text(LineTypeTable.names[i])
+                                } icon: {
+                                    Image(nsImage: uiState.lineTypeSwatch(i))
+                                }
+                            }
                         }
                     } label: {
-                        Text(lineTypeLabel(sel)).font(.system(size: 11))
+                        HStack(spacing: 5) {
+                            if case let type?? = sel.commonLineType, type >= 0, type < LineTypeTable.count {
+                                Image(nsImage: uiState.lineTypeSwatch(type))
+                                Text(LineTypeTable.names[type])
+                            } else {
+                                Text(lineTypeLabel(sel))
+                            }
+                        }
+                        .font(.system(size: 11))
                     }
                 }
 
@@ -441,12 +468,7 @@ struct PropertyPanelView: View {
     private func lineTypeLabel(_ sel: SelectionSummary) -> String {
         guard let common = sel.commonLineType else { return "混在" }
         guard let type = common else { return "レイヤ既定" }
-        switch type {
-        case 0: return "実線"
-        case 1: return "破線"
-        case 2: return "一点鎖線"
-        default: return "線種\(type)"
-        }
+        return LineTypeTable.name(type)
     }
 
     private func lineWeightLabel(_ sel: SelectionSummary) -> String {

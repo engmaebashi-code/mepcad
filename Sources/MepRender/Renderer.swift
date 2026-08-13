@@ -70,15 +70,17 @@ public struct Renderer {
                      gridSpacing: Double,   // mm
                      in ctx: CGContext) {
         draw(entities: document.entities, groups: document.groups,
-             transform: transform, viewSize: viewSize, gridSpacing: gridSpacing, in: ctx)
+             transform: transform, viewSize: viewSize, gridSpacing: gridSpacing,
+             showAuxiliary: document.showAuxiliary, in: ctx)
     }
 
     /// スナップショット(値コピー)ベースの描画。バックグラウンドスレッドでのキャッシュ生成に使う。
-    /// 表示判定はグループ×レイヤの実効状態(両方表示のとき見える)。
+    /// 表示判定はグループ×レイヤの実効状態(両方表示のとき見える)+補助線表示設定。
     public func draw(entities: [Entity], groups: [LayerGroup],
                      transform: ViewTransform,
                      viewSize: CGSize,
                      gridSpacing: Double,
+                     showAuxiliary: Bool = true,
                      in ctx: CGContext) {
         ctx.setFillColor(theme.background)
         ctx.fill(CGRect(origin: .zero, size: viewSize))
@@ -89,6 +91,7 @@ public struct Renderer {
             guard g.isVisible else { continue }
             let layer = g.layers[entity.layer.layer]
             guard layer.isVisible else { continue }
+            if !showAuxiliary, entity.isAuxiliary { continue }
             drawEntity(entity, layer: layer, transform: transform, in: ctx)
         }
     }
@@ -142,12 +145,9 @@ public struct Renderer {
         ctx.setStrokeColor(theme.color(forIndex: colorIndex))
         // 線幅は紙面mm→pxの簡易換算(最低1px)
         ctx.setLineWidth(max(1, weight * transform.scale * 10))
-        // 線種: 0=実線 1=破線 2=一点鎖線(M4: プロパティパネルの線種変更に対応)
-        switch lineType {
-        case 1:  ctx.setLineDash(phase: 0, lengths: [7, 4])
-        case 2:  ctx.setLineDash(phase: 0, lengths: [12, 4, 2, 4])
-        default: ctx.setLineDash(phase: 0, lengths: [])
-        }
+        // 線種: Jw_cad標準9種(LineTypeTable)。パターン定義はMepCoreと共有
+        let dash = LineTypeTable.dashPattern(lineType).map { CGFloat($0) }
+        ctx.setLineDash(phase: 0, lengths: dash)
         defer { ctx.setLineDash(phase: 0, lengths: []) }
 
         switch entity.kind {

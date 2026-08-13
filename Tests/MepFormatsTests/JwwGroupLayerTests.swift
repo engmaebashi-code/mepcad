@@ -92,7 +92,27 @@ final class JwwGroupLayerTests: XCTestCase {
         XCTAssertEqual(e0.style.colorIndex, 1)
         XCTAssertEqual(e0.style.lineType, 0)   // lntp1=実線
         XCTAssertEqual(e1.style.colorIndex, 2)
-        XCTAssertEqual(e1.style.lineType, 2)   // lntp5=一点鎖線系
+        XCTAssertEqual(e1.style.lineType, 4)   // lntp5=一点鎖1(9種そのまま保持)
+    }
+
+    func testAuxiliaryLineImportAndVisibility() {
+        // lntp9(補助線種)と色9(補助線色)は補助線扱い
+        var d = makeDrawing()
+        d.lines.append(JwwLine(x1: 0, y1: 50, x2: 100, y2: 50, layer: 2, glayer: 0, lntp: 9, color: 1))
+        d.lines.append(JwwLine(x1: 0, y1: 60, x2: 100, y2: 60, layer: 2, glayer: 0, lntp: 1, color: 9))
+        let doc = Document()
+        JwwReader.importDrawing(d, into: doc)
+
+        let aux = doc.entities.filter(\.isAuxiliary)
+        XCTAssertEqual(aux.count, 2)
+        XCTAssertEqual(aux[0].style.lineType, 8)   // 補助線種
+
+        // 表示切替: OFFで補助線だけ実効非表示になる
+        XCTAssertTrue(aux.allSatisfy { doc.isEntityVisible($0) })
+        doc.setShowAuxiliary(false)
+        XCTAssertTrue(aux.allSatisfy { !doc.isEntityVisible($0) })
+        // 通常の線は見えたまま
+        XCTAssertTrue(doc.entities.filter { !$0.isAuxiliary }.contains { doc.isEntityVisible($0) })
     }
 
     func testReimportReplacesEverything() {

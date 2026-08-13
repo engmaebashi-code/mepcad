@@ -56,14 +56,10 @@ public struct JwwReader {
         (1...9).contains(Int(c)) ? Int(c) : nil
     }
 
-    /// JWWの線種(1=実線 2〜4=点線 5〜8=鎖線 9=補助線)→ 0=実線 1=破線 2=一点鎖線
+    /// JWWの線種lntp(1〜9)→ 内部コード(0〜8)。丸めずに全9種を保持する(往復無劣化)
     static func mapLineType(_ t: UInt8) -> Int? {
-        switch Int(t) {
-        case 1: return 0
-        case 2, 3, 4, 9: return 1
-        case 5, 6, 7, 8: return 2
-        default: return nil
-        }
+        let v = Int(t)
+        return (1...9).contains(v) ? v - 1 : nil
     }
 
     // MARK: - レイヤ構造の展開

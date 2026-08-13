@@ -106,6 +106,8 @@ final class CanvasController: NSObject {
     private var lastEdgeProximity = false
     /// グリッド表示状態の変化(ステータスバー表示の同期用)
     var onGridChanged: ((Bool) -> Void)?
+    /// 補助線表示状態の変化(ステータスバー表示の同期用)
+    var onAuxiliaryChanged: ((Bool) -> Void)?
 
     override init() {
         let doc = Document()
@@ -141,7 +143,8 @@ final class CanvasController: NSObject {
         let world = transform.toWorld(p)
         let hit = SelectionEngine.topmostHit(at: world, tolerance: hitToleranceMm,
                                              entities: document.entities,
-                                             groups: document.groups)
+                                             groups: document.groups,
+                                             includeAuxiliary: document.showAuxiliary)
         if let hit {
             if shiftDown {
                 if selection.contains(hit) { selection.remove(hit) } else { selection.insert(hit) }
@@ -159,7 +162,8 @@ final class CanvasController: NSObject {
             let visibleOnly = SelectionEngine.topmostHit(at: world, tolerance: hitToleranceMm,
                                                          entities: document.entities,
                                                          groups: document.groups,
-                                                         among: SelectionEngine.visibleAddresses(document.groups))
+                                                         among: SelectionEngine.visibleAddresses(document.groups),
+                                                         includeAuxiliary: document.showAuxiliary)
             if let visibleOnly, let entity = document.entity(id: visibleOnly) {
                 onInfo?("その要素は \(layerDisplayName(entity.layer)) がロック中のため選択できません(レイヤパネルで解除)")
             }
@@ -181,7 +185,8 @@ final class CanvasController: NSObject {
                         maxX: max(w1.x, w2.x), maxY: max(w1.y, w2.y))
         let ids = SelectionEngine.ids(in: rect, mode: mode,
                                       entities: document.entities,
-                                      groups: document.groups)
+                                      groups: document.groups,
+                                      includeAuxiliary: document.showAuxiliary)
         if shiftDown {
             selection.formUnion(ids)
         } else {
@@ -192,7 +197,9 @@ final class CanvasController: NSObject {
 
     func selectAll() {
         let selectable = SelectionEngine.selectableAddresses(document.groups)
-        selection = Set(document.entities.filter { selectable.contains($0.layer) }.map(\.id))
+        selection = Set(document.entities.filter {
+            selectable.contains($0.layer) && (document.showAuxiliary || !$0.isAuxiliary)
+        }.map(\.id))
         selectionDidChange()
     }
 
@@ -220,6 +227,8 @@ final class CanvasController: NSObject {
         let selectable = SelectionEngine.selectableAddresses(document.groups)
         var pruned = Set<EntityID>()
         for e in document.entities where selection.contains(e.id) && selectable.contains(e.layer) {
+            // 補助線が非表示なら補助線も選択から外す
+            if !document.showAuxiliary, e.isAuxiliary { continue }
             pruned.insert(e.id)
         }
         selection = pruned
@@ -508,11 +517,22 @@ final class CanvasController: NSObject {
         onLayersChanged?(document.groups, document.current, counts)
     }
 
+    /// 補助線(補助線種・補助線色)の表示切替。
+    /// 非表示中は描画・スナップ・選択のすべてから外れる(JWWビューワーと同じ考え方)
+    func toggleAuxiliary() {
+        document.setShowAuxiliary(!document.showAuxiliary)  // onChange経由でキャッシュ破棄・スナップ再構築
+        onAuxiliaryChanged?(document.showAuxiliary)
+        onInfo?(document.showAuxiliary
+                ? "補助線を表示しました"
+                : "補助線を非表示にしました(スナップ・選択からも外れます)")
+    }
+
     /// 初期表示用(SwiftUI側のonAppearから呼ぶ)
     func publishInitialState() {
         publishLayers()
         onSelectionChanged?(selectionSummary())
         onGridChanged?(gridVisible)
+        onAuxiliaryChanged?(document.showAuxiliary)
     }
 
     // MARK: - 作図ツール(M3)

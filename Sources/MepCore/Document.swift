@@ -8,6 +8,8 @@ public final class Document {
     public private(set) var entities: [Entity]
     /// 書込レイヤ(カレント)
     public private(set) var current: LayerAddress
+    /// 補助線(補助線種・補助線色)の表示。falseで描画・スナップ・選択から外れる
+    public private(set) var showAuxiliary = true
 
     /// 変更通知(再描画トリガ用)。UIが差し替える。
     public var onChange: (() -> Void)?
@@ -39,6 +41,18 @@ public final class Document {
         let g = groups[address.group]
         let l = g.layers[address.layer]
         return g.isVisible && g.isEditable && l.isVisible && l.isEditable
+    }
+
+    /// エンティティ単位の実効表示(レイヤ表示+補助線表示設定)
+    public func isEntityVisible(_ entity: Entity) -> Bool {
+        isVisible(entity.layer) && (showAuxiliary || !entity.isAuxiliary)
+    }
+
+    /// 補助線の表示切替
+    public func setShowAuxiliary(_ show: Bool) {
+        guard show != showAuxiliary else { return }
+        showAuxiliary = show
+        onChange?()
     }
 
     public func entity(id: EntityID) -> Entity? {

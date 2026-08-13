@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>MepCad 文字パレット案 v0.1</title>
+<style>
+  :root {
+    --bg: #1c1e21; --panel: rgba(44,47,52,.72); --line: rgba(255,255,255,.14);
+    --txt: #e8eaed; --dim: #9aa0a6; --blue: #3b82f6; --orange: #e8a000;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #111; color: var(--txt); font-family: -apple-system, "Hiragino Sans", sans-serif; padding: 28px; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .sub { color: var(--dim); font-size: 12px; margin-bottom: 20px; }
+  h2 { font-size: 14px; margin: 26px 0 10px; color: #c7cbd1; }
+  .stage { position: relative; background: var(--bg); border-radius: 12px; height: 380px; overflow: hidden; border: 1px solid var(--line); }
+  svg.draw { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; }
+
+  /* --- インライン文字編集(キャンバス上) --- */
+  .inline-editor { position: absolute; left: 210px; top: 168px; }
+  .minibar {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--panel); backdrop-filter: blur(12px);
+    border: 1px solid var(--line); border-radius: 9px;
+    padding: 5px 8px; margin-bottom: 6px; width: max-content;
+    box-shadow: 0 6px 18px rgba(0,0,0,.4); font-size: 11px;
+  }
+  .chip { padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,.07); color: var(--txt); cursor: default; }
+  .chip.on { background: var(--blue); font-weight: 600; }
+  .chip.small { font-size: 10px; color: var(--dim); background: none; }
+  .sep { width: 1px; height: 14px; background: var(--line); }
+  .textbox {
+    display: inline-block; background: rgba(59,130,246,.10);
+    border: 1.5px solid var(--blue); border-radius: 4px;
+    padding: 3px 8px; font-size: 15px; color: #fff; min-width: 170px;
+  }
+  .caret { display: inline-block; width: 1.5px; height: 15px; background: #fff; vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .hint { position: absolute; left: 210px; top: 236px; font-size: 10.5px; color: var(--dim); }
+
+  /* --- プロパティパネル(文字セクション) --- */
+  .props {
+    position: absolute; right: 14px; top: 14px; width: 232px;
+    background: var(--panel); backdrop-filter: blur(14px);
+    border: 1px solid var(--line); border-radius: 13px; padding: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45); font-size: 11px;
+  }
+  .props h3 { font-size: 10.5px; color: var(--dim); font-weight: 600; margin-bottom: 8px; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .row .lbl { width: 34px; color: var(--dim); font-size: 10px; }
+  .field { flex: 1; background: rgba(255,255,255,.07); border-radius: 6px; padding: 4px 8px; }
+  .field.num { flex: 0 0 64px; text-align: right; font-variant-numeric: tabular-nums; }
+  .conv { color: var(--dim); font-size: 9.5px; }
+  .presets { display: flex; gap: 4px; margin: 2px 0 9px; }
+  .presets .chip { flex: 1; text-align: center; font-size: 10.5px; padding: 4px 0; }
+  .note { color: var(--dim); font-size: 10px; line-height: 1.5; margin-top: 6px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { border: 1px solid #333; padding: 8px 10px; text-align: left; vertical-align: top; line-height: 1.55; }
+  th { background: #1d2024; color: #c7cbd1; width: 130px; }
+  .rec { color: #7db2ff; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>MepCad 文字パレット案 <span style="color:var(--dim)">v0.1</span></h1>
+<div class="sub">文字の入力・選択・編集・フォント・サイズをどう扱うかの提案(モック)</div>
+
+<h2>提案: インライン編集 + ミニ文字バー + プロパティ「文字」セクションの3点セット</h2>
+<div class="stage">
+  <svg class="draw" viewBox="0 0 1000 380">
+    <g stroke="#3b6ea5" stroke-width="1.2" fill="none">
+      <path d="M40 90 H 960 M40 300 H 960 M120 40 V 340 M420 40 V 340 M700 40 V 340"/>
+    </g>
+    <g stroke="#c8901a" stroke-width="2" fill="none">
+      <path d="M120 250 H 690 M690 250 V 120 M120 280 H 660"/>
+      <circle cx="380" cy="250" r="7"/>
+    </g>
+    <g fill="#8fa3b8" font-size="13" font-family="Helvetica">
+      <text x="130" y="242">50A 冷温水(往)</text>
+      <text x="710" y="85">φ105(GL-550)</text>
+    </g>
+  </svg>
+
+  <!-- キャンバス上のインライン編集 -->
+  <div class="inline-editor">
+    <div class="minibar">
+      <span class="chip small">文字種</span>
+      <span class="chip">2.5</span><span class="chip on">3.5</span><span class="chip">5</span><span class="chip">7</span>
+      <span class="sep"></span>
+      <span class="chip">游ゴシック ▾</span>
+      <span class="sep"></span>
+      <span class="chip">0° ▾</span>
+    </div>
+    <div class="textbox">FGX3 -210<span class="caret"></span></div>
+  </div>
+  <div class="hint">クリック位置にそのまま入力(⏎確定 / esc取消)。既存文字はダブルクリックで同じUIで再編集。数字チップ=紙面mm(図寸)</div>
+
+  <!-- プロパティパネルの文字セクション -->
+  <div class="props">
+    <h3>プロパティ — 文字 3個選択中</h3>
+    <div class="row"><span class="lbl">内容</span><span class="field">(複数)</span></div>
+    <div class="row"><span class="lbl">文字種</span></div>
+    <div class="presets">
+      <span class="chip">2.5</span><span class="chip on">3.5</span><span class="chip">5</span><span class="chip">7</span><span class="chip">自由</span>
+    </div>
+    <div class="row"><span class="lbl">高さ</span><span class="field num">3.5</span><span class="conv">紙面mm = 実寸175 (1/50)</span></div>
+    <div class="row"><span class="lbl">フォント</span><span class="field">游ゴシック ▾</span></div>
+    <div class="row"><span class="lbl">角度</span><span class="field num">0°</span><span class="chip small">90°</span></div>
+    <div class="row"><span class="lbl">色</span><span class="field">● 色1 ▾</span></div>
+    <div class="note">文字を含む選択のときだけこのセクションが出現。変更はすべて一括適用+Undo可</div>
+  </div>
+</div>
+
+<h2>設計の考え方</h2>
+<table>
+  <tr><th>文字種プリセット<br>(サイズの主役)</th>
+      <td>Jw_cadの「文字種1〜10」の考え方を継承しつつ、設備図の常用サイズ <b>2.5 / 3.5 / 5 / 7mm(紙面)</b>の4チップ+自由入力に絞る。<br>
+      内部は実寸mm(紙面mm×グループ縮尺)で保持 — JWW往復でサイズが狂わない。チップの定義は環境設定で編集可能に。</td></tr>
+  <tr><th>入力・再編集</th>
+      <td>現在のダイアログをやめ、<b>クリック位置でのインライン入力</b>に置き換え(数値入力ポップアップと同じ「カーソルのそば」思想)。
+      既存文字は<b>ダブルクリックで再編集</b>、選択して⏎でも可。ミニバーは入力欄の直上に出るガラス調。</td></tr>
+  <tr><th>フォント</th>
+      <td>図面では混在させないのが普通なので、<b>既定フォントは環境設定</b>(游ゴシック/ヒラギノ角ゴ/MSゴシック互換系)で図面単位に1つ。
+      ミニバー/プロパティからの変更は「個別の上書き」扱い。JWW書き出し時はフォント名をそのまま保存。</td></tr>
+  <tr><th>選択時の編集</th>
+      <td>プロパティパネルに<b>「文字」セクション</b>が文字選択時だけ出現(スペースは既に確保済みの方針通り)。
+      複数選択で文字種・フォント・角度・色を一括変更。線と文字の混在選択では文字にだけ適用。</td></tr>
+  <tr><th>実装順の提案</th>
+      <td><span class="rec">M5前半</span>: インライン入力+文字種チップ(ミニバー) → <span class="rec">M5後半</span>: プロパティ文字セクション+ダブルクリック再編集 → 以降: 縦書き・基点9点・W/H比。</td></tr>
+</table>
+
+</body>
+</html>
