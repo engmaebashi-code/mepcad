@@ -289,4 +289,84 @@ final class SelectionEditTests: XCTestCase {
         let op = EditOperation()
         XCTAssertFalse(op.keyInput("5") { _ in })
     }
+
+    // MARK: - 拡大縮小(M4.9)
+
+    /// 基準点→参照点→目標点: 距離比が倍率になる
+    func testScaleByReferenceDrag() {
+        let op = EditOperation()
+        op.begin(.scale, hasSelection: true)
+        XCTAssertEqual(op.phase, .awaitingBase)
+        XCTAssertNil(op.click(at: Vec2(100, 100)))         // 基準点
+        XCTAssertEqual(op.phase, .awaitingScaleRef)
+        XCTAssertNil(op.click(at: Vec2(200, 100)))         // 参照点(距離100)
+        XCTAssertEqual(op.phase, .awaitingScaleTarget)
+
+        // プレビュー: 距離200 → 倍率2
+        guard case .scale(let c, let f)? = op.previewTransform(cursor: Vec2(300, 100)) else {
+            return XCTFail()
+        }
+        XCTAssertEqual(c, Vec2(100, 100))
+        XCTAssertEqual(f, 2, accuracy: 1e-9)
+
+        // 確定: 距離50 → 倍率0.5、1回で終了
+        guard case .scale(_, let factor)? = op.click(at: Vec2(150, 100)) else { return XCTFail() }
+        XCTAssertEqual(factor, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(op.phase, .idle)
+    }
+
+    /// 基準点の直後に数値⏎で倍率確定(参照点なし)
+    func testScaleByNumericInput() {
+        let op = EditOperation()
+        op.begin(.scale, hasSelection: true)
+        _ = op.click(at: Vec2(0, 0))
+        var committed: EditTransform?
+        for ch in "2.5" { _ = op.keyInput(ch) { _ in } }
+        _ = op.keyInput("\r") { committed = $0 }
+        guard case .scale(let c, let f)? = committed else { return XCTFail() }
+        XCTAssertEqual(c, Vec2(0, 0))
+        XCTAssertEqual(f, 2.5, accuracy: 1e-9)
+        XCTAssertEqual(op.phase, .idle)
+    }
+
+    /// 0や負の倍率は確定しない
+    func testScaleRejectsNonPositiveFactor() {
+        let op = EditOperation()
+        op.begin(.scale, hasSelection: true)
+        _ = op.click(at: Vec2(0, 0))
+        var committed = false
+        for ch in "-2" { _ = op.keyInput(ch) { _ in } }
+        _ = op.keyInput("\r") { _ in committed = true }
+        XCTAssertFalse(committed)
+        XCTAssertEqual(op.phase, .awaitingScaleRef)        // 操作は継続中
+    }
+
+    /// applying(.scale): 線・円・ブロック配置に等倍率が効く
+    func testApplyingScale() {
+        let t = EditTransform.scale(center: Vec2(0, 0), factor: 2)
+
+        let l = line(10, 0, 20, 0)
+        guard case .line(let a, let b) = l.applying(t).kind else { return XCTFail() }
+        XCTAssertEqual(a, Vec2(20, 0))
+        XCTAssertEqual(b, Vec2(40, 0))
+
+        let circle = Entity(layer: normal, kind: .circle(center: Vec2(10, 10), radius: 5))
+        guard case .circle(let cc, let r) = circle.applying(t).kind else { return XCTFail() }
+        XCTAssertEqual(cc, Vec2(20, 20))
+        XCTAssertEqual(r, 10, accuracy: 1e-9)
+
+        // ブロック配置: 挿入点が拡大され、scaleパラメータに合成される
+        let box = BBox(minX: 90, minY: -10, maxX: 110, maxY: 10)
+        let ref = Entity(layer: normal,
+                         kind: .blockRef(definitionID: UUID(), insert: Vec2(100, 0),
+                                         rotation: 0, scale: 1.5, mirrored: false,
+                                         cachedBounds: box))
+        guard case .blockRef(_, let insert, _, let scale, _, let cached) = ref.applying(t).kind else {
+            return XCTFail()
+        }
+        XCTAssertEqual(insert, Vec2(200, 0))
+        XCTAssertEqual(scale, 3, accuracy: 1e-9)
+        XCTAssertEqual(cached.minX, 180, accuracy: 1e-9)
+        XCTAssertEqual(cached.maxX, 220, accuracy: 1e-9)
+    }
 }

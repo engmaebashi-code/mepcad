@@ -82,13 +82,16 @@ public final class SnapEngine {
         (Int64((p.x / cellSize).rounded(.down)), Int64((p.y / cellSize).rounded(.down)))
     }
 
-    public func rebuild(from document: Document) {
+    /// excluding: 索引から除外するエンティティ(グリップ編集中に自分自身の
+    /// 旧位置へ吸着して動かせなくなるのを防ぐ)
+    public func rebuild(from document: Document, excluding: Set<EntityID> = []) {
         pointBuckets.removeAll(keepingCapacity: true)
         segments.removeAll(keepingCapacity: true)
         segmentBuckets.removeAll(keepingCapacity: true)
 
         let defs = document.blockDefinitionsByID
         for entity in document.entities {
+            guard !excluding.contains(entity.id) else { continue }
             guard document.isEntityVisible(entity) else { continue }
             // ブロック配置は実体化して中身の端点・線分を索引(器具の接続点にスナップできる)
             if case .blockRef(let defID, let insert, let rotation, let scale, let mirrored, _) = entity.kind,

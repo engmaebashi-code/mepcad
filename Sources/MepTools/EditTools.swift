@@ -9,6 +9,7 @@ public enum EditOpKind: Sendable {
     case rotateCopy  // 回転複写: 同上、escまで連続配置
     case mirror      // 反転: 基準線を2点指示して鏡映(移動)
     case mirrorCopy  // 反転複写: 同上、escまで別の基準線で連続
+    case scale       // 拡大縮小: 基準点→倍率(数値⏎ or 参照点→距離比ドラッグ)
 
     public var label: String {
         switch self {
@@ -18,12 +19,14 @@ public enum EditOpKind: Sendable {
         case .rotateCopy: return "回転複写"
         case .mirror: return "反転"
         case .mirrorCopy: return "反転複写"
+        case .scale: return "拡大縮小"
         }
     }
 
     public var isCopy: Bool { self == .copy || self == .rotateCopy || self == .mirrorCopy }
     var isRotation: Bool { self == .rotate || self == .rotateCopy }
     var isMirror: Bool { self == .mirror || self == .mirrorCopy }
+    var isScale: Bool { self == .scale }
     /// 角度プロパティ(回転しながら配置)が使える操作
     public var supportsRotationProperty: Bool { self == .move || self == .copy }
 }
@@ -37,6 +40,8 @@ public enum EditTransform: Equatable, Sendable {
     case moveRotated(base: Vec2, delta: Vec2, angle: Double)
     /// 基準線(a-b)に対する鏡映
     case mirror(a: Vec2, b: Vec2)
+    /// 基準点まわりの等倍率拡大縮小(factor>0)。ブロックは配置のscaleに合成される
+    case scale(center: Vec2, factor: Double)
 }
 
 extension Entity {
@@ -51,6 +56,8 @@ extension Entity {
             return rotated(around: base, byRadians: angle).translated(by: delta)
         case .mirror(let a, let b):
             return mirrored(acrossLineFrom: a, to: b)
+        case .scale(let center, let factor):
+            return scaled(by: factor, around: center)
         }
     }
 }
@@ -68,6 +75,8 @@ public final class EditOperation {
         case awaitingAngleTarget  // 回転の方向2待ち
         case awaitingMirrorA      // 反転の基準線1点目待ち
         case awaitingMirrorB      // 反転の基準線2点目待ち
+        case awaitingScaleRef     // 拡大縮小の参照点待ち(数値⏎でも確定可)
+        case awaitingScaleTarget  // 拡大縮小の目標点待ち(距離比=倍率)
     }
 
     public private(set) var phase: Phase = .idle
@@ -84,6 +93,8 @@ public final class EditOperation {
     public var rotationDegrees: Double = 0
     /// 反転の基準線1点目
     public private(set) var mirrorA: Vec2?
+    /// 拡大縮小の参照距離(基準点→参照点。カーソル距離÷これ=倍率)
+    public private(set) var scaleRefDistance: Double?
 
     public init() {}
 
@@ -97,6 +108,7 @@ public final class EditOperation {
         basePoint = nil
         referenceAngle = nil
         mirrorA = nil
+        scaleRefDistance = nil
         rotationDegrees = 0
         numericBuffer = ""
     }
@@ -106,6 +118,7 @@ public final class EditOperation {
         basePoint = nil
         referenceAngle = nil
         mirrorA = nil
+        scaleRefDistance = nil
         numericBuffer = ""
     }
 
@@ -119,7 +132,13 @@ public final class EditOperation {
 
         case .awaitingBase:
             basePoint = p
-            phase = kind.isRotation ? .awaitingAngleRef : .awaitingTarget
+            if kind.isRotation {
+                phase = .awaitingAngleRef
+            } else if kind.isScale {
+                phase = .awaitingScaleRef
+            } else {
+                phase = .awaitingTarget
+            }
             return nil
 
         case .awaitingTarget:
@@ -169,6 +188,21 @@ public final class EditOperation {
                 phase = .awaitingMirrorA
             }
             return .mirror(a: a, b: b)
+
+        case .awaitingScaleRef:
+            guard let base = basePoint else { return nil }
+            let dist = base.distance(to: p)
+            guard dist > 1e-9 else { return nil }
+            scaleRefDistance = dist
+            phase = .awaitingScaleTarget
+            return nil
+
+        case .awaitingScaleTarget:
+            guard let base = basePoint, let ref = scaleRefDistance, ref > 1e-9 else { return nil }
+            let dist = base.distance(to: p)
+            guard dist > 1e-9 else { return nil }
+            finishIfSingleShot()
+            return .scale(center: base, factor: dist / ref)
         }
     }
 
@@ -194,6 +228,11 @@ public final class EditOperation {
             let b = constrained(from: a, to: cursor)
             guard a.distance(to: b) > 1e-9 else { return nil }
             return .mirror(a: a, b: b)
+        case .awaitingScaleTarget:
+            guard let base = basePoint, let ref = scaleRefDistance, ref > 1e-9 else { return nil }
+            let dist = base.distance(to: cursor)
+            guard dist > 1e-9 else { return nil }
+            return .scale(center: base, factor: dist / ref)
         default:
             return nil
         }
@@ -211,6 +250,8 @@ public final class EditOperation {
             capable = true
         case .awaitingAngleRef, .awaitingAngleTarget:
             capable = true   // 回転は方向1の指示前でも数値角で確定できる
+        case .awaitingScaleRef, .awaitingScaleTarget:
+            capable = true   // 拡大縮小は参照点の指示前でも数値倍率で確定できる
         default:
             capable = false
         }
@@ -222,7 +263,7 @@ public final class EditOperation {
         }
         if character == "\r" || character == "\n" {
             if let transform = parseNumeric() {
-                if kind == .move || kind == .rotate {
+                if kind == .move || kind == .rotate || kind == .scale {
                     finishIfSingleShot()
                 }
                 numericBuffer = ""
@@ -250,6 +291,12 @@ public final class EditOperation {
             return .rotate(center: base, angle: degrees * .pi / 180)
         }
 
+        if kind.isScale {
+            // 単独数値=倍率(正のみ。例 2 / 0.5 / 1.25)
+            guard comps.count == 1, let factor = Double(comps[0]), factor > 1e-6 else { return nil }
+            return .scale(center: base, factor: factor)
+        }
+
         var delta: Vec2?
         if comps.count == 2, let dx = Double(comps[0]), let dy = Double(comps[1]) {
             delta = Vec2(dx, dy)
@@ -274,6 +321,7 @@ public final class EditOperation {
         basePoint = nil
         referenceAngle = nil
         mirrorA = nil
+        scaleRefDistance = nil
     }
 
     /// 角度拘束(パレット連動)。移動・複写の方向を丸める
@@ -304,7 +352,12 @@ public final class EditOperation {
         case .idle:
             return ""
         case .awaitingBase:
-            return "\(kind.label): 基準点(回転中心)を指示"
+            if kind.isScale {
+                return "\(kind.label): 基準点(拡大縮小の中心)を指示"
+            }
+            return kind.isRotation
+                ? "\(kind.label): 基準点(回転中心)を指示"
+                : "\(kind.label): 基準点を指示"
         case .awaitingTarget:
             let cont = kind == .copy ? "(クリックで連続配置 / esc終了)" : ""
             let rot = abs(rotationDegrees) > 1e-9 ? String(format: " [回転%.0f°]", rotationDegrees) : ""
@@ -319,6 +372,10 @@ public final class EditOperation {
         case .awaitingMirrorB:
             let cont = kind == .mirrorCopy ? "(確定後、別の基準線で連続 / esc終了)" : ""
             return "\(kind.label): 基準線の2点目を指示\(cont)" + constraint
+        case .awaitingScaleRef:
+            return "\(kind.label): 参照点を指示(基準点からの距離が倍率1になる)— または倍率を数値⏎ 例: 2 / 0.5" + num
+        case .awaitingScaleTarget:
+            return "\(kind.label): 目標点を指示(参照距離との比が倍率。ゴーストで確認)— 数値⏎=倍率" + num
         }
     }
 }

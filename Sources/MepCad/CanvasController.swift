@@ -127,6 +127,11 @@ final class CanvasController: NSObject {
         snapEngine.rebuild(from: document)
         document.onChange = { [weak self] in
             guard let self else { return }
+            // グリップ編集中に外部要因(⌘Z等)で図面が変わったら編集を中止
+            // (確定時は先にgripDrag=nilになっているためここには来ない)
+            if self.gripDrag != nil {
+                self.cancelGripDrag()
+            }
             self.snapEngine.rebuild(from: self.document)
             // 書込レイヤの変更をツールに同期
             self.tools.currentLayer = self.document.current
@@ -245,6 +250,10 @@ final class CanvasController: NSObject {
         if selection.isEmpty, editOp.isActive {
             cancelEditOperation()
         }
+        // グリップ編集中の要素が選択から消えたら中止
+        if let state = gripDrag, !selection.contains(state.grip.entityID) {
+            cancelGripDrag()
+        }
         onSelectionChanged?(selectionSummary())
         needsOverlayRedraw?()
     }
@@ -262,8 +271,10 @@ final class CanvasController: NSObject {
             if tools.kind == .select {
                 onInfo?("クリック=選択 / 左→右ドラッグ=窓選択 / 右→左=交差選択 / 右クリック=メニュー")
             }
-        } else {
+        } else if currentGrips().isEmpty {
             onInfo?("\(selection.count)個選択中 — 右クリック=複写・移動 / delete=削除 / esc=解除")
+        } else {
+            onInfo?("\(selection.count)個選択中 — □グリップをドラッグ=伸縮 / 右クリック=メニュー / delete=削除 / esc=解除")
         }
     }
 
@@ -369,6 +380,7 @@ final class CanvasController: NSObject {
 
     func beginEditOperation(_ kind: EditOpKind) {
         guard !selection.isEmpty else { return }
+        cancelGripDrag()
         // 作図ツール中なら選択ツールへ戻してから開始
         if tools.kind != .select { tools.select(.select) }
         editOp.angleConstraint = tools.angleConstraint  // パレットの角度拘束を移動・複写にも効かせる
@@ -436,6 +448,9 @@ final class CanvasController: NSObject {
             let copies = selectedEntities.map { $0.duplicated(by: .zero).applying(result) }
             commandStack.run(AddEntitiesCommand(name: "反転複写", entities: copies))
             onInfo?("\(copies.count)個を反転複写しました — 別の基準線で連続 / escで終了")
+        case (.scale, .scale(_, let factor)):
+            commandStack.run(TransformEntitiesCommand(name: "拡大縮小", ids: selection) { $0.applying(result) })
+            onInfo?(String(format: "%d個を %.4g倍 に拡大縮小しました(⌘Zで取り消し)", selection.count, factor))
         default:
             break
         }
@@ -456,12 +471,194 @@ final class CanvasController: NSObject {
         editOp.angleConstraint = constraint
     }
 
+    // MARK: - 伸縮(グリップ編集。M4.9)
+
+    struct GripDragState {
+        let grip: Grip
+        let original: Entity   // ドラッグ開始時のスナップショット
+        let downScreen: Vec2   // マウスダウンしたスクリーン座標(移動判定の基準)
+        var current: Vec2      // グリップの現在位置(ワールド)
+        var preview: Entity    // プレビュー(確定時にこれを採用)
+        var moved = false      // 3px以上ドラッグしたか
+        var sticky = false     // ボタンを離した後の「クリックで確定」モード
+    }
+
+    private(set) var gripDrag: GripDragState?
+    private(set) var gripNumericBuffer = ""
+
+    /// いま表示すべきグリップ(選択ツール・非編集中・少数選択のときだけ)
+    func currentGrips() -> [Grip] {
+        guard tools.kind == .select, !editOp.isActive, pendingBlockifyName == nil,
+              gripDrag == nil, !selectedEntities.isEmpty,
+              selectedEntities.count <= GripEngine.selectionLimit else { return [] }
+        return selectedEntities.flatMap { GripEngine.grips(for: $0) }
+    }
+
+    /// グリップのヒット判定(スクリーン座標。半径8px)
+    func gripHit(atScreen p: Vec2) -> Grip? {
+        var best: Grip?
+        var bestDist = 8.0
+        for g in currentGrips() {
+            let d = transform.toScreen(g.point).distance(to: p)
+            if d < bestDist {
+                bestDist = d
+                best = g
+            }
+        }
+        return best
+    }
+
+    func beginGripDrag(_ grip: Grip, atScreen p: Vec2) {
+        guard let entity = document.entity(id: grip.entityID) else { return }
+        gripDrag = GripDragState(grip: grip, original: entity, downScreen: p,
+                                 current: grip.point, preview: entity)
+        gripNumericBuffer = ""
+        // 自分自身の旧位置に吸着して動かせなくなるのを防ぐため、索引から除外
+        snapEngine.rebuild(from: document, excluding: [grip.entityID])
+        onInfo?(gripHint)
+        needsOverlayRedraw?()
+    }
+
+    /// ドラッグ中の移動(CanvasViewから)
+    func gripDragMoved(toScreen p: Vec2) {
+        if var state = gripDrag, !state.moved,
+           state.downScreen.distance(to: p) > 3 {
+            state.moved = true
+            gripDrag = state
+        }
+        // スナップ計算→updateGripPreview→再描画はmouseMoved経由で行う
+        mouseMoved(toScreen: p)
+    }
+
+    /// mouseMoved内から呼ぶ: グリップ編集中のプレビュー更新
+    private func updateGripPreview() {
+        guard var state = gripDrag, let cursor = cursorScreen else { return }
+        let effective = snappedScreen ?? cursor
+        let world = gripConstrained(transform.toWorld(effective), state: state)
+        state.current = world
+        state.preview = GripEngine.apply(state.grip.kind, to: state.original, at: world)
+        gripDrag = state
+    }
+
+    /// 線の端点グリップに角度拘束(パレット連動)を効かせる(固定端からの方向を丸める)
+    private func gripConstrained(_ p: Vec2, state: GripDragState) -> Vec2 {
+        guard GripEngine.supportsAngleConstraint(state.grip.kind),
+              let step = tools.angleConstraint.step,
+              let fixed = GripEngine.fixedPoint(for: state.grip.kind, of: state.original)
+        else { return p }
+        let d = p - fixed
+        let len = d.length
+        guard len > 1e-9 else { return p }
+        let snapped = (atan2(d.y, d.x) / step).rounded() * step
+        return Vec2(fixed.x + cos(snapped) * len, fixed.y + sin(snapped) * len)
+    }
+
+    /// ボタン解放(CanvasViewから)。動いていれば確定、その場ならクリック確定モードへ
+    func gripDragReleased() {
+        guard var state = gripDrag else { return }
+        if state.moved {
+            commitGripDrag()
+        } else {
+            state.sticky = true
+            gripDrag = state
+            onInfo?(gripHint)
+        }
+    }
+
+    /// クリック確定モード中のクリック(CanvasViewから)
+    func gripStickyClick() {
+        commitGripDrag()
+    }
+
+    func commitGripDrag() {
+        guard let state = gripDrag else { return }
+        gripDrag = nil
+        gripNumericBuffer = ""
+        if state.preview != state.original {
+            let name = state.grip.kind == .position ? "移動" : "伸縮"
+            commandStack.run(UpdateEntitiesCommand(name: name,
+                                                   before: [state.original],
+                                                   after: [state.preview]))
+            selectionDidChange()  // コミットのonChangeでスナップ索引も全体再構築される
+            onInfo?("\(name)しました(⌘Zで取り消し)")
+        } else {
+            snapEngine.rebuild(from: document)  // 除外を戻す
+            publishSelectionHint()
+        }
+        needsOverlayRedraw?()
+    }
+
+    func cancelGripDrag() {
+        guard gripDrag != nil else { return }
+        gripDrag = nil
+        gripNumericBuffer = ""
+        snapEngine.rebuild(from: document)  // 除外を戻す
+        publishSelectionHint()
+        needsOverlayRedraw?()
+    }
+
+    /// グリップ編集中の数値入力(線=固定端からの長さ / 円=半径)
+    private func gripKey(_ character: Character) -> Bool {
+        guard var state = gripDrag else { return false }
+        // 数値入力は固定点のあるグリップ(線=長さ・円=半径)だけ受け付ける
+        let numericCapable = GripEngine.fixedPoint(for: state.grip.kind, of: state.original) != nil
+        if character.isNumber || character == "." {
+            guard numericCapable else { return false }
+            gripNumericBuffer.append(character)
+            needsOverlayRedraw?()
+            return true
+        }
+        if character == "\r" || character == "\n" {
+            defer {
+                gripNumericBuffer = ""
+                needsOverlayRedraw?()
+            }
+            guard let value = Double(gripNumericBuffer), value > 1e-6,
+                  let fixed = GripEngine.fixedPoint(for: state.grip.kind, of: state.original)
+            else { return true }
+            // 現在のドラッグ方向(未ドラッグなら元の方向)に沿って長さを適用
+            var dir = state.current - fixed
+            if dir.length < 1e-9 { dir = state.grip.point - fixed }
+            let len = dir.length
+            guard len > 1e-9 else { return true }
+            let target = Vec2(fixed.x + dir.x / len * value, fixed.y + dir.y / len * value)
+            state.current = target
+            state.preview = GripEngine.apply(state.grip.kind, to: state.original, at: target)
+            gripDrag = state
+            commitGripDrag()
+            return true
+        }
+        if character == "\u{7F}" || character == "\u{08}" {  // delete/backspace
+            if !gripNumericBuffer.isEmpty {
+                gripNumericBuffer.removeLast()
+                needsOverlayRedraw?()
+                return true
+            }
+        }
+        return false
+    }
+
+    private var gripHint: String {
+        guard let state = gripDrag else { return "" }
+        let commit = state.sticky ? "クリックで確定" : "離すと確定(その場で離すとクリック確定モード)"
+        switch state.grip.kind {
+        case .lineStart, .lineEnd:
+            return "伸縮: 端点を動かす — スナップ・角度拘束有効 / 数値⏎=固定端からの長さ / \(commit) / esc中止"
+        case .circleRadius:
+            return "伸縮: 半径を変更 — 数値⏎=半径 / \(commit) / esc中止"
+        case .arcStart, .arcEnd:
+            return "伸縮: 円弧の端を動かす(半径は維持・角度が変化)/ \(commit) / esc中止"
+        case .position:
+            return "移動: 位置を動かす — スナップ有効 / \(commit) / esc中止"
+        }
+    }
+
     // MARK: - 右クリックメニュー(M4)
 
     /// 現在の状態に応じたコンテキストメニュー。nilならメニューを出さない
     /// (作図ツール中・編集操作中は右クリック=キャンセルの操作感を維持)
     func contextMenu() -> NSMenu? {
-        guard tools.kind == .select, !editOp.isActive else { return nil }
+        guard tools.kind == .select, !editOp.isActive, gripDrag == nil else { return nil }
 
         let menu = NSMenu()
         if !selection.isEmpty {
@@ -472,6 +669,7 @@ final class CanvasController: NSObject {
             menu.addItem(menuItem("回転複写", #selector(menuRotateCopy)))
             menu.addItem(menuItem("反転", #selector(menuMirror)))
             menu.addItem(menuItem("反転複写", #selector(menuMirrorCopy)))
+            menu.addItem(menuItem("拡大縮小", #selector(menuScale)))
             menu.addItem(.separator())
             // レイヤ間の移動・複写(グループ→レイヤの2段サブメニュー)
             menu.addItem(layerSubmenu(title: "レイヤへ移動", action: #selector(menuMoveToLayer(_:))))
@@ -542,6 +740,7 @@ final class CanvasController: NSObject {
     @objc private func menuRotateCopy() { beginEditOperation(.rotateCopy) }
     @objc private func menuMirror() { beginEditOperation(.mirror) }
     @objc private func menuMirrorCopy() { beginEditOperation(.mirrorCopy) }
+    @objc private func menuScale() { beginEditOperation(.scale) }
     @objc private func menuBlockify() { startBlockify() }
     @objc private func menuExplodeBlocks() { explodeSelectedBlocks() }
     @objc private func menuDelete() { deleteSelection() }
@@ -760,6 +959,7 @@ final class CanvasController: NSObject {
     // MARK: - 作図ツール(M3)
 
     func selectTool(_ kind: ToolKind) {
+        cancelGripDrag()
         cancelEditOperation()
         tools.select(kind)
     }
@@ -773,6 +973,10 @@ final class CanvasController: NSObject {
     }
 
     func toolCancel() {
+        if gripDrag != nil {
+            cancelGripDrag()
+            return
+        }
         if pendingBlockifyName != nil {
             cancelBlockify()
             return
@@ -791,6 +995,10 @@ final class CanvasController: NSObject {
     }
 
     func toolKey(_ character: Character) -> Bool {
+        // 伸縮(グリップ編集)中の数値入力を最優先
+        if gripDrag != nil {
+            return gripKey(character)
+        }
         // 編集操作(移動・複写)の数値入力を優先
         if editOp.isActive {
             var committed = false
@@ -940,6 +1148,10 @@ final class CanvasController: NSObject {
             ghostTransform = editOp.previewTransform(cursor: transform.toWorld(effective))
         } else {
             ghostTransform = nil
+        }
+        // 伸縮(グリップ編集)中のプレビュー更新
+        if gripDrag != nil {
+            updateGripPreview()
         }
         needsOverlayRedraw?()
         publishStatus()

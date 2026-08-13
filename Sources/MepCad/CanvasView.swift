@@ -159,6 +159,9 @@ final class CrosshairOverlayView: NSView {
             drawSelectionHighlight(controller: controller, in: ctx)
         }
 
+        // 伸縮グリップ(選択図形の端点等の□ハンドル)と編集中プレビュー
+        drawGrips(controller: controller, in: ctx)
+
         // 移動・複写・回転のゴースト
         if let transform = controller.ghostTransform, !controller.selectedEntities.isEmpty {
             drawGhost(controller: controller, ghost: transform, in: ctx)
@@ -270,7 +273,8 @@ final class CrosshairOverlayView: NSView {
         ctx.setLineDash(phase: 0, lengths: [])
 
         // 数値入力ポップアップ(カーソルのすぐ近くに表示)
-        let buffer = controller.editOp.isActive ? controller.editOp.numericBuffer
+        let buffer = controller.gripDrag != nil ? controller.gripNumericBuffer
+                   : controller.editOp.isActive ? controller.editOp.numericBuffer
                                                 : controller.tools.numericBuffer
         if !buffer.isEmpty {
             drawInputBadge("\(buffer) ⏎", near: CGPoint(x: p.x + 18, y: p.y + 18), in: ctx)
@@ -386,6 +390,64 @@ final class CrosshairOverlayView: NSView {
             drawOverlayLabel("基準線(反転)",
                              at: CGPoint(x: (sa.x + sbp.x) / 2 + 8, y: (sa.y + sbp.y) / 2 - 8),
                              in: ctx)
+        case .scale(let center, let factor):
+            // 拡大縮小: 中心の十字+基準点→カーソルのガイド線+倍率ラベル
+            let sc = controller.transform.toScreen(center)
+            let r: CGFloat = 6
+            ctx.move(to: CGPoint(x: sc.x - r, y: sc.y))
+            ctx.addLine(to: CGPoint(x: sc.x + r, y: sc.y))
+            ctx.move(to: CGPoint(x: sc.x, y: sc.y - r))
+            ctx.addLine(to: CGPoint(x: sc.x, y: sc.y + r))
+            if let cursor = controller.cursorScreen {
+                ctx.move(to: CGPoint(x: sc.x, y: sc.y))
+                ctx.addLine(to: CGPoint(x: cursor.x, y: cursor.y))
+            }
+            ctx.strokePath()
+            ctx.setLineDash(phase: 0, lengths: [])
+            drawOverlayLabel(String(format: "× %.3f", factor),
+                             at: CGPoint(x: sc.x + 10, y: sc.y - 22), in: ctx)
+        }
+    }
+
+    /// 伸縮グリップの□ハンドルと、ドラッグ中のプレビュー(M4.9)
+    private func drawGrips(controller: CanvasController, in ctx: CGContext) {
+        let accent = CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.95)
+        let half: CGFloat = 3.5
+
+        // 待機中のグリップ(青の塗り□。編集中はcurrentGripsが空を返す)
+        let grips = controller.currentGrips()
+        if !grips.isEmpty {
+            ctx.setFillColor(accent)
+            ctx.setStrokeColor(CGColor(gray: 1, alpha: 0.9))
+            ctx.setLineWidth(1)
+            for g in grips {
+                let s = controller.transform.toScreen(g.point)
+                let rect = CGRect(x: s.x - half, y: s.y - half, width: half * 2, height: half * 2)
+                ctx.fill(rect)
+                ctx.stroke(rect)
+            }
+        }
+
+        // ドラッグ中: 変形後のプレビュー(破線)+ホットグリップ(オレンジ)+寸法ラベル
+        if let state = controller.gripDrag {
+            let renderer = Renderer(theme: controller.theme)
+            let ghostColor = CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.55)
+            renderer.drawOutlines([state.preview], transform: controller.transform,
+                                  color: ghostColor, lineWidth: 1.5,
+                                  blockDefinitions: controller.document.blockDefinitions, in: ctx)
+            let s = controller.transform.toScreen(state.current)
+            let hot = CGRect(x: s.x - half - 1, y: s.y - half - 1,
+                             width: (half + 1) * 2, height: (half + 1) * 2)
+            ctx.setFillColor(CGColor(red: 0.91, green: 0.63, blue: 0, alpha: 0.95))
+            ctx.fill(hot)
+            // 線=固定端からの長さ / 円=半径 を表示
+            if let fixed = GripEngine.fixedPoint(for: state.grip.kind, of: state.original) {
+                let len = state.current.distance(to: fixed)
+                let prefix: String
+                if case .circleRadius = state.grip.kind { prefix = "R" } else { prefix = "L" }
+                drawOverlayLabel(String(format: "%@%.0f", prefix, len),
+                                 at: CGPoint(x: s.x + 10, y: s.y - 22), in: ctx)
+            }
         }
     }
 
@@ -539,6 +601,11 @@ final class CanvasContainerView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         let p = screenPoint(event)
+        // 伸縮(グリップ)ドラッグ中
+        if controller.gripDrag != nil {
+            controller.gripDragMoved(toScreen: p)
+            return
+        }
         if let start = mouseDownScreen, controller.tools.kind == .select, !controller.editOp.isActive {
             // 選択ツール: ドラッグ=矩形選択(3px以上動いたらマーキー開始)
             if !isMarqueeDragging, p.distance(to: start) > 3 {
@@ -586,6 +653,11 @@ final class CanvasContainerView: NSView {
         let p = screenPoint(event)
         controller.mouseMoved(toScreen: p, shiftDown: event.modifierFlags.contains(.shift))
 
+        // 伸縮のクリック確定モード: クリック=確定
+        if controller.gripDrag != nil {
+            controller.gripStickyClick()
+            return
+        }
         if controller.editOp.isActive {
             // 移動・複写: クリック=基準点/目標点の指示
             controller.editClick()
@@ -601,7 +673,11 @@ final class CanvasContainerView: NSView {
             controller.blockifyBasePointClick()
             return
         }
-        // 選択ツール
+        // 選択ツール: グリップ(伸縮ハンドル)を掴んだらドラッグ開始
+        if event.clickCount == 1, let grip = controller.gripHit(atScreen: p) {
+            controller.beginGripDrag(grip, atScreen: p)
+            return
+        }
         if event.clickCount == 2 {
             controller.fit(viewSize: bounds.size)
             return
@@ -614,6 +690,11 @@ final class CanvasContainerView: NSView {
         defer {
             mouseDownScreen = nil
             isMarqueeDragging = false
+        }
+        // 伸縮(グリップ)ドラッグの解放: 動いていれば確定、その場ならクリック確定モードへ
+        if controller.gripDrag != nil {
+            controller.gripDragReleased()
+            return
         }
         guard controller.tools.kind == .select, !controller.editOp.isActive else { return }
         let shift = event.modifierFlags.contains(.shift)
@@ -658,9 +739,10 @@ final class CanvasContainerView: NSView {
             controller.toolCancel()
             return
         }
-        // delete / forward delete: 選択削除
+        // delete / forward delete: 選択削除(グリップ編集中はバックスペース=数値訂正)
         if event.keyCode == 51 || event.keyCode == 117 {
-            if controller.tools.kind == .select, !controller.editOp.isActive {
+            if controller.tools.kind == .select, !controller.editOp.isActive,
+               controller.gripDrag == nil {
                 controller.deleteSelection()
                 return
             }
