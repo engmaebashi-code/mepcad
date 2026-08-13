@@ -58,6 +58,54 @@ final class BlockTests: XCTestCase {
         XCTAssertEqual(r, 20, accuracy: 1e-9)
     }
 
+    // MARK: - スタイル上書き(M4.8.1: ブロック化後も色・線種・太さを変更できる)
+
+    /// 配置側で色を指定すると、メンバー自身が色を持っていても全メンバーに強制適用される
+    func testInstantiateStyleOverrideColor() {
+        var def = makeDefinition()
+        def.entities[0].style = Style(colorIndex: 3)          // メンバー自身の色
+        def.entities[1].style = .byLayer
+        let out = def.instantiate(insert: .zero, rotation: 0, scale: 1,
+                                  mirrored: false, layer: .zero,
+                                  overrideStyle: Style(colorIndex: 1))
+        XCTAssertTrue(out.allSatisfy { $0.style.colorIndex == 1 })
+        // 上書きしていない項目はメンバーのまま(ここでは全てnil)
+        XCTAssertTrue(out.allSatisfy { $0.style.lineType == nil && $0.style.lineWeight == nil })
+    }
+
+    /// 部分上書き: 線種だけ指定 → 色はメンバー自身の値が残る
+    func testInstantiatePartialStyleOverride() {
+        var def = makeDefinition()
+        def.entities[0].style = Style(colorIndex: 5, lineWeight: 0.3)
+        let out = def.instantiate(insert: .zero, rotation: 0, scale: 1,
+                                  mirrored: false, layer: .zero,
+                                  overrideStyle: Style(lineType: 2))
+        XCTAssertTrue(out.allSatisfy { $0.style.lineType == 2 })
+        XCTAssertEqual(out[0].style.colorIndex, 5)
+        XCTAssertEqual(out[0].style.lineWeight, 0.3)
+        XCTAssertNil(out[1].style.colorIndex)
+    }
+
+    /// 既定(上書きなし=byLayer)はメンバーのスタイルを一切変えない
+    func testInstantiateNoOverrideKeepsMemberStyles() {
+        var def = makeDefinition()
+        def.entities[0].style = Style(colorIndex: 7, lineType: 4, lineWeight: 0.5)
+        let out = def.instantiate(insert: Vec2(10, 20), rotation: 0, scale: 1,
+                                  mirrored: false, layer: .zero)
+        XCTAssertEqual(out[0].style, Style(colorIndex: 7, lineType: 4, lineWeight: 0.5))
+        XCTAssertEqual(out[1].style, .byLayer)
+    }
+
+    /// Style.overridingの合成則: 非nilが勝ち、nilはベースへフォールスルー
+    func testStyleOverriding() {
+        let base = Style(colorIndex: 2, lineType: nil, lineWeight: 0.2)
+        let over = Style(colorIndex: 1, lineType: 3, lineWeight: nil)
+        let merged = over.overriding(base)
+        XCTAssertEqual(merged, Style(colorIndex: 1, lineType: 3, lineWeight: 0.2))
+        // byLayerを重ねても何も変わらない(単位元)
+        XCTAssertEqual(Style.byLayer.overriding(base), base)
+    }
+
     // MARK: - 参照エンティティの変換とcachedBoundsの整合
 
     func testRefTranslatedKeepsBoundsConsistent() {

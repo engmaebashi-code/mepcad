@@ -601,9 +601,12 @@ final class CanvasController: NSObject {
         for e in selectedEntities {
             if case .blockRef(let defID, let insert, let rot, let scale, let mir, _) = e.kind,
                let d = defs[defID] {
+                // 配置側のスタイル上書きを焼き込んでから取り込む(見た目を維持)
                 members.append(contentsOf: d.instantiate(insert: insert, rotation: rot,
                                                          scale: scale, mirrored: mir,
-                                                         layer: e.layer, freshIDs: true))
+                                                         layer: e.layer,
+                                                         overrideStyle: e.style,
+                                                         freshIDs: true))
             } else {
                 members.append(e)
             }
@@ -650,8 +653,10 @@ final class CanvasController: NSObject {
         for e in selectedEntities {
             guard case .blockRef(let defID, let insert, let rot, let scale, let mir, _) = e.kind,
                   let d = defs[defID] else { continue }
+            // 配置側のスタイル上書きは分解後も見た目が変わらないよう焼き込む
             let expanded = d.instantiate(insert: insert, rotation: rot, scale: scale,
-                                         mirrored: mir, layer: e.layer, freshIDs: true)
+                                         mirrored: mir, layer: e.layer,
+                                         overrideStyle: e.style, freshIDs: true)
             commands.append(ExplodeBlockCommand(reference: e, expanded: expanded))
             newSelection.formUnion(expanded.map(\.id))
         }

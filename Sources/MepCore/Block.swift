@@ -28,8 +28,12 @@ public struct BlockDefinition: Identifiable, Equatable, Codable, Sendable {
     /// 配置情報を適用して実体化する(描画・スナップ・分解用)。
     /// 変換順: ローカル反転(縦軸) → 倍率 → 回転 → 挿入点へ平行移動。
     /// layerは配置(blockRef)のレイヤ — byLayerスタイルはこのレイヤで解決される。
+    /// overrideStyleは配置側のスタイル上書き(M4.8.1): 非nilの項目(色・線種・太さ)は
+    /// 全メンバーに強制適用され、nilの項目はメンバー自身の値のまま。
+    /// これによりブロック化後もプロパティパネルからの属性変更が効く。
     public func instantiate(insert: Vec2, rotation: Double, scale: Double,
                             mirrored: Bool, layer: LayerAddress,
+                            overrideStyle: Style = .byLayer,
                             freshIDs: Bool = false) -> [Entity] {
         entities.map { element in
             var out = element
@@ -44,6 +48,7 @@ public struct BlockDefinition: Identifiable, Equatable, Codable, Sendable {
             }
             out = out.translated(by: insert)
             out.layer = layer
+            out.style = overrideStyle.overriding(out.style)
             if freshIDs {
                 out = Entity(layer: out.layer, style: out.style, kind: out.kind)
             }

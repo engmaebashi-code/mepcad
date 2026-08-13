@@ -188,11 +188,13 @@ public struct Renderer {
             ctx.fillEllipse(in: CGRect(x: sp.x - r, y: sp.y - r, width: r * 2, height: r * 2))
 
         case .blockRef(let defID, let insert, let rotation, let scale, let mirrored, _):
-            // 定義を実体化して描画(中身はblockRefを含まない=再帰しない)
+            // 定義を実体化して描画(中身はblockRefを含まない=再帰しない)。
+            // 配置側のスタイル(色・線種・太さ)は上書きとして中身へ伝播する(M4.8.1)
             guard let def = definitions[defID] else { break }
             ctx.setLineDash(phase: 0, lengths: [])
             for sub in def.instantiate(insert: insert, rotation: rotation, scale: scale,
-                                       mirrored: mirrored, layer: entity.layer) {
+                                       mirrored: mirrored, layer: entity.layer,
+                                       overrideStyle: entity.style) {
                 drawEntity(sub, layer: layer, transform: transform, in: ctx)
             }
         }

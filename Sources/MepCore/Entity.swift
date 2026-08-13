@@ -15,6 +15,15 @@ public struct Style: Equatable, Codable, Sendable {
     }
 
     public static let byLayer = Style()
+
+    /// selfの非nil項目でbaseを上書きした結果を返す。
+    /// ブロック配置(blockRef)のスタイル上書きに使う: 配置側で色や線種を
+    /// 指定していればそれが優先され、nilの項目は中身(定義メンバー)の値が残る。
+    public func overriding(_ base: Style) -> Style {
+        Style(colorIndex: colorIndex ?? base.colorIndex,
+              lineType: lineType ?? base.lineType,
+              lineWeight: lineWeight ?? base.lineWeight)
+    }
 }
 
 /// M1のエンティティ。設備エンティティ(PipeRun等)はPhase 2で追加する。
