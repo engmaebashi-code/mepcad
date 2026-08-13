@@ -30,14 +30,32 @@ public enum SelectionEngine {
         return result
     }
 
+    /// 表示されているレイヤ住所の集合(ロックは問わない。診断用)
+    public static func visibleAddresses(_ groups: [LayerGroup]) -> Set<LayerAddress> {
+        var result = Set<LayerAddress>()
+        for (gi, g) in groups.enumerated() where g.isVisible {
+            for (li, l) in g.layers.enumerated() where l.isVisible {
+                result.insert(LayerAddress(gi, li))
+            }
+        }
+        return result
+    }
+
     /// クリック位置に最も近いエンティティ(許容距離内)。同距離なら後から描いたものを優先
     public static func topmostHit(at p: Vec2, tolerance: Double,
                                   entities: [Entity], groups: [LayerGroup]) -> EntityID? {
-        let selectable = selectableAddresses(groups)
+        topmostHit(at: p, tolerance: tolerance, entities: entities, groups: groups,
+                   among: selectableAddresses(groups))
+    }
+
+    /// 対象レイヤ集合を指定できる版(ロック層の診断ヒットなどに使う)
+    public static func topmostHit(at p: Vec2, tolerance: Double,
+                                  entities: [Entity], groups: [LayerGroup],
+                                  among addresses: Set<LayerAddress>) -> EntityID? {
         var best: EntityID?
         var bestDist = tolerance
         // 後方(=上に描かれるもの)から走査し、同距離では先に見つけた方=上を保持
-        for entity in entities.reversed() where selectable.contains(entity.layer) {
+        for entity in entities.reversed() where addresses.contains(entity.layer) {
             // バウンディングボックスで粗く除外(数万要素対応)
             let box = entity.bounds.expanded(by: tolerance)
             guard box.contains(p) else { continue }

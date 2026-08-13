@@ -16,6 +16,18 @@ final class CanvasUIState: ObservableObject {
     @Published var current: LayerAddress = .zero
     /// レイヤパネルで一覧表示しているグループ
     @Published var viewingGroup: Int = 0
+    /// レイヤ別の要素数(256スロット。空レイヤの薄表示用)
+    @Published var layerCounts: [Int] = Array(repeating: 0, count: 256)
+
+    func count(at address: LayerAddress) -> Int {
+        let idx = address.group * 16 + address.layer
+        return layerCounts.indices.contains(idx) ? layerCounts[idx] : 0
+    }
+
+    func groupCount(_ group: Int) -> Int {
+        guard group >= 0, group < 16 else { return 0 }
+        return layerCounts[(group * 16)..<(group * 16 + 16)].reduce(0, +)
+    }
     @Published var selection: SelectionSummary?
     @Published var panelPinned = false
     @Published var paletteColors: [Color] = []
@@ -218,13 +230,14 @@ struct ContentView: View {
             controller.onToolChanged = { kind in
                 uiState.tool = kind
             }
-            controller.onLayersChanged = { groups, current in
+            controller.onLayersChanged = { groups, current, counts in
                 uiState.groups = groups
                 // 書込レイヤのグループが変わったらレイヤ一覧も追従
                 if uiState.current != current {
                     uiState.viewingGroup = current.group
                 }
                 uiState.current = current
+                uiState.layerCounts = counts
             }
             controller.onSelectionChanged = { summary in
                 uiState.selection = summary

@@ -123,6 +123,35 @@ final class JwwGroupLayerTests: XCTestCase {
         XCTAssertFalse(protected2.editable)
     }
 
+    // MARK: - 安全網(状態解釈がファイルと食い違っても図面を殺さない)
+
+    func testSafetyNetRelaxesVisibilityWhenAllHidden() {
+        var d = makeDrawing()
+        d.groupStates = [UInt8](repeating: 0, count: 16)
+        d.layerStates = [UInt8](repeating: 0, count: 256)
+        let doc = Document()
+        let stats = JwwReader.importDrawingWithStats(d, into: doc)
+        XCTAssertTrue(stats.visibilityRelaxed)
+        // 全要素が見える状態に緩和されている
+        XCTAssertTrue(doc.entities.allSatisfy { doc.isVisible($0.layer) })
+        XCTAssertTrue(doc.isSelectable(doc.current))
+    }
+
+    func testSafetyNetRelaxesLocksWhenNothingSelectable() {
+        // 全レイヤ「表示のみ」+要素は0-5のみ(buildGroupsのフォールバック先0-0に要素が無いケース)
+        var d = makeDrawing()
+        d.lines = [JwwLine(x1: 0, y1: 0, x2: 100, y2: 0, layer: 5, glayer: 0, lntp: 1, color: 1)]
+        d.groupStates = [UInt8](repeating: 1, count: 16)
+        d.layerStates = [UInt8](repeating: 1, count: 256)
+        let doc = Document()
+        let stats = JwwReader.importDrawingWithStats(d, into: doc)
+        XCTAssertFalse(stats.visibilityRelaxed)
+        XCTAssertTrue(stats.locksRelaxed)
+        // 要素が選択できる状態になっている
+        XCTAssertTrue(doc.entities.contains { doc.isSelectable($0.layer) })
+        XCTAssertTrue(doc.isSelectable(doc.current))
+    }
+
     func testFallbackCurrentWhenAllLocked() {
         var d = makeDrawing()
         // 全レイヤ・全グループ表示のみ(書込不能)にする

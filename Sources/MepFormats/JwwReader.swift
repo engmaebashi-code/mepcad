@@ -13,6 +13,15 @@ public struct JwwImportResult {
     public let parseSeconds: Double
 }
 
+/// 取り込み結果の統計(安全網の発動有無を呼び出し側へ知らせる)
+public struct JwwImportStats {
+    public let entityCount: Int
+    /// 要素が全て非表示レイヤに落ちたため、全レイヤを表示に緩和した
+    public let visibilityRelaxed: Bool
+    /// 選択可能な要素が1つも無かったため、表示レイヤのロックを解除した
+    public let locksRelaxed: Bool
+}
+
 public struct JwwReader {
 
     public init() {}
@@ -102,30 +111,10 @@ public struct JwwReader {
                                      layers: layers))
         }
 
-        // カレントが見つからない/書き込めない場合のフォールバック
-        var resolved = current ?? LayerAddress(0, 0)
-        func selectable(_ a: LayerAddress) -> Bool {
-            let g = groups[a.group]
-            return g.isVisible && g.isEditable
-                && g.layers[a.layer].isVisible && g.layers[a.layer].isEditable
-        }
-        if !selectable(resolved) {
-            outer: for g in 0..<16 where groups[g].isVisible && groups[g].isEditable {
-                for l in 0..<16 where groups[g].layers[l].isVisible && groups[g].layers[l].isEditable {
-                    resolved = LayerAddress(g, l)
-                    break outer
-                }
-            }
-            // それでも無ければ(全ロック図面)0-0を書込可能にする
-            if !selectable(resolved) {
-                groups[0].isVisible = true
-                groups[0].isEditable = true
-                groups[0].layers[0].isVisible = true
-                groups[0].layers[0].isEditable = true
-                resolved = LayerAddress(0, 0)
-            }
-        }
-        return (groups, resolved)
+        // カレント候補を返す。書込不能な場合の解決は取込側(安全網の後)で行う。
+        // ここで0-0を強制解除すると、安全網の「何も見えない/選べない」判定が
+        // 素通りしてしまうため、buildGroups単体では状態を改変しない。
+        return (groups, current ?? LayerAddress(0, 0))
     }
 
     // MARK: - 取り込み
@@ -138,9 +127,17 @@ public struct JwwReader {
     /// MepCadは実寸主義なので、要素ごとにグループ縮尺を掛けて取り込む。
     @discardableResult
     public static func importDrawing(_ drawing: JwwDrawing, into document: Document) -> Int {
-        let (groups, current) = buildGroups(from: drawing)
-        document.removeAllEntities()
-        document.replaceGroups(groups, current: current)
+        importDrawingWithStats(drawing, into: document).entityCount
+    }
+
+    /// importDrawingの本体。安全網の発動有無も返す。
+    ///
+    /// 安全網: レイヤ状態の解釈がファイルと食い違っても「図面が見えない」「何も選択
+    /// できない」状態には決してしない。要素を持つレイヤが1つも見えなければ全レイヤを
+    /// 表示に、選択できる要素が1つも無ければ表示レイヤのロックを解除する。
+    @discardableResult
+    public static func importDrawingWithStats(_ drawing: JwwDrawing, into document: Document) -> JwwImportStats {
+        var (groups, current) = buildGroups(from: drawing)
 
         func scale(forGroup g: UInt8) -> Double {
             groups[min(Int(g), 15)].scale
@@ -204,7 +201,70 @@ public struct JwwReader {
                                                angle: t.angleDegrees * .pi / 180)))
         }
 
+        // ===== 安全網 =====
+        func effVisible(_ a: LayerAddress) -> Bool {
+            groups[a.group].isVisible && groups[a.group].layers[a.layer].isVisible
+        }
+        func effSelectable(_ a: LayerAddress) -> Bool {
+            let g = groups[a.group]
+            return g.isVisible && g.isEditable
+                && g.layers[a.layer].isVisible && g.layers[a.layer].isEditable
+        }
+
+        var visibilityRelaxed = false
+        var locksRelaxed = false
+        let occupied = Set(entities.map(\.layer))
+        if !entities.isEmpty {
+            // 図面が1要素も見えない → 状態情報を信用せず全表示にする
+            if !occupied.contains(where: effVisible) {
+                visibilityRelaxed = true
+                for g in 0..<16 {
+                    groups[g].isVisible = true
+                    for l in 0..<16 { groups[g].layers[l].isVisible = true }
+                }
+            }
+            // 1要素も選択できない → 表示レイヤのロックを解除する
+            if !occupied.contains(where: effSelectable) {
+                locksRelaxed = true
+                for g in 0..<16 where groups[g].isVisible {
+                    groups[g].isEditable = true
+                    for l in 0..<16 where groups[g].layers[l].isVisible {
+                        groups[g].layers[l].isEditable = true
+                    }
+                }
+            }
+        }
+
+        // カレントは必ず書込可能な場所にする(要素のあるレイヤ→任意の書込可能レイヤ→0-0強制解除)
+        if !effSelectable(current) {
+            if let c = occupied.sorted().first(where: effSelectable) {
+                current = c
+            } else {
+                var found: LayerAddress?
+                outer: for g in 0..<16 {
+                    for l in 0..<16 where effSelectable(LayerAddress(g, l)) {
+                        found = LayerAddress(g, l)
+                        break outer
+                    }
+                }
+                if let found {
+                    current = found
+                } else {
+                    // 全ロック図面: 0-0だけ書込可能にする(最後の手段)
+                    groups[0].isVisible = true
+                    groups[0].isEditable = true
+                    groups[0].layers[0].isVisible = true
+                    groups[0].layers[0].isEditable = true
+                    current = LayerAddress(0, 0)
+                }
+            }
+        }
+
+        document.removeAllEntities()
+        document.replaceGroups(groups, current: current)
         document.appendBulk(entities)
-        return entities.count
+        return JwwImportStats(entityCount: entities.count,
+                              visibilityRelaxed: visibilityRelaxed,
+                              locksRelaxed: locksRelaxed)
     }
 }

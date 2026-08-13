@@ -96,6 +96,7 @@ struct LayerPanelView: View {
                                           group: uiState.groups.indices.contains(g) ? uiState.groups[g] : LayerGroup(),
                                           isViewing: g == uiState.viewingGroup,
                                           isCurrent: g == uiState.current.group,
+                                          isEmpty: uiState.groupCount(g) == 0,
                                           onSelect: { uiState.viewingGroup = g },
                                           onToggleVisible: { v in controller.setGroupVisible(g, v) },
                                           onToggleLock: { locked in controller.setGroupLocked(g, locked) })
@@ -116,6 +117,7 @@ struct LayerPanelView: View {
                                      layer: viewingGroup.layers.indices.contains(l) ? viewingGroup.layers[l] : Layer(),
                                      isCurrent: address == uiState.current,
                                      groupDimmed: !viewingGroup.isVisible,
+                                     entityCount: uiState.count(at: address),
                                      colorProvider: { uiState.paletteColor($0) },
                                      onToggleVisible: { v in controller.setLayerVisible(address, v) },
                                      onToggleLock: { locked in controller.setLayerLocked(address, locked) },
@@ -136,6 +138,8 @@ struct GroupCellView: View {
     let group: LayerGroup
     let isViewing: Bool
     let isCurrent: Bool
+    /// 要素が1つも無いグループ(数字を薄くする)
+    let isEmpty: Bool
     let onSelect: () -> Void
     let onToggleVisible: (Bool) -> Void
     let onToggleLock: (Bool) -> Void
@@ -176,7 +180,9 @@ struct GroupCellView: View {
 
     private var cellForeground: Color {
         if isCurrent { return .white }
-        return group.isVisible ? .primary : Color.primary.opacity(0.25)
+        if !group.isVisible { return Color.primary.opacity(0.25) }
+        // 空グループは薄く(中身のあるグループがひと目で分かる)
+        return isEmpty ? Color.primary.opacity(0.3) : .primary
     }
 
     private var cellBackground: Color {
@@ -192,10 +198,14 @@ struct LayerRowView: View {
     let layer: Layer
     let isCurrent: Bool
     let groupDimmed: Bool
+    /// このレイヤ上の要素数(0=空レイヤは行ごと薄く表示)
+    let entityCount: Int
     let colorProvider: (Int) -> Color
     let onToggleVisible: (Bool) -> Void
     let onToggleLock: (Bool) -> Void
     let onSetCurrent: () -> Void
+
+    private var isEmpty: Bool { entityCount == 0 }
 
     var body: some View {
         HStack(spacing: 4) {
@@ -242,6 +252,13 @@ struct LayerRowView: View {
 
             Spacer(minLength: 0)
 
+            // 要素数(空レイヤは表示しない)
+            if entityCount > 0 {
+                Text("\(entityCount)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+
             if isCurrent {
                 Image(systemName: "pencil.circle.fill")
                     .font(.system(size: 13))
@@ -253,6 +270,8 @@ struct LayerRowView: View {
         .padding(.horizontal, 4)
         .background(isCurrent ? Color.blue.opacity(0.10) : .clear,
                     in: RoundedRectangle(cornerRadius: 6))
+        // 空レイヤは行ごと薄く(中身のあるレイヤがひと目で分かる)
+        .opacity(isEmpty && !isCurrent ? 0.45 : 1)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSetCurrent)
         .help("クリックで書込レイヤにする")

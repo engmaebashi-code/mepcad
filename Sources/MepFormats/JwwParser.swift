@@ -386,56 +386,56 @@ public final class JwwParser {
         var drawing = JwwDrawing()
         drawing.version = version
 
-        // ===== レイヤ状態(既知課題: 位置推定が外れるファイルあり) =====
-        if len > 0x0c {
-            let titleLen = Int(d[0x0c])
-            let lsBase = 0x0d + titleLen + 0x2d
-            if lsBase + 256 * 8 <= len {
-                var layerStates = [UInt8](repeating: 0, count: 256)
-                var groupStates = [UInt8](repeating: 0, count: 16)
-                for gg in 0..<16 {
-                    var activeL = -1
-                    var activeAt = 0
-                    for ll in 0..<16 {
-                        let slot = lsBase + (gg * 16 + ll) * 8
-                        let b3 = d[slot + 3]
-                        let b7 = d[slot + 7]
-                        layerStates[gg * 16 + ll] = b3 != 0 ? b3 : b7
-                        if activeL < 0 {
-                            if b3 == 3 { activeL = ll; activeAt = 3 }
-                            else if b7 == 3 { activeL = ll; activeAt = 7 }
-                        }
-                    }
-                    var gv: UInt8 = 2
-                    if activeL >= 0 {
-                        let gsL = activeAt == 3 ? activeL - 3 : activeL + 3
-                        if gsL >= 0 && gsL <= 15 {
-                            gv = d[lsBase + (gg * 16 + gsL) * 8 + 7]
-                        }
-                    }
-                    groupStates[gg] = gv
-                }
-                drawing.layerStates = layerStates
-                drawing.groupStates = groupStates
-            }
-        }
-
-        // ===== グループ別縮尺 =====
+        // ===== グループ別縮尺+レイヤ/グループ状態 =====
+        // グループブロック(148バイト×16)の構造 — サンプル4図面の実バイトで検証済み:
+        //   +0        double  縮尺の分母(1/50なら50.0)
+        //   +12+k*8   DWORD   レイヤk(0〜15)の状態: 0=非表示 1=表示のみ 2=編集可 3=書込
+        //   +140      DWORD   グループ状態(同じコード。3=書込グループ)
+        // 縮尺がexpected.json(JS版パーサ)と全一致することでブロック先頭位置の正しさを確認、
+        // 状態値は4図面×256レイヤすべて0〜3に収まることを確認した。
+        // 旧実装(タイトル長からの位置推定)はズレるファイルがあり削除。
         var scales: [Double] = []
+        var layerStates = [UInt8](repeating: 2, count: 256)
+        var groupStates = [UInt8](repeating: 2, count: 16)
+        var statesValid = true
         if let nameR = readCStr(12) {
             let firstScale = nameR.end + 16
             for gi in 0..<16 {
                 let sOff = firstScale + gi * 148
-                if sOff + 8 <= len {
+                if sOff + 148 <= len {
                     let sv = f64(sOff)
                     scales.append((sv.isFinite && sv >= 0.1 && sv <= 100000) ? sv : 1)
+                    for k in 0..<16 {
+                        let v = u32(sOff + 12 + k * 8)
+                        // 正規値: 下位3bitが0〜3、上位はプロテクトbit(8)のみ許容(0〜3, 8〜11)
+                        if v & ~UInt32(0xF) == 0, v & 0x7 <= 3 {
+                            layerStates[gi * 16 + k] = UInt8(v)
+                        } else {
+                            statesValid = false  // 範囲外=レイアウト不一致(別バージョン等)
+                        }
+                    }
+                    let gv = u32(sOff + 140)
+                    if gv & ~UInt32(0xF) == 0, gv & 0x7 <= 3 {
+                        groupStates[gi] = UInt8(gv)
+                    } else {
+                        statesValid = false
+                    }
                 } else {
                     scales.append(1)
+                    statesValid = false
                 }
             }
+        } else {
+            statesValid = false
         }
         while scales.count < 16 { scales.append(100) }
         drawing.scales = scales
+        // レイアウトが合わないファイルでは状態を「不明」にする
+        // (読込側が全表示・全編集可で開く。誤ったロック/非表示を作らない)
+        if statesValid {
+            drawing.layerStates = layerStates
+            drawing.groupStates = groupStates
+        }
 
         // ===== クラス定義位置 =====
         let senDef = findClassDef("CDataSen")

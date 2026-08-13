@@ -95,8 +95,8 @@ final class CanvasController: NSObject {
     var onDocumentChanged: (() -> Void)?
     /// キャンバスの現在サイズ(コンテナビューが提供)
     var viewSizeProvider: (() -> CGSize)?
-    /// レイヤ構造の変化(レイヤパネル用: 16グループ+カレント)
-    var onLayersChanged: (([LayerGroup], LayerAddress) -> Void)?
+    /// レイヤ構造の変化(レイヤパネル用: 16グループ+カレント+レイヤ別要素数[256])
+    var onLayersChanged: (([LayerGroup], LayerAddress, [Int]) -> Void)?
     /// 選択の変化(プロパティパネル用)
     var onSelectionChanged: ((SelectionSummary?) -> Void)?
     /// パネルホバー状態の変化(カーソル矩形の更新用)
@@ -152,6 +152,18 @@ final class CanvasController: NSObject {
             selection = []
         }
         selectionDidChange()
+
+        // 空振り時の診断: ロック/表示のみレイヤの要素だったら理由を知らせる
+        // (「クリックしても選べない」を無言にしない)
+        if hit == nil {
+            let visibleOnly = SelectionEngine.topmostHit(at: world, tolerance: hitToleranceMm,
+                                                         entities: document.entities,
+                                                         groups: document.groups,
+                                                         among: SelectionEngine.visibleAddresses(document.groups))
+            if let visibleOnly, let entity = document.entity(id: visibleOnly) {
+                onInfo?("その要素は \(layerDisplayName(entity.layer)) がロック中のため選択できません(レイヤパネルで解除)")
+            }
+        }
     }
 
     /// 矩形選択の確定
@@ -488,7 +500,12 @@ final class CanvasController: NSObject {
     }
 
     private func publishLayers() {
-        onLayersChanged?(document.groups, document.current)
+        // レイヤ別の要素数(空レイヤを薄く表示するため)
+        var counts = [Int](repeating: 0, count: 256)
+        for e in document.entities {
+            counts[e.layer.group * 16 + e.layer.layer] += 1
+        }
+        onLayersChanged?(document.groups, document.current, counts)
     }
 
     /// 初期表示用(SwiftUI側のonAppearから呼ぶ)
@@ -599,12 +616,16 @@ final class CanvasController: NSObject {
                 DispatchQueue.main.async {
                     // 「開く」= 図面全体の置き換え(レイヤ構造ごとJWWの16×16を展開)
                     self.selection = []
-                    let count = JwwReader.importDrawing(drawing, into: self.document)
+                    let stats = JwwReader.importDrawingWithStats(drawing, into: self.document)
                     self.selectionDidChange()
                     if let size = self.viewSizeProvider?() {
                         self.fit(viewSize: size)
                     }
-                    self.onInfo?("\(url.lastPathComponent) — 線\(drawing.lines.count) 弧\(drawing.arcs.count) 字\(drawing.texts.count) / 解析\(parseMs)ms / 計\(count)要素(そのまま編集できます)")
+                    var note = "そのまま編集できます"
+                    if stats.visibilityRelaxed || stats.locksRelaxed {
+                        note = "レイヤ状態が読めなかったため全レイヤを編集可能で展開しました"
+                    }
+                    self.onInfo?("\(url.lastPathComponent) — 線\(drawing.lines.count) 弧\(drawing.arcs.count) 字\(drawing.texts.count) / 解析\(parseMs)ms / 計\(stats.entityCount)要素(\(note))")
                 }
             } catch {
                 DispatchQueue.main.async {

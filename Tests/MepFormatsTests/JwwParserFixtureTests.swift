@@ -1,5 +1,6 @@
 import XCTest
 @testable import MepFormats
+@testable import MepCore
 
 /// JS版v16パーサの解析結果(expected.json)とSwift移植版の出力を突合する回帰テスト。
 ///
@@ -88,5 +89,38 @@ final class JwwParserFixtureTests: XCTestCase {
             #endif
         }
         try XCTSkipIf(tested == 0, "サンプルJWWファイルがFixturesにありません(READMEの手順でコピーしてください)")
+    }
+
+    /// M4.2: レイヤ/グループ状態の読み取り(グループブロック方式)の妥当性検証。
+    /// 旧実装は位置推定がズレて選択機能を全滅させたため、実ファイルでの検証を必須にする。
+    func testLayerStatesFromFixtures() throws {
+        let fixtures = try fixturesURL()
+        let files = try FileManager.default.contentsOfDirectory(at: fixtures, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension.lowercased() == "jww" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        try XCTSkipIf(files.isEmpty, "サンプルJWWファイルがありません")
+
+        for url in files {
+            let name = url.lastPathComponent
+            let drawing = try JwwParser(data: Data(contentsOf: url)).parse()
+
+            // 状態が読めていること・値が正規範囲(0〜3)であること
+            let layerStates = try XCTUnwrap(drawing.layerStates, "\(name): レイヤ状態が読めない")
+            let groupStates = try XCTUnwrap(drawing.groupStates, "\(name): グループ状態が読めない")
+            XCTAssertEqual(layerStates.count, 256, name)
+            XCTAssertTrue(layerStates.allSatisfy { $0 <= 3 }, "\(name): レイヤ状態に範囲外の値")
+            XCTAssertTrue(groupStates.allSatisfy { $0 <= 3 }, "\(name): グループ状態に範囲外の値")
+            // 書込グループは高々1つ
+            XCTAssertLessThanOrEqual(groupStates.filter { $0 == 3 }.count, 1, name)
+
+            // 展開して「見える」「選択できる」が成立すること(安全網に頼らずに)
+            let doc = Document()
+            let stats = JwwReader.importDrawingWithStats(drawing, into: doc)
+            XCTAssertFalse(stats.visibilityRelaxed, "\(name): 表示の安全網が発動(状態解釈が怪しい)")
+            XCTAssertFalse(stats.locksRelaxed, "\(name): ロックの安全網が発動(状態解釈が怪しい)")
+            XCTAssertTrue(doc.entities.contains { doc.isVisible($0.layer) }, "\(name): 見える要素が無い")
+            XCTAssertTrue(doc.entities.contains { doc.isSelectable($0.layer) }, "\(name): 選択できる要素が無い")
+            XCTAssertTrue(doc.isSelectable(doc.current), "\(name): 書込レイヤが書込不能")
+        }
     }
 }

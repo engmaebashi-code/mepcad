@@ -37,8 +37,8 @@ public struct JwwDrawing: Sendable {
     public var solids: [JwwSolid] = []
     public var texts: [JwwText] = []
     public var scales: [Double] = []          // グループ別縮尺(16)
-    public var layerStates: [UInt8]? = nil    // 256スロット(0=非表示,2=表示,3=カレント,8=プロテクト)
-    public var groupStates: [UInt8]? = nil    // 16グループ
+    public var layerStates: [UInt8]? = nil    // 256スロット(0=非表示 1=表示のみ 2=編集可 3=書込)。nil=読取不能
+    public var groupStates: [UInt8]? = nil    // 16グループ(同コード。3=書込グループ)。nil=読取不能
 
     public var bounds: BBox {
         var box = BBox.empty
