@@ -3,10 +3,12 @@ import MepCore
 
 /// 編集操作の種類(右クリックメニューから開始)
 public enum EditOpKind: Sendable {
-    case move        // 移動: 基準点→移動先(1回で終了)
-    case copy        // 複写: 基準点→配置先(escまで連続配置)
+    case move        // 移動: 基準点→移動先(1回で終了)。角度プロパティで回転しながら配置
+    case copy        // 複写: 基準点→配置先(escまで連続配置)。角度プロパティで回転しながら配置
     case rotate      // 回転: 基準点→方向1→方向2(または数値角)
     case rotateCopy  // 回転複写: 同上、escまで連続配置
+    case mirror      // 反転: 基準線を2点指示して鏡映(移動)
+    case mirrorCopy  // 反転複写: 同上、escまで別の基準線で連続
 
     public var label: String {
         switch self {
@@ -14,11 +16,16 @@ public enum EditOpKind: Sendable {
         case .copy: return "複写"
         case .rotate: return "回転"
         case .rotateCopy: return "回転複写"
+        case .mirror: return "反転"
+        case .mirrorCopy: return "反転複写"
         }
     }
 
-    var isCopy: Bool { self == .copy || self == .rotateCopy }
+    public var isCopy: Bool { self == .copy || self == .rotateCopy || self == .mirrorCopy }
     var isRotation: Bool { self == .rotate || self == .rotateCopy }
+    var isMirror: Bool { self == .mirror || self == .mirrorCopy }
+    /// 角度プロパティ(回転しながら配置)が使える操作
+    public var supportsRotationProperty: Bool { self == .move || self == .copy }
 }
 
 /// 編集操作の確定内容(呼び出し側がコマンドに変換する)
@@ -26,6 +33,26 @@ public enum EditTransform: Equatable, Sendable {
     case translate(Vec2)
     /// 角度はラジアン・反時計回り正
     case rotate(center: Vec2, angle: Double)
+    /// 基準点まわりにangle回転してからdelta移動(回転しながら配置)
+    case moveRotated(base: Vec2, delta: Vec2, angle: Double)
+    /// 基準線(a-b)に対する鏡映
+    case mirror(a: Vec2, b: Vec2)
+}
+
+extension Entity {
+    /// EditTransformを適用したコピーを返す(idは維持)
+    public func applying(_ transform: EditTransform) -> Entity {
+        switch transform {
+        case .translate(let delta):
+            return translated(by: delta)
+        case .rotate(let center, let angle):
+            return rotated(around: center, byRadians: angle)
+        case .moveRotated(let base, let delta, let angle):
+            return rotated(around: base, byRadians: angle).translated(by: delta)
+        case .mirror(let a, let b):
+            return mirrored(acrossLineFrom: a, to: b)
+        }
+    }
 }
 
 /// 移動・複写・回転の状態機械(UI非依存・ユニットテスト対象)。
@@ -39,6 +66,8 @@ public final class EditOperation {
         case awaitingTarget       // 移動先/配置先待ち(移動・複写)
         case awaitingAngleRef     // 回転の方向1待ち
         case awaitingAngleTarget  // 回転の方向2待ち
+        case awaitingMirrorA      // 反転の基準線1点目待ち
+        case awaitingMirrorB      // 反転の基準線2点目待ち
     }
 
     public private(set) var phase: Phase = .idle
@@ -49,8 +78,12 @@ public final class EditOperation {
     public private(set) var numericBuffer = ""
     /// 数値入力の距離指定で使う「最後のカーソル位置」
     public private(set) var lastCursor: Vec2 = .zero
-    /// 角度拘束(ツールバーのパレットと連動。移動・複写の方向に効く)
+    /// 角度拘束(ツールバーのパレットと連動。移動・複写の方向/反転の基準線に効く)
     public var angleConstraint: AngleConstraint = .free
+    /// 移動・複写の角度プロパティ(度・反時計回り正)。0以外で「回転しながら配置」
+    public var rotationDegrees: Double = 0
+    /// 反転の基準線1点目
+    public private(set) var mirrorA: Vec2?
 
     public init() {}
 
@@ -60,9 +93,11 @@ public final class EditOperation {
     public func begin(_ kind: EditOpKind, hasSelection: Bool) {
         guard hasSelection else { return }
         self.kind = kind
-        phase = .awaitingBase
+        phase = kind.isMirror ? .awaitingMirrorA : .awaitingBase
         basePoint = nil
         referenceAngle = nil
+        mirrorA = nil
+        rotationDegrees = 0
         numericBuffer = ""
     }
 
@@ -70,6 +105,7 @@ public final class EditOperation {
         phase = .idle
         basePoint = nil
         referenceAngle = nil
+        mirrorA = nil
         numericBuffer = ""
     }
 
@@ -90,10 +126,13 @@ public final class EditOperation {
             guard let base = basePoint else { return nil }
             let target = constrained(from: base, to: p)
             let delta = target - base
+            let result: EditTransform = abs(rotationDegrees) > 1e-9
+                ? .moveRotated(base: base, delta: delta, angle: rotationDegrees * .pi / 180)
+                : .translate(delta)
             if kind == .move {
                 finishIfSingleShot()
             }
-            return .translate(delta)
+            return result
 
         case .awaitingAngleRef:
             guard let base = basePoint else { return nil }
@@ -112,22 +151,49 @@ public final class EditOperation {
                 finishIfSingleShot()
             }
             return .rotate(center: base, angle: angle)
+
+        case .awaitingMirrorA:
+            mirrorA = p
+            phase = .awaitingMirrorB
+            return nil
+
+        case .awaitingMirrorB:
+            guard let a = mirrorA else { return nil }
+            let b = constrained(from: a, to: p)
+            guard a.distance(to: b) > 1e-9 else { return nil }
+            if kind == .mirror {
+                finishIfSingleShot()
+            } else {
+                // 反転複写: 次は別の基準線を指示できるよう1点目からやり直す
+                mirrorA = nil
+                phase = .awaitingMirrorA
+            }
+            return .mirror(a: a, b: b)
         }
     }
 
     /// プレビュー用の変換(基準点などが決まっていれば)
     public func previewTransform(cursor: Vec2) -> EditTransform? {
         lastCursor = cursor
-        guard let base = basePoint else { return nil }
         switch phase {
         case .awaitingTarget:
+            guard let base = basePoint else { return nil }
             let target = constrained(from: base, to: cursor)
-            return .translate(target - base)
+            let delta = target - base
+            if abs(rotationDegrees) > 1e-9 {
+                return .moveRotated(base: base, delta: delta, angle: rotationDegrees * .pi / 180)
+            }
+            return .translate(delta)
         case .awaitingAngleTarget:
-            guard let ref = referenceAngle else { return nil }
+            guard let base = basePoint, let ref = referenceAngle else { return nil }
             let d = cursor - base
             guard d.length > 1e-9 else { return nil }
             return .rotate(center: base, angle: normalized(atan2(d.y, d.x) - ref))
+        case .awaitingMirrorB:
+            guard let a = mirrorA else { return nil }
+            let b = constrained(from: a, to: cursor)
+            guard a.distance(to: b) > 1e-9 else { return nil }
+            return .mirror(a: a, b: b)
         default:
             return nil
         }
@@ -184,17 +250,21 @@ public final class EditOperation {
             return .rotate(center: base, angle: degrees * .pi / 180)
         }
 
+        var delta: Vec2?
         if comps.count == 2, let dx = Double(comps[0]), let dy = Double(comps[1]) {
-            return .translate(Vec2(dx, dy))
-        }
-        if comps.count == 1, let dist = Double(comps[0]), abs(dist) > 0.001 {
+            delta = Vec2(dx, dy)
+        } else if comps.count == 1, let dist = Double(comps[0]), abs(dist) > 0.001 {
             let target = constrained(from: base, to: lastCursor)
             let dir = target - base
             let len = dir.length
             guard len > 1e-9 else { return nil }
-            return .translate(dir * (dist / len))
+            delta = dir * (dist / len)
         }
-        return nil
+        guard let delta else { return nil }
+        if abs(rotationDegrees) > 1e-9 {
+            return .moveRotated(base: base, delta: delta, angle: rotationDegrees * .pi / 180)
+        }
+        return .translate(delta)
     }
 
     // MARK: - 内部
@@ -203,6 +273,7 @@ public final class EditOperation {
         phase = .idle
         basePoint = nil
         referenceAngle = nil
+        mirrorA = nil
     }
 
     /// 角度拘束(パレット連動)。移動・複写の方向を丸める
@@ -236,12 +307,18 @@ public final class EditOperation {
             return "\(kind.label): 基準点(回転中心)を指示"
         case .awaitingTarget:
             let cont = kind == .copy ? "(クリックで連続配置 / esc終了)" : ""
-            return "\(kind.label): \(kind == .move ? "移動先" : "配置先")を指示\(cont) — 数値=距離 / x,y=相対 / ⏎確定" + constraint + num
+            let rot = abs(rotationDegrees) > 1e-9 ? String(format: " [回転%.0f°]", rotationDegrees) : ""
+            return "\(kind.label)\(rot): \(kind == .move ? "移動先" : "配置先")を指示\(cont) — 数値=距離 / x,y=相対 / ⏎確定" + constraint + num
         case .awaitingAngleRef:
             return "\(kind.label): 方向1を指示(または角度を数値⏎ 例: 90=反時計回り90°)" + num
         case .awaitingAngleTarget:
             let cont = kind == .rotateCopy ? "(クリックで連続配置 / esc終了)" : ""
             return "\(kind.label): 方向2を指示\(cont) — 数値⏎=角度(度)" + num
+        case .awaitingMirrorA:
+            return "\(kind.label): 基準線の1点目を指示(この線に対して鏡映)"
+        case .awaitingMirrorB:
+            let cont = kind == .mirrorCopy ? "(確定後、別の基準線で連続 / esc終了)" : ""
+            return "\(kind.label): 基準線の2点目を指示\(cont)" + constraint
         }
     }
 }

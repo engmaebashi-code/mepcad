@@ -34,6 +34,10 @@ final class CanvasUIState: ObservableObject {
     @Published var gridOn = true
     @Published var gridSpacing: Double = 250
     @Published var auxOn = true
+    /// 実行中の編集操作(コマンドプロパティカードの表示用)
+    @Published var activeEditOp: EditOpKind?
+    /// 移動・複写の角度プロパティ(度)
+    @Published var editRotation: Double = 0
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -133,6 +137,20 @@ struct ContentView: View {
             ZStack(alignment: .trailing) {
                 CanvasView(controller: controller)
                     .frame(minWidth: 800, minHeight: 500)
+
+                // コマンドプロパティカード(移動・複写中の角度指定 — FILDERのコマンドプロパティ相当)
+                if let op = uiState.activeEditOp, op.supportsRotationProperty {
+                    VStack {
+                        HStack {
+                            EditPropertyCard(controller: controller, uiState: uiState)
+                                .onHover { controller.uiHovering = $0 }
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
 
                 // ガラス調自動格納パネル(出現トリガはキャンバス側の右端接近検知)
                 if panelShown {
@@ -342,6 +360,12 @@ struct ContentView: View {
             controller.onAuxiliaryChanged = { visible in
                 uiState.auxOn = visible
             }
+            controller.onEditOpChanged = { kind in
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                    uiState.activeEditOp = kind
+                }
+                uiState.editRotation = 0
+            }
             uiState.updatePalette(from: controller.theme)
             controller.publishInitialState()
         }
@@ -367,6 +391,73 @@ struct ContentView: View {
         panelHideWork = work
         // 少し待ってから格納(右端→パネルへ移動する間に消えないよう猶予を持たせる)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+}
+
+/// 移動・複写中に出るコマンドプロパティカード(角度=回転しながら配置)
+struct EditPropertyCard: View {
+    let controller: CanvasController
+    @ObservedObject var uiState: CanvasUIState
+    @State private var customAngle = ""
+
+    private let presets: [Double] = [0, 90, 180, 270]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("コマンドプロパティ — \(uiState.activeEditOp?.label ?? "")")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 5) {
+                Text("角度")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                ForEach(presets, id: \.self) { deg in
+                    Button {
+                        apply(deg)
+                    } label: {
+                        Text("\(Int(deg))°")
+                            .font(.system(size: 11, weight: uiState.editRotation == deg ? .bold : .regular))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(uiState.editRotation == deg ? Color.blue : Color.primary.opacity(0.07),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .foregroundStyle(uiState.editRotation == deg ? Color.white : Color.primary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                TextField("自由", text: $customAngle)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 52)
+                    .onSubmit {
+                        if let deg = Double(customAngle.trimmingCharacters(in: .whitespaces)) {
+                            apply(deg)
+                        }
+                    }
+                Text("°")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("回転しながら配置(反時計回り正)。反転は右クリック→反転/反転複写")
+                .font(.system(size: 9.5))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
+    }
+
+    private func apply(_ degrees: Double) {
+        uiState.editRotation = degrees
+        controller.setEditRotation(degrees)
     }
 }
 

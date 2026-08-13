@@ -118,6 +118,37 @@ final class HitTestTests: XCTestCase {
         XCTAssertEqual(b, Vec2(100.3, 0.7))
     }
 
+    func testMirroredAcrossHorizontalAxis() {
+        let e = line(10, 20, 100, 50)
+        // x軸(y=0の水平線)に対して鏡映 → y符号反転
+        let m = e.mirrored(acrossLineFrom: Vec2(0, 0), to: Vec2(100, 0))
+        guard case .line(let a, let b) = m.kind else { return XCTFail() }
+        XCTAssertEqual(a.x, 10, accuracy: 1e-9)
+        XCTAssertEqual(a.y, -20, accuracy: 1e-9)
+        XCTAssertEqual(b.x, 100, accuracy: 1e-9)
+        XCTAssertEqual(b.y, -50, accuracy: 1e-9)
+    }
+
+    func testMirroredAcrossVerticalAxis() {
+        // x=100の垂直線に対して鏡映 → x' = 200 - x
+        let e = Entity(layer: .zero, kind: .circle(center: Vec2(30, 40), radius: 25))
+        let m = e.mirrored(acrossLineFrom: Vec2(100, 0), to: Vec2(100, 100))
+        guard case .circle(let c, let r) = m.kind else { return XCTFail() }
+        XCTAssertEqual(c.x, 170, accuracy: 1e-9)
+        XCTAssertEqual(c.y, 40, accuracy: 1e-9)
+        XCTAssertEqual(r, 25, accuracy: 1e-9)
+    }
+
+    func testMirroredArcKeepsCCW() {
+        // 0°→90°の弧をx軸で鏡映 → -90°→0°(CCW維持のため開始/終了が入れ替わる)
+        let e = Entity(layer: .zero,
+                       kind: .arc(center: Vec2(0, 0), radius: 100, startAngle: 0, endAngle: .pi / 2))
+        let m = e.mirrored(acrossLineFrom: Vec2(0, 0), to: Vec2(1, 0))
+        guard case .arc(_, _, let sa, let ea) = m.kind else { return XCTFail() }
+        XCTAssertEqual(sa, -.pi / 2, accuracy: 1e-9)
+        XCTAssertEqual(ea, 0, accuracy: 1e-9)
+    }
+
     func testDuplicatedNewID() {
         let e = line(0, 0, 100, 0)
         let copy = e.duplicated(by: Vec2(10, 0))

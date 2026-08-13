@@ -203,6 +203,50 @@ extension Entity {
         return copy
     }
 
+    /// 基準線(a-b)に対して鏡映したコピーを返す(idは維持)。
+    /// 円弧は向き(CCW)を保つよう開始/終了角を入れ替える。文字は位置と角度のみ鏡映
+    /// (文字自体は裏返さない — CADの慣例)。
+    public func mirrored(acrossLineFrom a: Vec2, to b: Vec2) -> Entity {
+        let d = b - a
+        let len = d.length
+        guard len > 1e-9 else { return self }
+        let axisAngle = atan2(d.y, d.x)
+        let c = cos(axisAngle)
+        let s = sin(axisAngle)
+
+        func reflect(_ p: Vec2) -> Vec2 {
+            // 軸をx軸に合わせて y→-y、戻す
+            let px = p.x - a.x
+            let py = p.y - a.y
+            let lx = px * c + py * s
+            let ly = -px * s + py * c
+            let ry = -ly
+            return Vec2(a.x + lx * c - ry * s, a.y + lx * s + ry * c)
+        }
+
+        func reflectAngle(_ angle: Double) -> Double {
+            2 * axisAngle - angle
+        }
+
+        var copy = self
+        switch kind {
+        case .line(let p1, let p2):
+            copy.kind = .line(a: reflect(p1), b: reflect(p2))
+        case .circle(let center, let r):
+            copy.kind = .circle(center: reflect(center), radius: r)
+        case .arc(let center, let r, let sa, let ea):
+            // 鏡映は向きを反転させるので、CCWを保つため開始/終了を入れ替える
+            copy.kind = .arc(center: reflect(center), radius: r,
+                             startAngle: reflectAngle(ea), endAngle: reflectAngle(sa))
+        case .text(let p, let content, let h, let angle):
+            copy.kind = .text(position: reflect(p), content: content,
+                              height: h, angle: reflectAngle(angle))
+        case .point(let p):
+            copy.kind = .point(position: reflect(p))
+        }
+        return copy
+    }
+
     /// 平行移動した複製を返す(新しいid=複写用)
     public func duplicated(by delta: Vec2) -> Entity {
         var copy = translated(by: delta)

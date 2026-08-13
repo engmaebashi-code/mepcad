@@ -111,6 +111,8 @@ final class CanvasController: NSObject {
     var onGridSpacingChanged: ((Double) -> Void)?
     /// 補助線表示状態の変化(ステータスバー表示の同期用)
     var onAuxiliaryChanged: ((Bool) -> Void)?
+    /// 編集操作の開始/終了(コマンドプロパティカードの表示用。nil=非アクティブ)
+    var onEditOpChanged: ((EditOpKind?) -> Void)?
 
     override init() {
         let doc = Document()
@@ -361,6 +363,16 @@ final class CanvasController: NSObject {
         editOp.angleConstraint = tools.angleConstraint  // パレットの角度拘束を移動・複写にも効かせる
         editOp.begin(kind, hasSelection: true)
         ghostTransform = nil
+        onEditOpChanged?(kind)
+        onInfo?(editOp.hint)
+        needsOverlayRedraw?()
+    }
+
+    /// 移動・複写の角度プロパティ(度)。コマンドプロパティカードから設定
+    func setEditRotation(_ degrees: Double) {
+        editOp.rotationDegrees = degrees
+        // ゴーストを現在のカーソル位置で更新
+        ghostTransform = editOp.previewTransform(cursor: editOp.lastCursor)
         onInfo?(editOp.hint)
         needsOverlayRedraw?()
     }
@@ -372,6 +384,7 @@ final class CanvasController: NSObject {
         let world = transform.toWorld(effective)
         if let result = editOp.click(at: world) {
             commitEditTransform(result)  // 結果メッセージはコミット側が出す
+            if !editOp.isActive { onEditOpChanged?(nil) }
         } else if editOp.isActive {
             onInfo?(editOp.hint)
         }
@@ -398,6 +411,20 @@ final class CanvasController: NSObject {
             }
             commandStack.run(AddEntitiesCommand(name: "回転複写", entities: copies))
             onInfo?(String(format: "%d個を %.1f° 回転複写しました — 続けてクリックで連続配置 / escで終了", copies.count, angle * 180 / .pi))
+        case (.move, .moveRotated(_, _, let angle)):
+            commandStack.run(TransformEntitiesCommand(name: "回転移動", ids: selection) { $0.applying(result) })
+            onInfo?(String(format: "%d個を %.0f° 回転しながら移動しました(⌘Zで取り消し)", selection.count, angle * 180 / .pi))
+        case (.copy, .moveRotated(_, _, let angle)):
+            let copies = selectedEntities.map { $0.duplicated(by: .zero).applying(result) }
+            commandStack.run(AddEntitiesCommand(name: "回転複写配置", entities: copies))
+            onInfo?(String(format: "%d個を %.0f° 回転しながら複写しました — 続けてクリックで連続配置 / escで終了", copies.count, angle * 180 / .pi))
+        case (.mirror, .mirror):
+            commandStack.run(TransformEntitiesCommand(name: "反転", ids: selection) { $0.applying(result) })
+            onInfo?("\(selection.count)個を基準線で反転しました(⌘Zで取り消し)")
+        case (.mirrorCopy, .mirror):
+            let copies = selectedEntities.map { $0.duplicated(by: .zero).applying(result) }
+            commandStack.run(AddEntitiesCommand(name: "反転複写", entities: copies))
+            onInfo?("\(copies.count)個を反転複写しました — 別の基準線で連続 / escで終了")
         default:
             break
         }
@@ -407,6 +434,7 @@ final class CanvasController: NSObject {
         guard editOp.isActive else { return }
         editOp.cancel()
         ghostTransform = nil
+        onEditOpChanged?(nil)
         publishSelectionHint()
         needsOverlayRedraw?()
     }
@@ -431,6 +459,8 @@ final class CanvasController: NSObject {
             menu.addItem(menuItem("移動", #selector(menuMove)))
             menu.addItem(menuItem("回転", #selector(menuRotate)))
             menu.addItem(menuItem("回転複写", #selector(menuRotateCopy)))
+            menu.addItem(menuItem("反転", #selector(menuMirror)))
+            menu.addItem(menuItem("反転複写", #selector(menuMirrorCopy)))
             menu.addItem(.separator())
             // レイヤ間の移動・複写(グループ→レイヤの2段サブメニュー)
             menu.addItem(layerSubmenu(title: "レイヤへ移動", action: #selector(menuMoveToLayer(_:))))
@@ -493,6 +523,8 @@ final class CanvasController: NSObject {
     @objc private func menuMove() { beginEditOperation(.move) }
     @objc private func menuRotate() { beginEditOperation(.rotate) }
     @objc private func menuRotateCopy() { beginEditOperation(.rotateCopy) }
+    @objc private func menuMirror() { beginEditOperation(.mirror) }
+    @objc private func menuMirrorCopy() { beginEditOperation(.mirrorCopy) }
     @objc private func menuDelete() { deleteSelection() }
     @objc private func menuDeselect() { clearSelection() }
     @objc private func menuSelectAll() { selectAll() }
@@ -634,6 +666,7 @@ final class CanvasController: NSObject {
                 self?.commitEditTransform(result)
                 self?.ghostTransform = nil
             }
+            if committed, !editOp.isActive { onEditOpChanged?(nil) }
             if handled {
                 // コミット時は結果メッセージ(commitEditDelta側)を残す
                 if !committed, editOp.isActive {

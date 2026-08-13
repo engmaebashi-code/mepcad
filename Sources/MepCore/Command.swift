@@ -134,6 +134,30 @@ public final class RotateEntitiesCommand: Command {
     }
 }
 
+/// 複数エンティティへの任意変換(回転しながら移動・鏡映など)。
+/// Undoはスナップショット復元。
+public final class TransformEntitiesCommand: Command {
+    public let name: String
+    private let ids: Set<EntityID>
+    private let transform: (Entity) -> Entity
+    private var before: [Entity] = []
+
+    public init(name: String, ids: Set<EntityID>, transform: @escaping (Entity) -> Entity) {
+        self.name = name
+        self.ids = ids
+        self.transform = transform
+    }
+
+    public func execute(on document: Document) {
+        before = document.entities(ids: ids)
+        document.replaceBulk(before.map(transform))
+    }
+
+    public func undo(on document: Document) {
+        document.replaceBulk(before)
+    }
+}
+
 /// 複数エンティティの属性変更(プロパティパネルからの一括変更)
 public struct UpdateEntitiesCommand: Command {
     public let name: String

@@ -228,6 +228,63 @@ final class SelectionEditTests: XCTestCase {
         XCTAssertEqual(op.phase, .awaitingTarget)
     }
 
+    // MARK: - 回転しながら移動/複写(角度プロパティ)・反転
+
+    func testMoveWithRotationProperty() {
+        let op = EditOperation()
+        op.begin(.move, hasSelection: true)
+        op.rotationDegrees = 180
+        _ = op.click(at: Vec2(0, 0))                      // 基準点
+        let result = op.click(at: Vec2(500, 0))           // 移動先
+        guard case .moveRotated(let base, let delta, let angle)? = result else { return XCTFail() }
+        XCTAssertEqual(base, Vec2(0, 0))
+        XCTAssertEqual(delta, Vec2(500, 0))
+        XCTAssertEqual(abs(angle), .pi, accuracy: 1e-9)
+    }
+
+    func testApplyingMoveRotated() {
+        // (100,0)-(200,0)の線を基準点(100,0)まわりに90°回転して(0,500)移動
+        let e = Entity(layer: normal, kind: .line(a: Vec2(100, 0), b: Vec2(200, 0)))
+        let t = EditTransform.moveRotated(base: Vec2(100, 0), delta: Vec2(0, 500), angle: .pi / 2)
+        guard case .line(let a, let b) = e.applying(t).kind else { return XCTFail() }
+        XCTAssertEqual(a.x, 100, accuracy: 1e-9)
+        XCTAssertEqual(a.y, 500, accuracy: 1e-9)
+        XCTAssertEqual(b.x, 100, accuracy: 1e-9)
+        XCTAssertEqual(b.y, 600, accuracy: 1e-9)
+    }
+
+    func testMirrorTwoPointAxis() {
+        let op = EditOperation()
+        op.begin(.mirror, hasSelection: true)
+        XCTAssertEqual(op.phase, .awaitingMirrorA)
+        XCTAssertNil(op.click(at: Vec2(0, 0)))            // 基準線1点目
+        XCTAssertEqual(op.phase, .awaitingMirrorB)
+        let result = op.click(at: Vec2(0, 100))           // 基準線2点目(垂直軸)
+        XCTAssertEqual(result, .mirror(a: Vec2(0, 0), b: Vec2(0, 100)))
+        XCTAssertEqual(op.phase, .idle)                   // 反転(移動)は1回で終了
+    }
+
+    func testMirrorCopyRestartsAxis() {
+        let op = EditOperation()
+        op.begin(.mirrorCopy, hasSelection: true)
+        _ = op.click(at: Vec2(0, 0))
+        XCTAssertNotNil(op.click(at: Vec2(0, 100)))       // 1本目の基準線で確定
+        XCTAssertEqual(op.phase, .awaitingMirrorA)        // 次は別の基準線から
+        _ = op.click(at: Vec2(50, 0))
+        XCTAssertNotNil(op.click(at: Vec2(50, 100)))
+    }
+
+    func testMirrorAxisRespectsAngleConstraint() {
+        let op = EditOperation()
+        op.angleConstraint = .deg90
+        op.begin(.mirror, hasSelection: true)
+        _ = op.click(at: Vec2(0, 0))
+        // ほぼ垂直の2点目 → 完全垂直の基準線に拘束
+        let result = op.click(at: Vec2(20, 1000))
+        guard case .mirror(_, let b)? = result else { return XCTFail() }
+        XCTAssertEqual(b.x, 0, accuracy: 1e-9)
+    }
+
     func testKeyInputIgnoredWhenIdle() {
         let op = EditOperation()
         XCTAssertFalse(op.keyInput("5") { _ in })

@@ -305,15 +305,9 @@ final class CrosshairOverlayView: NSView {
         let ghostColor = CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.45)
         let entities = controller.selectedEntities
 
-        // 変換後のゴースト本体
+        // 変換後のゴースト本体(applyingが全変換対応)
         if entities.count <= outlineDrawLimit {
-            let moved: [Entity]
-            switch ghost {
-            case .translate(let delta):
-                moved = entities.map { $0.translated(by: delta) }
-            case .rotate(let center, let angle):
-                moved = entities.map { $0.rotated(around: center, byRadians: angle) }
-            }
+            let moved = entities.map { $0.applying(ghost) }
             renderer.drawOutlines(moved, transform: controller.transform,
                                   color: ghostColor, lineWidth: 1.5, in: ctx)
         } else if case .translate(let delta) = ghost {
@@ -332,13 +326,13 @@ final class CrosshairOverlayView: NSView {
         }
 
         // ガイド線とラベル
-        guard let base = controller.editOp.basePoint else { return }
-        let sb = controller.transform.toScreen(base)
         ctx.setStrokeColor(ghostColor)
         ctx.setLineWidth(1)
         ctx.setLineDash(phase: 0, lengths: [4, 3])
         switch ghost {
         case .translate(let delta):
+            guard let base = controller.editOp.basePoint else { break }
+            let sb = controller.transform.toScreen(base)
             let st = controller.transform.toScreen(base + delta)
             ctx.move(to: CGPoint(x: sb.x, y: sb.y))
             ctx.addLine(to: CGPoint(x: st.x, y: st.y))
@@ -347,7 +341,19 @@ final class CrosshairOverlayView: NSView {
             drawOverlayLabel(String(format: "dx %.0f  dy %.0f", delta.x, delta.y),
                              at: CGPoint(x: (sb.x + st.x) / 2 + 8, y: (sb.y + st.y) / 2 - 8),
                              in: ctx)
+        case .moveRotated(let base, let delta, let angle):
+            let sb = controller.transform.toScreen(base)
+            let st = controller.transform.toScreen(base + delta)
+            ctx.move(to: CGPoint(x: sb.x, y: sb.y))
+            ctx.addLine(to: CGPoint(x: st.x, y: st.y))
+            ctx.strokePath()
+            ctx.setLineDash(phase: 0, lengths: [])
+            drawOverlayLabel(String(format: "dx %.0f  dy %.0f  ∠%.0f°", delta.x, delta.y, angle * 180 / .pi),
+                             at: CGPoint(x: (sb.x + st.x) / 2 + 8, y: (sb.y + st.y) / 2 - 8),
+                             in: ctx)
         case .rotate(_, let angle):
+            guard let base = controller.editOp.basePoint else { break }
+            let sb = controller.transform.toScreen(base)
             // 回転中心の十字と角度表示
             let r: CGFloat = 6
             ctx.move(to: CGPoint(x: sb.x - r, y: sb.y))
@@ -358,6 +364,24 @@ final class CrosshairOverlayView: NSView {
             ctx.setLineDash(phase: 0, lengths: [])
             drawOverlayLabel(String(format: "∠ %.1f°", angle * 180 / .pi),
                              at: CGPoint(x: sb.x + 10, y: sb.y - 22), in: ctx)
+        case .mirror(let a, let b):
+            // 反転の基準線(画面端まで延長した一点鎖線)
+            let sa = controller.transform.toScreen(a)
+            let sbp = controller.transform.toScreen(b)
+            let dx = sbp.x - sa.x
+            let dy = sbp.y - sa.y
+            let len = (dx * dx + dy * dy).squareRoot()
+            if len > 1e-9 {
+                let ext = 4000.0
+                ctx.setLineDash(phase: 0, lengths: [10, 4, 2, 4])
+                ctx.move(to: CGPoint(x: sa.x - dx / len * ext, y: sa.y - dy / len * ext))
+                ctx.addLine(to: CGPoint(x: sa.x + dx / len * ext, y: sa.y + dy / len * ext))
+                ctx.strokePath()
+            }
+            ctx.setLineDash(phase: 0, lengths: [])
+            drawOverlayLabel("基準線(反転)",
+                             at: CGPoint(x: (sa.x + sbp.x) / 2 + 8, y: (sa.y + sbp.y) / 2 - 8),
+                             in: ctx)
         }
     }
 
