@@ -85,13 +85,13 @@ struct LayerPanelView: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
 
-            // グループ 4×4 グリッド(Jw_cad のグループバー相当)
-            // クリック=そのグループのレイヤを下に表示 / 右クリック=表示・ロック・書込先
-            VStack(spacing: 4) {
-                ForEach(0..<4, id: \.self) { row in
-                    HStack(spacing: 4) {
-                        ForEach(0..<4, id: \.self) { col in
-                            let g = row * 4 + col
+            // グループグリッド 2段×8(Jw_cad のグループバー相当。コンパクト版)
+            // クリック=そのグループのレイヤを下に表示 / 右クリック=表示・ロック
+            VStack(spacing: 3) {
+                ForEach(0..<2, id: \.self) { row in
+                    HStack(spacing: 3) {
+                        ForEach(0..<8, id: \.self) { col in
+                            let g = row * 8 + col
                             GroupCellView(index: g,
                                           group: uiState.groups.indices.contains(g) ? uiState.groups[g] : LayerGroup(),
                                           isViewing: g == uiState.viewingGroup,
@@ -146,28 +146,31 @@ struct GroupCellView: View {
 
     var body: some View {
         Button(action: onSelect) {
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .topTrailing) {
                 Text(String(format: "%X", index))
-                    .font(.system(size: 13, weight: isCurrent ? .bold : .medium, design: .monospaced))
+                    .font(.system(size: 11, weight: isCurrent ? .bold : .regular, design: .monospaced))
                     .foregroundStyle(cellForeground)
-                    .frame(maxWidth: .infinity, minHeight: 26)
+                    .frame(maxWidth: .infinity, minHeight: 20)
+                // 状態バッジは最小限: ロックのみ小さな点で示す
                 if !group.isEditable {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 7))
-                        .foregroundStyle(.orange)
-                        .padding(2)
+                    Circle()
+                        .fill(.orange)
+                        .frame(width: 4, height: 4)
+                        .padding(2.5)
                 }
             }
-            .background(cellBackground, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isViewing ? Color.blue : Color.primary.opacity(0.12),
-                                  lineWidth: isViewing ? 1.5 : 1)
-            )
+            .background(cellBackground, in: RoundedRectangle(cornerRadius: 5))
+            .overlay {
+                // 枠線は表示中グループにだけ引く(全セルの枠をやめて視覚ノイズを減らす)
+                if isViewing {
+                    RoundedRectangle(cornerRadius: 5)
+                        .strokeBorder(Color.blue.opacity(0.9), lineWidth: 1.2)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("グループ\(String(format: "%X", index)) (\(group.scaleLabel)) — クリックでレイヤ一覧を表示 / 右クリックで表示・ロック")
+        .help("グループ\(String(format: "%X", index)) (\(group.scaleLabel)) — クリックでレイヤ一覧 / 右クリックで表示・ロック")
         .contextMenu {
             Button(group.isVisible ? "グループを非表示" : "グループを表示") {
                 onToggleVisible(!group.isVisible)
@@ -180,15 +183,15 @@ struct GroupCellView: View {
 
     private var cellForeground: Color {
         if isCurrent { return .white }
-        if !group.isVisible { return Color.primary.opacity(0.25) }
+        if !group.isVisible { return Color.primary.opacity(0.22) }
         // 空グループは薄く(中身のあるグループがひと目で分かる)
         return isEmpty ? Color.primary.opacity(0.3) : .primary
     }
 
     private var cellBackground: Color {
         if isCurrent { return .blue }
-        if !group.isVisible { return Color.primary.opacity(0.04) }
-        return Color.primary.opacity(0.07)
+        if !group.isVisible { return Color.primary.opacity(0.03) }
+        return Color.primary.opacity(0.06)
     }
 }
 
