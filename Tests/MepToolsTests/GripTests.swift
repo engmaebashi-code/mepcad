@@ -132,6 +132,72 @@ final class GripTests: XCTestCase {
 
     // MARK: - スナップ索引の除外(編集中の自己吸着防止)
 
+    // MARK: - 寸法グリップ(M5.4.1: 補助線の2本同時伸縮)
+
+    func makeDim(extensionLength: Double? = nil) -> Entity {
+        Entity(layer: layer,
+               kind: .dimension(a: Vec2(0, 0), b: Vec2(1000, 0),
+                                linePoint: Vec2(0, 500), angle: 0,
+                                attrs: DimAttributes(terminator: .dot, textHeight: 125,
+                                                     extensionLength: extensionLength)))
+    }
+
+    /// 寸法のグリップ: 測定点2+寸法線位置1+補助線の端2
+    func testGripsForDimension() {
+        let grips = GripEngine.grips(for: makeDim())
+        XCTAssertEqual(grips.count, 5)
+        XCTAssertEqual(grips[0].kind, .dimStart)
+        XCTAssertEqual(grips[0].point, Vec2(0, 0))
+        XCTAssertEqual(grips[1].kind, .dimEnd)
+        XCTAssertEqual(grips[2].kind, .dimLine)
+        XCTAssertEqual(grips[2].point.x, 500, accuracy: 1e-9)
+        XCTAssertEqual(grips[2].point.y, 500, accuracy: 1e-9)
+        // 補助線の端=測定点側の始点(測定点までモードでは gap=50 の位置)
+        XCTAssertEqual(grips[3].kind, .dimExtension)
+        XCTAssertEqual(grips[3].point.y, 50, accuracy: 1e-9)
+        XCTAssertEqual(grips[4].kind, .dimExtension)
+    }
+
+    /// 補助線グリップのドラッグ: 寸法線からの垂直距離が長さになる(2本同時)
+    func testApplyDimExtensionDrag() {
+        let dim = makeDim()
+        // 寸法線(y=500)から200mmの位置へドラッグ → 長さ200
+        let e = GripEngine.apply(.dimExtension, to: dim, at: Vec2(0, 300))
+        guard case .dimension(_, _, _, _, let attrs) = e.kind else { return XCTFail() }
+        XCTAssertEqual(attrs.extensionLength ?? -1, 200, accuracy: 1e-9)
+        // レイアウトも2本とも始点y=300になる
+        let layout = DimensionGeometry.layout(of: e)!
+        XCTAssertEqual(layout.extLines.count, 2)
+        XCTAssertEqual(layout.extLines[0].0.y, 300, accuracy: 1e-9)
+        XCTAssertEqual(layout.extLines[1].0.y, 300, accuracy: 1e-9)
+    }
+
+    /// 測定点の近くまで引っ張ると「測定点まで」(nil)に戻る
+    func testApplyDimExtensionDragToMeasurePoint() {
+        let dim = makeDim(extensionLength: 100)
+        // 測定点(y=0)近くへ(gap=50以内: 500-50=450以上の長さになる位置)
+        let e = GripEngine.apply(.dimExtension, to: dim, at: Vec2(500, 20))
+        guard case .dimension(_, _, _, _, let attrs) = e.kind else { return XCTFail() }
+        XCTAssertNil(attrs.extensionLength)
+    }
+
+    /// 寸法線ぎりぎりまで縮めても補助線は消えない(最小長=gapの半分。「なし」は選択肢から)
+    func testApplyDimExtensionDragNeverVanishes() {
+        let dim = makeDim()
+        let e = GripEngine.apply(.dimExtension, to: dim, at: Vec2(500, 499))
+        guard case .dimension(_, _, _, _, let attrs) = e.kind else { return XCTFail() }
+        XCTAssertEqual(attrs.extensionLength ?? -1, 25, accuracy: 1e-9)  // gap50の半分
+        XCTAssertEqual(DimensionGeometry.layout(of: e)!.extLines.count, 2)
+    }
+
+    /// 寸法線の反対側へドラッグしても距離の絶対値で効く
+    func testApplyDimExtensionDragOppositeSide() {
+        let dim = makeDim()
+        let e = GripEngine.apply(.dimExtension, to: dim, at: Vec2(500, 800))
+        guard case .dimension(_, _, _, _, let attrs) = e.kind else { return XCTFail() }
+        XCTAssertEqual(attrs.extensionLength ?? -1, 300, accuracy: 1e-9)
+    }
+
     func testSnapRebuildExcluding() {
         let doc = Document()
         let e1 = Entity(layer: layer, kind: .line(a: Vec2(0, 0), b: Vec2(100, 0)))

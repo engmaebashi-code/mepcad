@@ -22,6 +22,7 @@ public struct Grip: Equatable, Sendable {
         case dimStart                      // 寸法: 測定点a
         case dimEnd                        // 寸法: 測定点b
         case dimLine                       // 寸法: 寸法線の位置(引出し量の調整)
+        case dimExtension                  // 寸法: 補助線の端(2本同時に伸縮)
     }
 
     public let entityID: EntityID
@@ -71,9 +72,14 @@ public enum GripEngine {
             guard let layout = DimensionGeometry.layout(of: entity) else { return [] }
             let mid = Vec2((layout.dimLine.0.x + layout.dimLine.1.x) / 2,
                            (layout.dimLine.0.y + layout.dimLine.1.y) / 2)
-            return [Grip(entityID: entity.id, kind: .dimStart, point: a),
-                    Grip(entityID: entity.id, kind: .dimEnd, point: b),
-                    Grip(entityID: entity.id, kind: .dimLine, point: mid)]
+            var grips = [Grip(entityID: entity.id, kind: .dimStart, point: a),
+                         Grip(entityID: entity.id, kind: .dimEnd, point: b),
+                         Grip(entityID: entity.id, kind: .dimLine, point: mid)]
+            // 補助線の端(測定点側)。どちらを掴んでも2本同時に伸縮する
+            for ext in layout.extLines {
+                grips.append(Grip(entityID: entity.id, kind: .dimExtension, point: ext.0))
+            }
+            return grips
         }
     }
 
@@ -112,6 +118,24 @@ public enum GripEngine {
         case (.dimLine, .dimension(let a, let b, _, let angle, let attrs)):
             // 寸法線がpを通るように動かす(方向・測定点は不変=引出し量の調整)
             copy.kind = .dimension(a: a, b: b, linePoint: p, angle: angle, attrs: attrs)
+        case (.dimExtension, .dimension(let a, let b, let lp, let angle, var attrs)):
+            // 補助線の長さ=寸法線からカーソルまでの垂直距離(2本同時に変わる)。
+            // 測定点の近くまで引っ張ったら「測定点まで」モードに戻す
+            let u = Vec2(cos(angle), sin(angle))
+            let n = Vec2(-u.y, u.x)
+            let len = abs((p.x - lp.x) * n.x + (p.y - lp.y) * n.y)
+            let da = abs((a.x - lp.x) * n.x + (a.y - lp.y) * n.y)
+            let db = abs((b.x - lp.x) * n.x + (b.y - lp.y) * n.y)
+            // 近い方の測定点距離を閾値にする: どちらのグリップを掴んでいても
+            // 測定点まで引っ張れば「測定点まで」に戻せる(各線は自分の測定点で頭打ち)
+            if len >= min(da, db) - attrs.extensionGap {
+                attrs.extensionLength = nil
+            } else {
+                // ドラッグでは0(補助線消滅=グリップも消える)にはしない。
+                // 「なし」にしたいときはプロパティの選択肢から
+                attrs.extensionLength = max(len, attrs.extensionGap * 0.5)
+            }
+            copy.kind = .dimension(a: a, b: b, linePoint: lp, angle: angle, attrs: attrs)
         default:
             return entity
         }

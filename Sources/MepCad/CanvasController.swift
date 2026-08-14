@@ -672,6 +672,8 @@ final class CanvasController: NSObject {
             return "寸法: 測定点を動かす(寸法値も追随)— スナップ有効 / \(commit) / esc中止"
         case .dimLine:
             return "寸法: 寸法線の位置(引出し量)を動かす / \(commit) / esc中止"
+        case .dimExtension:
+            return "寸法: 補助線の長さを調整(2本同時)— 測定点近くまで引くと「測定点まで」/ \(commit) / esc中止"
         }
     }
 
