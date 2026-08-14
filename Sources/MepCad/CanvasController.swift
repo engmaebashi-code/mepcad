@@ -1456,6 +1456,8 @@ extension CanvasController {
         }
         if changed {
             onInfo?(String(format: "文字サイズを紙面%.1fmmにしました(⌘Zで取り消し)", paperMm))
+        } else if selectedEntities.contains(where: { if case .text = $0.kind { return true }; return false }) {
+            onInfo?(String(format: "選択中の文字はすでに紙面%.1fmmです", paperMm))
         }
     }
 }

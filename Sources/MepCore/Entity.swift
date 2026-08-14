@@ -66,8 +66,23 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             // 円弧は簡易的に全周のボックス(M1では十分)
             box.union(point: Vec2(c.x - r, c.y - r))
             box.union(point: Vec2(c.x + r, c.y + r))
-        case .text(let p, _, _, _):
-            box.union(point: p)
+        case .text(let p, let content, let height, let angle):
+            // 文字の概算グリフボックス(M5.3.1)。
+            // 以前は基準点1点だけだったため、選択エンジンの前段フィルタ
+            // (bounds±許容距離)が文字本体のクリックを弾いてしまい、
+            // 「文字が選択できない→プロパティの文字セクションが出ない」実害があった。
+            let width = max(height * 0.6, Double(content.count) * height * 0.9)
+            if abs(angle) < 1e-12 {
+                box.union(point: p)
+                box.union(point: Vec2(p.x + width, p.y + height))
+            } else {
+                let c = cos(angle)
+                let s = sin(angle)
+                for corner in [Vec2(0, 0), Vec2(width, 0), Vec2(width, height), Vec2(0, height)] {
+                    box.union(point: Vec2(p.x + corner.x * c - corner.y * s,
+                                          p.y + corner.x * s + corner.y * c))
+                }
+            }
         case .point(let p):
             box.union(point: p)
         case .blockRef(_, let insert, _, _, _, let cached):

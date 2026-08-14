@@ -290,6 +290,39 @@ final class SelectionEditTests: XCTestCase {
         XCTAssertFalse(op.keyInput("5") { _ in })
     }
 
+    // MARK: - 文字の選択(M5.3.1回帰: 本体クリックで選べること)
+
+    /// 文字はグリフ本体のどこをクリックしても選択できる
+    /// (以前はboundsが基準点1点でtopmostHitの前段フィルタに弾かれ、
+    ///  プロパティの文字セクションが出ない実害があった)
+    func testTextSelectableOnGlyphBody(){
+        let text = Entity(layer: normal,
+                          kind: .text(position: Vec2(1000, 500), content: "AC-1",
+                                      height: 350, angle: 0))
+        // グリフ中央付近(基準点から遠い)をクリック
+        let mid = Vec2(1000 + 350 * 0.9 * 2, 500 + 175)
+        let hit = SelectionEngine.topmostHit(at: mid, tolerance: 50,
+                                             entities: [text], groups: groups)
+        XCTAssertEqual(hit, text.id)
+        // boundsもグリフボックスを覆う
+        let box = text.bounds
+        XCTAssertEqual(box.minX, 1000)
+        XCTAssertGreaterThanOrEqual(box.maxX, 1000 + 4 * 350 * 0.9 - 1)
+        XCTAssertEqual(box.maxY, 850, accuracy: 1e-9)
+    }
+
+    /// 回転した文字のboundsは回転後の四隅を覆う
+    func testRotatedTextBounds() {
+        let text = Entity(layer: normal,
+                          kind: .text(position: Vec2(0, 0), content: "AB",
+                                      height: 100, angle: .pi / 2))
+        let box = text.bounds
+        // 90°回転: 幅方向が+Y、 高さ方向が-X
+        XCTAssertEqual(box.minX, -100, accuracy: 1e-9)
+        XCTAssertGreaterThanOrEqual(box.maxY, 100)
+        XCTAssertEqual(box.minY, 0, accuracy: 1e-9)
+    }
+
     // MARK: - 拡大縮小(M4.9)
 
     /// 基準点→参照点→目標点: 距離比が倍率になる

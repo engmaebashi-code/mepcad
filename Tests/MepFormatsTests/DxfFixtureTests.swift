@@ -121,12 +121,14 @@ final class DxfFixtureTests: XCTestCase {
         XCTAssertEqual(counts["circle"], 5)
         XCTAssertEqual(counts["text"], 30)       // TEXT 1 + MTEXT 29
 
-        // 実寸のバウンディングボックス(Python参照実装の値と一致すること。
-        // 文字は位置点のみ・円弧は全周ボックスというMepCad側の仕様で計算)
+        // 実寸のバウンディングボックス。
+        // 下端・左端は幾何(線・円弧)で決まるためPython参照実装と厳密一致。
+        // 右端・上端は文字の概算グリフ幅(M5.3.1で位置点→ボックスに変更)を含むため
+        // 幾何の実測範囲($EXTMAX相当)以上であることのみ確認する
         let box = doc.bounds
         XCTAssertEqual(box.minX, -1418.7, accuracy: 1)
         XCTAssertEqual(box.minY, -1115.0, accuracy: 1)
-        XCTAssertEqual(box.maxX, 1493.2, accuracy: 1)
-        XCTAssertEqual(box.maxY, 1325.0, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(box.maxX, 1493)
+        XCTAssertGreaterThanOrEqual(box.maxY, 1325)
     }
 }
