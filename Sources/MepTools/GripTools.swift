@@ -60,6 +60,10 @@ public enum GripEngine {
             return [Grip(entityID: entity.id, kind: .position, point: p)]
         case .blockRef(_, let insert, _, _, _, _):
             return [Grip(entityID: entity.id, kind: .position, point: insert)]
+        case .hatch(let boundary, _):
+            // v1は位置グリップのみ(先頭頂点を掴んで全体移動。頂点伸縮は次回)
+            guard let first = boundary.first else { return [] }
+            return [Grip(entityID: entity.id, kind: .position, point: first)]
         }
     }
 
@@ -101,6 +105,7 @@ public enum GripEngine {
         case .text(let p, _, _, _): return p
         case .point(let p): return p
         case .blockRef(_, let insert, _, _, _, _): return insert
+        case .hatch(let boundary, _): return boundary.first
         default: return nil
         }
     }

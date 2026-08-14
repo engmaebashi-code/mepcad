@@ -50,6 +50,12 @@ final class CanvasUIState: ObservableObject {
     @Published var activeEditOp: EditOpKind?
     /// 移動・複写の角度プロパティ(度)
     @Published var editRotation: Double = 0
+    // ハッチング設定(FILDER準拠: パターン・A/B間隔・角度・実寸/印刷寸)
+    @Published var hatchKind: HatchPattern.Kind = .horizontal
+    @Published var hatchA: Double = 2      // A間隔
+    @Published var hatchB: Double = 1      // B間隔
+    @Published var hatchAngle: Double = 45 // 度
+    @Published var hatchPaperUnits = true  // true=印刷寸(紙面mm×縮尺)、false=実寸mm
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -124,6 +130,7 @@ private func toolIcon(_ kind: ToolKind) -> String {
     case .centerline: return "align.horizontal.center"
     case .point: return "smallcircle.filled.circle"
     case .text: return "textformat"
+    case .hatch: return "line.3.horizontal"
     }
 }
 
@@ -155,6 +162,20 @@ struct ContentView: View {
                     VStack {
                         HStack {
                             EditPropertyCard(controller: controller, uiState: uiState)
+                                .onHover { controller.uiHovering = $0 }
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // ハッチングプロパティカード(パターン・間隔・角度 — FILDERのハッチングダイアログ相当)
+                if uiState.tool == .hatch {
+                    VStack {
+                        HStack {
+                            HatchPropertyCard(uiState: uiState)
                                 .onHover { controller.uiHovering = $0 }
                             Spacer()
                         }
@@ -409,6 +430,17 @@ struct ContentView: View {
                 uiState.paperSize = paper
                 uiState.scaleDenominator = scale
             }
+            controller.hatchPatternProvider = { [weak controller, weak uiState] in
+                guard let controller, let uiState else {
+                    return HatchPattern(kind: .horizontal, spacingA: 100, spacingB: 50, angle: .pi / 4)
+                }
+                // 印刷寸=紙面mm×書込グループの縮尺(確定時点の縮尺で換算)
+                let factor = uiState.hatchPaperUnits ? controller.document.currentScale : 1
+                return HatchPattern(kind: uiState.hatchKind,
+                                    spacingA: max(uiState.hatchA, 0.1) * factor,
+                                    spacingB: max(uiState.hatchB, 0.1) * factor,
+                                    angle: uiState.hatchAngle * .pi / 180)
+            }
             controller.onEditOpChanged = { kind in
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                     uiState.activeEditOp = kind
@@ -440,6 +472,90 @@ struct ContentView: View {
         panelHideWork = work
         // 少し待ってから格納(右端→パネルへ移動する間に消えないよう猶予を持たせる)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+}
+
+/// ハッチングツール中に出るプロパティカード(FILDERのハッチングダイアログの常駐版)
+struct HatchPropertyCard: View {
+    @ObservedObject var uiState: CanvasUIState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("ハッチング — 頂点をクリックして領域を指定")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            // パターン選択(塗り+6種)
+            HStack(spacing: 4) {
+                ForEach(HatchPattern.Kind.allCases, id: \.self) { kind in
+                    Button {
+                        uiState.hatchKind = kind
+                    } label: {
+                        Text(kind.label)
+                            .font(.system(size: 11, weight: uiState.hatchKind == kind ? .bold : .regular))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(uiState.hatchKind == kind ? Color.blue : Color.primary.opacity(0.07),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .foregroundStyle(uiState.hatchKind == kind ? Color.white : Color.primary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if uiState.hatchKind != .solid {
+                HStack(spacing: 6) {
+                    Text("A間隔")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    TextField("", value: $uiState.hatchA, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .frame(width: 50)
+                    if uiState.hatchKind.usesSpacingB {
+                        Text("B間隔")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                        TextField("", value: $uiState.hatchB, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11))
+                            .frame(width: 50)
+                    }
+                    Text("角度")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    TextField("", value: $uiState.hatchAngle, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .frame(width: 46)
+                    Text("°")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: $uiState.hatchPaperUnits) {
+                        Text("印刷寸").tag(true)
+                        Text("実寸").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 110)
+                    .help("印刷寸=紙に刷ったときのmm(縮尺を掛けて実寸に換算)/ 実寸=そのままmm")
+                }
+            }
+
+            Text(uiState.hatchKind == .solid
+                 ? "領域を塗りつぶします(色はプロパティで変更可)"
+                 : "2線/3線: A=組ピッチ・B=組内 / クロス: A=横・B=縦 / レンガ: A=段高・B=幅")
+                .font(.system(size: 9.5))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
     }
 }
 

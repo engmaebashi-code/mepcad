@@ -271,6 +271,28 @@ final class CrosshairOverlayView: NSView {
                 drawOverlayLabel(String(format: "L%.0f  A%.0f/B%.0f", len, offsetA, offsetB),
                                  at: CGPoint(x: sm.x + 8, y: sm.y - 8), in: ctx)
             }
+
+        case .polygon(let points, let cursor):
+            // ハッチング境界: 確定辺は実線相当、カーソルへのラバー+閉じる辺は破線のまま
+            guard let firstPoint = points.first else { break }
+            let first = controller.transform.toScreen(firstPoint)
+            ctx.move(to: CGPoint(x: first.x, y: first.y))
+            for p in points.dropFirst() {
+                let sp = controller.transform.toScreen(p)
+                ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+            }
+            let sc = controller.transform.toScreen(cursor)
+            ctx.addLine(to: CGPoint(x: sc.x, y: sc.y))
+            if points.count >= 2 {
+                ctx.addLine(to: CGPoint(x: first.x, y: first.y))
+            }
+            ctx.strokePath()
+            // 頂点マーク
+            ctx.setLineDash(phase: 0, lengths: [])
+            for p in points {
+                let sp = controller.transform.toScreen(p)
+                ctx.stroke(CGRect(x: sp.x - 2.5, y: sp.y - 2.5, width: 5, height: 5))
+            }
         }
         ctx.setLineDash(phase: 0, lengths: [])
 

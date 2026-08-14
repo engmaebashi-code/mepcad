@@ -12,6 +12,7 @@ public enum ToolKind: String, CaseIterable, Sendable {
     case centerline = "中心線"
     case point = "点"
     case text = "文字"
+    case hatch = "ハッチング"
 }
 
 /// オーバーレイに描くプレビュー形状(ワールド座標)
@@ -22,6 +23,7 @@ public enum PreviewShape {
     case rect(Vec2, Vec2)                                  // 対角2点
     case arc(Vec2, Double, Double, Double)                 // 中心, 半径, 開始角, 終了角(CCW)
     case doubleLine(Vec2, Vec2, Double, Double)            // 基準線a-b, A側/B側オフセット
+    case polygon([Vec2], Vec2)                             // ハッチング境界の確定頂点+カーソル
 }
 
 /// 角度拘束モード(常設パレットで切替。⇧押下は一時的に45°拘束)
@@ -52,6 +54,15 @@ public protocol DrawingToolDelegate: AnyObject {
     func toolStatusChanged(_ hint: String)
     /// ツール切替の通知(UI側の選択状態同期用)
     func toolKindChanged(_ kind: ToolKind)
+    /// ハッチングの現在設定(プロパティカードの値。印刷寸→実寸の換算は実装側で行う)
+    func toolHatchPattern() -> HatchPattern
+}
+
+extension DrawingToolDelegate {
+    /// 既定実装(テスト用スタブ等が実装しなくても済むように)
+    public func toolHatchPattern() -> HatchPattern {
+        HatchPattern(kind: .horizontal, spacingA: 100, spacingB: 50, angle: .pi / 4)
+    }
 }
 
 /// 作図ツールの状態機械(UI非依存・ユニットテスト対象)。
@@ -74,6 +85,10 @@ public final class DrawingToolController {
     public private(set) var pendingRectSize: Vec2?
     /// 角度拘束モード(ツールバーの常設パレットから設定)
     public var angleConstraint: AngleConstraint = .free
+    /// ハッチング境界の確定済み頂点
+    public private(set) var hatchPoints: [Vec2] = []
+    /// 始点クリックで閉じる判定の許容距離(ワールドmm。呼び出し側がピックボックス幅を設定)
+    public var closeTolerance: Double = 0
 
     public init(currentLayer: LayerAddress) {
         self.currentLayer = currentLayer
@@ -95,11 +110,13 @@ public final class DrawingToolController {
         anchor = nil
         arcStart = nil
         pendingRectSize = nil
+        hatchPoints = []
     }
 
     /// esc/右クリック: 作図中なら現在の作図を終了、待機中なら選択ツールへ戻る
     public func cancel() {
-        if anchor != nil || arcStart != nil || pendingRectSize != nil || !numericBuffer.isEmpty {
+        if anchor != nil || arcStart != nil || pendingRectSize != nil
+            || !hatchPoints.isEmpty || !numericBuffer.isEmpty {
             resetPoints()
             numericBuffer = ""
         } else if kind != .select {
@@ -141,6 +158,9 @@ public final class DrawingToolController {
                 return .arc(c, c.distance(to: s), a1, a2)
             }
             return .circle(c, c.distance(to: cursor))
+        case .hatch:
+            guard !hatchPoints.isEmpty else { return .none }
+            return .polygon(hatchPoints, cursor)
         default:
             return .none
         }
@@ -209,8 +229,28 @@ public final class DrawingToolController {
                            kind: .text(position: p, content: text,
                                        height: self.textHeight, angle: 0)))
             }
+
+        case .hatch:
+            // 始点の近くをクリック(スナップで正確に合う)か⏎で閉じて確定
+            if hatchPoints.count >= 3, let first = hatchPoints.first,
+               p.distance(to: first) <= max(closeTolerance, 1e-9) {
+                commitHatch()
+            } else if hatchPoints.last.map({ $0.distance(to: p) > 1e-9 }) ?? true {
+                hatchPoints.append(p)
+            }
         }
         numericBuffer = ""
+        publishHint()
+    }
+
+    /// ハッチングの確定(境界を閉じてエンティティ化。確定後は次の領域へ)
+    public func commitHatch() {
+        guard kind == .hatch, hatchPoints.count >= 3 else { return }
+        let pattern = delegate?.toolHatchPattern()
+            ?? HatchPattern(kind: .horizontal, spacingA: 100, spacingB: 50, angle: .pi / 4)
+        delegate?.toolDidProduce(Entity(layer: currentLayer,
+                                        kind: .hatch(boundary: hatchPoints, pattern: pattern)))
+        hatchPoints = []
         publishHint()
     }
 
@@ -238,6 +278,8 @@ public final class DrawingToolController {
             numericCapable = true   // 寸法(X,Y)は第1コーナー前でも指定できる
         case .doubleLine:
             numericCapable = true   // 振分は始点前でも変更できる
+        case .hatch:
+            numericCapable = hatchPoints.count >= 3   // ⏎=閉じて確定
         default:
             numericCapable = false
         }
@@ -249,7 +291,11 @@ public final class DrawingToolController {
             return true
         }
         if character == "\r" || character == "\n" {
-            applyNumericInput()
+            if kind == .hatch {
+                commitHatch()
+            } else {
+                applyNumericInput()
+            }
             return true
         }
         if character == "\u{7F}" || character == "\u{08}" {  // delete/backspace
@@ -452,6 +498,11 @@ public final class DrawingToolController {
             return "点: 配置位置をクリック"
         case .text:
             return "文字: 配置位置をクリック"
+        case .hatch:
+            if hatchPoints.isEmpty {
+                return "ハッチング: 領域の頂点を順にクリック(スナップ有効)— パターンは左上のカードで設定"
+            }
+            return "ハッチング: 次の頂点を指示(\(hatchPoints.count)点)— 始点クリックか⏎で閉じて確定 / esc中止"
         }
     }
 }

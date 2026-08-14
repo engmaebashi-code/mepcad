@@ -172,6 +172,28 @@ final class JwwGroupLayerTests: XCTestCase {
         XCTAssertTrue(doc.isSelectable(doc.current))
     }
 
+    /// JWWソリッド(塗り)が塗りエンティティとして取り込まれる(M5.2)
+    func testSolidImportedAsHatch() {
+        var d = makeDrawing()
+        // グループ0(1/50)に三角形ソリッド(図寸)と円ソリッド
+        d.solids = [
+            JwwSolid(values: [0, 0, 10, 0, 10, 8, 10, 8], layer: 0, glayer: 0, isCircleMode: false),
+            JwwSolid(values: [20, 20, 5, 5, 0, 0, 0, 0], layer: 0, glayer: 0, isCircleMode: true),
+        ]
+        let doc = Document()
+        JwwReader.importDrawing(d, into: doc)
+        let hatches = doc.entities.compactMap { e -> [Vec2]? in
+            if case .hatch(let b, let p) = e.kind, p.kind == .solid { return b }
+            return nil
+        }
+        XCTAssertEqual(hatches.count, 2)
+        // 三角形(4点目が3点目と同じ→3頂点)・実寸変換(×50)
+        XCTAssertEqual(hatches[0].count, 3)
+        XCTAssertEqual(hatches[0][1], Vec2(500, 0))
+        // 円ソリッドは多角形近似
+        XCTAssertGreaterThanOrEqual(hatches[1].count, 12)
+    }
+
     func testPaperCodeImported() {
         var d = makeDrawing()
         d.paperCode = 2

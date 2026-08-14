@@ -393,6 +393,164 @@ final class DxfParserTests: XCTestCase {
         XCTAssertThrowsError(try DxfParser(data: Data("hello".utf8)).parse())
     }
 
+    // MARK: - 塗り(SOLID / HATCH。M5.2)
+
+    /// DXF SOLIDの頂点順はジグザグ(1,2,4,3)
+    func testSolidZigzagOrder() throws {
+        let body = """
+          0
+        SOLID
+          8
+        0
+         62
+        2
+         10
+        0
+         20
+        0
+         11
+        100
+         21
+        0
+         12
+        0
+         22
+        100
+         13
+        100
+         23
+        100
+        """
+        let d = try DxfParser(data: dxf(body)).parse()
+        XCTAssertEqual(d.entities.count, 1)
+        let doc = Document()
+        _ = DxfReader.importDrawing(d, into: doc)
+        XCTAssertEqual(doc.entities.count, 1)
+        guard case .hatch(let boundary, let pattern) = doc.entities[0].kind else { return XCTFail() }
+        XCTAssertEqual(pattern.kind, .solid)
+        // 1,2,4,3 の順=正方形(自己交差しない)
+        XCTAssertEqual(boundary, [Vec2(0, 0), Vec2(100, 0), Vec2(100, 100), Vec2(0, 100)])
+    }
+
+    /// HATCH(ソリッド・エッジループ境界)→塗りエンティティ
+    func testHatchSolidEdgeLoop() throws {
+        let body = """
+          0
+        HATCH
+          8
+        0
+          2
+        SOLID
+         70
+        1
+         91
+        1
+         92
+        0
+         93
+        3
+         72
+        1
+         10
+        0
+         20
+        0
+         11
+        100
+         21
+        0
+         72
+        1
+         10
+        100
+         20
+        0
+         11
+        50
+         21
+        80
+         72
+        1
+         10
+        50
+         20
+        80
+         11
+        0
+         21
+        0
+         75
+        0
+        """
+        let d = try DxfParser(data: dxf(body)).parse()
+        XCTAssertEqual(d.entities.count, 1)
+        XCTAssertEqual(d.entities[0].vertices.count, 3)
+        let doc = Document()
+        _ = DxfReader.importDrawing(d, into: doc)
+        guard case .hatch(let boundary, let pattern) = doc.entities[0].kind else { return XCTFail() }
+        XCTAssertEqual(pattern.kind, .solid)
+        XCTAssertEqual(boundary.count, 3)
+        XCTAssertEqual(boundary[1], Vec2(100, 0))
+    }
+
+    /// HATCH(パターン塗り)は角度と間隔を継承する
+    func testHatchPatternInherited() throws {
+        let body = """
+          0
+        HATCH
+          8
+        0
+          2
+        ANSI31
+         70
+        0
+         91
+        1
+         92
+        2
+         93
+        4
+         10
+        0
+         20
+        0
+         10
+        100
+         20
+        0
+         10
+        100
+         20
+        100
+         10
+        0
+         20
+        100
+         75
+        0
+         78
+        1
+         53
+        45.0
+         43
+        0
+         44
+        0
+         45
+        -2.5
+         46
+        2.5
+        """
+        let d = try DxfParser(data: dxf(body)).parse()
+        let doc = Document()
+        _ = DxfReader.importDrawing(d, into: doc)
+        guard case .hatch(let boundary, let pattern) = doc.entities[0].kind else { return XCTFail() }
+        XCTAssertEqual(boundary.count, 4)
+        XCTAssertEqual(pattern.kind, .horizontal)
+        XCTAssertEqual(pattern.angle, .pi / 4, accuracy: 1e-9)
+        XCTAssertEqual(pattern.spacingA, (2.5 * 2.0.squareRoot()), accuracy: 1e-6)
+    }
+
     /// Windows改行(CRLF)のファイルが読めること。
     /// SwiftのStringは\r\nを1文字として扱うため、split(separator: "\n")では
     /// CRLFファイルが分割できない — 実メーカーDXFで発覚した回帰の再発防止

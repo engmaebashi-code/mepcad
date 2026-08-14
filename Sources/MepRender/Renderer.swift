@@ -219,6 +219,31 @@ public struct Renderer {
                                        overrideStyle: entity.style) {
                 drawEntity(sub, layer: layer, transform: transform, in: ctx)
             }
+
+        case .hatch(let boundary, let pattern):
+            guard boundary.count >= 3 else { break }
+            if pattern.kind == .solid {
+                // 塗りつぶし(JWWソリッド・DXF SOLID/HATCH相当)
+                ctx.setLineDash(phase: 0, lengths: [])
+                ctx.setFillColor(theme.color(forIndex: colorIndex))
+                let first = transform.toScreen(boundary[0])
+                ctx.move(to: CGPoint(x: first.x, y: first.y))
+                for p in boundary.dropFirst() {
+                    let sp = transform.toScreen(p)
+                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                }
+                ctx.closePath()
+                ctx.fillPath(using: .evenOdd)
+            } else {
+                // パターン線(境界クリップ済み)。線種・太さは属性に従う
+                for stroke in HatchGeometry.strokes(boundary: boundary, pattern: pattern) {
+                    let sa = transform.toScreen(stroke.a)
+                    let sb = transform.toScreen(stroke.b)
+                    ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                    ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                }
+                ctx.strokePath()
+            }
         }
     }
 
@@ -286,6 +311,17 @@ public struct Renderer {
                     ctx.stroke(CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y),
                                       width: abs(p1.x - p0.x), height: abs(p1.y - p0.y)))
                 }
+            case .hatch(let boundary, _):
+                // 輪郭=境界ポリゴン
+                guard boundary.count >= 2 else { break }
+                let first = transform.toScreen(boundary[0])
+                ctx.move(to: CGPoint(x: first.x, y: first.y))
+                for p in boundary.dropFirst() {
+                    let sp = transform.toScreen(p)
+                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                }
+                ctx.closePath()
+                ctx.strokePath()
             }
         }
         ctx.restoreGState()

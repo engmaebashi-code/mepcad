@@ -114,6 +114,18 @@ extension Entity {
             let dx = max(cached.minX - p.x, 0, p.x - cached.maxX)
             let dy = max(cached.minY - p.y, 0, p.y - cached.maxY)
             return (dx * dx + dy * dy).squareRoot()
+
+        case .hatch(let boundary, _):
+            // ポリゴン内=ヒット(塊で掴む)。外なら境界辺への距離
+            guard boundary.count >= 3 else { return .infinity }
+            if HatchGeometry.polygonContains(p, boundary) { return 0 }
+            var best = Double.infinity
+            for i in 0..<boundary.count {
+                let a = boundary[i]
+                let b = boundary[(i + 1) % boundary.count]
+                best = min(best, HitGeometry.closestPointOnSegment(p, a, b).distance(to: p))
+            }
+            return best
         }
     }
 
@@ -136,6 +148,8 @@ extension Entity {
             if cached.isEmpty { return rect.contains(insert) }
             return rect.contains(Vec2(cached.minX, cached.minY))
                 && rect.contains(Vec2(cached.maxX, cached.maxY))
+        case .hatch(let boundary, _):
+            return !boundary.isEmpty && boundary.allSatisfy { rect.contains($0) }
         }
     }
 
@@ -173,6 +187,17 @@ extension Entity {
             if cached.isEmpty { return rect.contains(insert) }
             return !(cached.maxX < rect.minX || cached.minX > rect.maxX ||
                      cached.maxY < rect.minY || cached.minY > rect.maxY)
+
+        case .hatch(let boundary, _):
+            guard boundary.count >= 3 else { return false }
+            if boundary.contains(where: { rect.contains($0) }) { return true }
+            for i in 0..<boundary.count {
+                if HitGeometry.segmentIntersectsRect(boundary[i], boundary[(i + 1) % boundary.count], rect) {
+                    return true
+                }
+            }
+            // 矩形がポリゴンに完全に入っているケース
+            return HatchGeometry.polygonContains(Vec2(rect.minX, rect.minY), boundary)
         }
     }
 
@@ -198,6 +223,8 @@ extension Entity {
             }
             copy.kind = .blockRef(definitionID: defID, insert: insert + delta,
                                   rotation: rot, scale: scale, mirrored: mir, cachedBounds: box)
+        case .hatch(let boundary, let pattern):
+            copy.kind = .hatch(boundary: boundary.map { $0 + delta }, pattern: pattern)
         }
         return copy
     }
@@ -227,6 +254,9 @@ extension Entity {
             copy.kind = .blockRef(definitionID: defID, insert: rot(insert),
                                   rotation: refRot + angle, scale: scale, mirrored: mir,
                                   cachedBounds: Self.transformedBounds(cached, rot))
+        case .hatch(let boundary, var pattern):
+            pattern.angle += angle
+            copy.kind = .hatch(boundary: boundary.map(rot), pattern: pattern)
         }
         return copy
     }
@@ -289,6 +319,10 @@ extension Entity {
                                   rotation: 2 * axisAngle - rot - .pi,
                                   scale: scale, mirrored: !mir,
                                   cachedBounds: Self.transformedBounds(cached, reflect))
+        case .hatch(let boundary, var pattern):
+            // パターン方向も鏡映(文字角度と同じ合成則)
+            pattern.angle = 2 * axisAngle - pattern.angle
+            copy.kind = .hatch(boundary: boundary.map(reflect), pattern: pattern)
         }
         return copy
     }
@@ -315,6 +349,10 @@ extension Entity {
             copy.kind = .blockRef(definitionID: defID, insert: sc(insert),
                                   rotation: rot, scale: scale * abs(f), mirrored: mir,
                                   cachedBounds: Self.transformedBounds(cached, sc))
+        case .hatch(let boundary, var pattern):
+            pattern.spacingA *= abs(f)
+            pattern.spacingB *= abs(f)
+            copy.kind = .hatch(boundary: boundary.map(sc), pattern: pattern)
         }
         return copy
     }

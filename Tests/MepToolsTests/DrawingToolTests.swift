@@ -299,6 +299,48 @@ final class DrawingToolTests: XCTestCase {
         XCTAssertEqual(cap.produced[0].style.lineType, 4)  // 一点鎖1
     }
 
+    // MARK: - ハッチング(M5.2)
+
+    func testHatchPolygonClickAndEnterCommit() {
+        let (tool, cap) = makeTool()
+        tool.select(.hatch)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 800), shiftDown: false)
+        XCTAssertTrue(cap.produced.isEmpty)
+        XCTAssertTrue(tool.keyInput("\r"))                 // ⏎で閉じて確定
+        XCTAssertEqual(cap.produced.count, 1)
+        guard case .hatch(let boundary, let pattern) = cap.produced[0].kind else { return XCTFail() }
+        XCTAssertEqual(boundary.count, 3)
+        XCTAssertEqual(pattern.kind, .horizontal)          // デリゲート既定実装の値
+        XCTAssertTrue(tool.hatchPoints.isEmpty)            // 次の領域へ
+        XCTAssertEqual(tool.kind, .hatch)
+    }
+
+    func testHatchCloseByClickingStart() {
+        let (tool, cap) = makeTool()
+        tool.select(.hatch)
+        tool.closeTolerance = 50
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 800), shiftDown: false)
+        tool.click(at: Vec2(10, 10), shiftDown: false)     // 始点近く→閉じて確定
+        XCTAssertEqual(cap.produced.count, 1)
+        guard case .hatch(let boundary, _) = cap.produced[0].kind else { return XCTFail() }
+        XCTAssertEqual(boundary.count, 3)
+    }
+
+    func testHatchEscCancels() {
+        let (tool, cap) = makeTool()
+        tool.select(.hatch)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(100, 0), shiftDown: false)
+        tool.cancel()
+        XCTAssertTrue(tool.hatchPoints.isEmpty)
+        XCTAssertTrue(cap.produced.isEmpty)
+        XCTAssertEqual(tool.kind, .hatch)                  // 1回目のescは中止のみ
+    }
+
     func testEscEndsChainThenReturnsToSelect() {
         let (tool, cap) = makeTool()
         tool.select(.line)

@@ -474,6 +474,7 @@ struct PropertyPanelView: View {
         if sel.textCount > 0 { parts.append("字\(sel.textCount)") }
         if sel.pointCount > 0 { parts.append("点\(sel.pointCount)") }
         if sel.blockCount > 0 { parts.append("ブロック\(sel.blockCount)") }
+        if sel.hatchCount > 0 { parts.append("塗\(sel.hatchCount)") }
         return "\(sel.count)個選択中(\(parts.joined(separator: " ")))"
     }
 

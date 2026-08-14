@@ -368,9 +368,71 @@ public enum DxfReader {
         case "POLYLINE", "LWPOLYLINE":
             return polylineSegments(e.vertices, closed: e.closed, layer: layer, style: style)
 
+        case "SOLID":
+            // DXF SOLIDの頂点順は 1,2,4,3(ジグザグ)。3点目=4点目なら三角形
+            var boundary = [Vec2(e.x1, e.y1), Vec2(e.x2, e.y2)]
+            if e.has4, Vec2(e.x3, e.y3).distance(to: Vec2(e.x4, e.y4)) > 1e-9 {
+                boundary.append(Vec2(e.x4, e.y4))
+                boundary.append(Vec2(e.x3, e.y3))
+            } else {
+                boundary.append(Vec2(e.x3, e.y3))
+            }
+            guard boundary.count >= 3 else { return [] }
+            return [Entity(layer: layer, style: style,
+                           kind: .hatch(boundary: boundary,
+                                        pattern: HatchPattern(kind: .solid)))]
+
+        case "HATCH":
+            let boundary = expandHatchBoundary(e.vertices)
+            guard boundary.count >= 3 else { return [] }
+            let pattern: HatchPattern
+            if e.flags70 & 1 != 0 {
+                pattern = HatchPattern(kind: .solid)
+            } else {
+                // パターン塗り: 最初のパターン線の角度と間隔(オフセットベクトル長)を継承
+                let p45 = e.pat45 ?? 0
+                let p46 = e.pat46 ?? 0
+                let spacing = max((p45 * p45 + p46 * p46).squareRoot(), 0.5)
+                pattern = HatchPattern(kind: .horizontal,
+                                       spacingA: spacing, spacingB: spacing,
+                                       angle: (e.patternAngle53 ?? 45) * .pi / 180)
+            }
+            return [Entity(layer: layer, style: style,
+                           kind: .hatch(boundary: boundary, pattern: pattern))]
+
         default:
             return []
         }
+    }
+
+    /// HATCH境界(bulge付き頂点列)を折れ線に展開する(bulgeは円弧サンプリング)
+    static func expandHatchBoundary(_ vertices: [DxfVertex]) -> [Vec2] {
+        guard vertices.count >= 2 else { return vertices.map { Vec2($0.x, $0.y) } }
+        var out: [Vec2] = []
+        for i in 0..<vertices.count {
+            let a = vertices[i]
+            let b = vertices[(i + 1) % vertices.count]
+            let p1 = Vec2(a.x, a.y)
+            out.append(p1)
+            guard abs(a.bulge) > 1e-12 else { continue }
+            let p2 = Vec2(b.x, b.y)
+            let chord = p1.distance(to: p2)
+            guard chord > 1e-12 else { continue }
+            let theta = 4 * atan(a.bulge)
+            let radius = abs(chord / (2 * sin(theta / 2)))
+            let mid = Vec2((p1.x + p2.x) / 2, (p1.y + p2.y) / 2)
+            let dir = Vec2((p2.x - p1.x) / chord, (p2.y - p1.y) / chord)
+            let normal = Vec2(-dir.y, dir.x)
+            let offset = radius * cos(theta / 2) * (theta > 0 ? 1 : -1)
+            let center = Vec2(mid.x + normal.x * offset, mid.y + normal.y * offset)
+            let start = atan2(p1.y - center.y, p1.x - center.x)
+            let steps = max(3, Int(abs(theta) / (.pi / 8)))
+            for k in 1..<steps {
+                let t = start + theta * Double(k) / Double(steps)
+                out.append(Vec2(center.x + radius * cos(t), center.y + radius * sin(t)))
+            }
+        }
+        return out
     }
 
     /// 入れ子INSERT展開用: ローカル図形へ倍率→回転→挿入点の変換を適用

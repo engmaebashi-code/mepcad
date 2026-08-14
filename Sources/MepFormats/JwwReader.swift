@@ -169,24 +169,38 @@ public struct JwwReader {
                                                   startAngle: a.startAngle, endAngle: a.endAngle)))
             }
         }
-        // ソリッドは輪郭線で表現(塗りは将来対応)
+        // ソリッド=塗りつぶし(M5.2でEntityKind.hatchに対応)
         for sd in drawing.solids {
             let s = scale(forGroup: sd.glayer)
             let addr = address(sd.glayer, sd.layer)
             if sd.isCircleMode {
+                // 円ソリッドは正24角形で近似して塗る
                 let cx = sd.values[0] * s, cy = sd.values[1] * s, r = sd.values[2] * s
+                guard r > 1e-9 else { continue }
+                let boundary = (0..<24).map { i -> Vec2 in
+                    let t = 2 * .pi * Double(i) / 24
+                    return Vec2(cx + r * cos(t), cy + r * sin(t))
+                }
                 entities.append(Entity(layer: addr,
-                                       kind: .circle(center: Vec2(cx, cy), radius: r)))
+                                       kind: .hatch(boundary: boundary,
+                                                    pattern: HatchPattern(kind: .solid))))
             } else {
                 let v = sd.values
-                let pts = [Vec2(v[0] * s, v[1] * s), Vec2(v[2] * s, v[3] * s),
-                           Vec2(v[4] * s, v[5] * s), Vec2(v[6] * s, v[7] * s)]
+                var boundary: [Vec2] = []
                 for i in 0..<4 {
-                    let a = pts[i], b = pts[(i + 1) % 4]
-                    if a.distance(to: b) > 0.001 {
-                        entities.append(Entity(layer: addr, kind: .line(a: a, b: b)))
+                    let p = Vec2(v[i * 2] * s, v[i * 2 + 1] * s)
+                    if boundary.last.map({ $0.distance(to: p) > 0.001 }) ?? true {
+                        boundary.append(p)
                     }
                 }
+                if let first = boundary.first, let last = boundary.last,
+                   boundary.count > 1, first.distance(to: last) <= 0.001 {
+                    boundary.removeLast()
+                }
+                guard boundary.count >= 3 else { continue }
+                entities.append(Entity(layer: addr,
+                                       kind: .hatch(boundary: boundary,
+                                                    pattern: HatchPattern(kind: .solid))))
             }
         }
         for t in drawing.texts {

@@ -126,6 +126,13 @@ public final class SnapEngine {
                 addPoint(p, .endpoint)
             case .blockRef(_, let insert, _, _, _, _):
                 addPoint(insert, .endpoint)  // 挿入点(定義が引けない場合の保険)
+            case .hatch(let boundary, _):
+                // 境界の頂点と辺(パターン線には吸着しない — 境界に合わせる操作が主)
+                guard boundary.count >= 2 else { break }
+                for i in 0..<boundary.count {
+                    addPoint(boundary[i], .endpoint)
+                    addSegment(boundary[i], boundary[(i + 1) % boundary.count])
+                }
             }
     }
 

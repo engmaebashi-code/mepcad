@@ -38,6 +38,8 @@ public enum EntityKind: Equatable, Codable, Sendable {
     /// (定義を引かずにbounds/ヒットテストできるようにするため)
     case blockRef(definitionID: UUID, insert: Vec2, rotation: Double, scale: Double,
                   mirrored: Bool, cachedBounds: BBox)
+    /// 塗り・ハッチング(境界ポリゴン+パターン。M5.2)
+    case hatch(boundary: [Vec2], pattern: HatchPattern)
 }
 
 public struct Entity: Identifiable, Equatable, Codable, Sendable {
@@ -74,6 +76,8 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             } else {
                 box.union(cached)
             }
+        case .hatch(let boundary, _):
+            for p in boundary { box.union(point: p) }
         }
         return box
     }
@@ -96,6 +100,8 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
         case .blockRef(_, let insert, _, _, _, _):
             // 挿入点のみ(中身の端点等はSnapEngineが定義を実体化して索引する)
             return [insert]
+        case .hatch(let boundary, _):
+            return boundary
         }
     }
 }

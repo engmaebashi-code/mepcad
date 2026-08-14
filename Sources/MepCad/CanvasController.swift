@@ -15,6 +15,7 @@ struct SelectionSummary: Equatable {
     var textCount: Int
     var pointCount: Int
     var blockCount: Int
+    var hatchCount: Int
     /// 選択中のブロックが全て同じ定義ならその名前
     var commonBlockName: String?
     /// 全選択で共通ならその値(内側nil=byLayer)、混在なら外側nil
@@ -118,6 +119,8 @@ final class CanvasController: NSObject {
     var onEditOpChanged: ((EditOpKind?) -> Void)?
     /// 用紙・縮尺の変化(フッター表示の同期用: 用紙サイズ+書込グループの縮尺分母)
     var onDrawingSetupChanged: ((PaperSize, Double) -> Void)?
+    /// ハッチング設定の提供(プロパティカードの値。印刷寸→実寸換算込み)
+    var hatchPatternProvider: (() -> HatchPattern)?
 
     override init() {
         let doc = Document()
@@ -282,7 +285,7 @@ final class CanvasController: NSObject {
 
     private func selectionSummary() -> SelectionSummary? {
         guard !selectedEntities.isEmpty else { return nil }
-        var lines = 0, circles = 0, arcs = 0, texts = 0, points = 0, blocks = 0
+        var lines = 0, circles = 0, arcs = 0, texts = 0, points = 0, blocks = 0, hatches = 0
         var blockDefIDs = Set<UUID>()
         for e in selectedEntities {
             switch e.kind {
@@ -294,6 +297,7 @@ final class CanvasController: NSObject {
             case .blockRef(let defID, _, _, _, _, _):
                 blocks += 1
                 blockDefIDs.insert(defID)
+            case .hatch: hatches += 1
             }
         }
         var blockName: String?
@@ -307,7 +311,8 @@ final class CanvasController: NSObject {
         return SelectionSummary(
             count: selectedEntities.count,
             lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
-            pointCount: points, blockCount: blocks, commonBlockName: blockName,
+            pointCount: points, blockCount: blocks, hatchCount: hatches,
+            commonBlockName: blockName,
             commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
             commonLineType: common(selectedEntities.map(\.style.lineType)),
             commonLineWeight: common(selectedEntities.map(\.style.lineWeight)),
@@ -1060,6 +1065,8 @@ final class CanvasController: NSObject {
     func toolClick(shiftDown: Bool) {
         guard let cursor = cursorScreen else { return }
         let effective = snappedScreen ?? cursor
+        // ハッチングの「始点クリックで閉じる」判定にピックボックス幅を渡す
+        tools.closeTolerance = hitToleranceMm
         tools.click(at: transform.toWorld(effective), shiftDown: shiftDown)
         refreshPreview(shiftDown: shiftDown)
     }
@@ -1360,5 +1367,13 @@ extension CanvasController: DrawingToolDelegate {
         previewShape = .none
         needsOverlayRedraw?()
         onToolChanged?(kind)
+    }
+
+    func toolHatchPattern() -> HatchPattern {
+        hatchPatternProvider?()
+            ?? HatchPattern(kind: .horizontal,
+                            spacingA: 2 * document.currentScale,
+                            spacingB: 1 * document.currentScale,
+                            angle: .pi / 4)
     }
 }

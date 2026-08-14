@@ -42,8 +42,24 @@ public struct DxfEntityData: Sendable {
     public var scaleY = 1.0            // 42(LWPOLYLINEではbulgeに使うため専用処理)
     public var alignment72 = 0         // TEXT水平整列
     public var attachment71 = 0        // MTEXT取付点(1-9)
-    public var flags70 = 0             // 閉フラグ等
+    public var flags70 = 0             // 閉フラグ・HATCHのソリッドフラグ等
     public var vertices: [DxfVertex] = []
+    // SOLID(3・4点目)
+    public var x3 = 0.0, y3 = 0.0      // 12/22
+    public var x4 = 0.0, y4 = 0.0      // 13/23
+    public var has4 = false
+    // HATCH(境界とパターンの取り込み状態)
+    public var hatchLoops = 0              // 92の出現回数(最初のループだけ取り込む)
+    public var hatchPolylineLoop = false   // 92のbit1
+    public var hatchEdgeType = 1           // 72(1=線 2=円弧)
+    public var hatchBoundaryDone = false   // 75以降はシード点等なので座標を拾わない
+    public var hatchArcActive = false
+    public var hatchArcCx = 0.0, hatchArcCy = 0.0, hatchArcR = 0.0
+    public var hatchArcA0 = 0.0, hatchArcA1 = 0.0   // 度
+    public var hatchArcCCW = true          // 73
+    public var patternAngle53: Double?     // パターン線の角度(度)
+    public var pat45: Double?              // パターンのオフセットベクトル(=間隔)。最初の線のみ
+    public var pat46: Double?
 
     public var closed: Bool { flags70 & 1 != 0 }
 }
@@ -79,6 +95,7 @@ public struct DxfParser {
     static let supportedTypes: Set<String> = [
         "LINE", "CIRCLE", "ARC", "TEXT", "MTEXT", "POINT",
         "POLYLINE", "LWPOLYLINE", "INSERT", "DIMENSION",
+        "SOLID", "HATCH",   // 塗り(M5.2)
     ]
     /// エンティティとして数えない制御レコード
     static let controlTypes: Set<String> = ["VERTEX", "SEQEND", "ENDBLK", "ATTDEF", "ATTRIB"]
@@ -147,6 +164,27 @@ public struct DxfParser {
 
         var sawEntities = false
 
+        /// HATCHの円弧エッジをサンプリングして境界頂点列へ落とす
+        func finishHatchArc(_ e: inout DxfEntityData) {
+            guard e.hatchArcActive else { return }
+            e.hatchArcActive = false
+            guard e.hatchArcR > 1e-12 else { return }
+            var a0 = e.hatchArcA0 * .pi / 180
+            var a1 = e.hatchArcA1 * .pi / 180
+            if !e.hatchArcCCW {
+                swap(&a0, &a1)   // 時計回りエッジはCCW表現へ
+            }
+            var span = (a1 - a0).truncatingRemainder(dividingBy: 2 * .pi)
+            if span <= 1e-12 { span += 2 * .pi }
+            let steps = max(4, Int(span / (.pi / 8)))
+            for i in 0...steps {
+                let t = a0 + span * Double(i) / Double(steps)
+                e.vertices.append(DxfVertex(x: e.hatchArcCx + e.hatchArcR * cos(t),
+                                            y: e.hatchArcCy + e.hatchArcR * sin(t),
+                                            bulge: 0))
+            }
+        }
+
         // 完成したエンティティを格納先へ
         func flushEntity() {
             defer {
@@ -154,7 +192,11 @@ public struct DxfParser {
                 currentIsSupported = false
                 inVertex = false
             }
-            guard let e = current, currentIsSupported else { return }
+            guard current != nil, currentIsSupported else { return }
+            if current!.type == "HATCH" {
+                finishHatchArc(&current!)
+            }
+            let e = current!
             if e.type == "POLYLINE" {
                 openPolyline = e   // SEQENDまでVERTEXを集める
                 return
@@ -302,6 +344,85 @@ public struct DxfParser {
                 // エンティティ本体
                 guard current != nil else { continue }
                 let type = current!.type
+
+                // HATCHは構造が特殊(ループ・エッジ・パターン定義)なので専用処理。
+                // レイヤ・色・線種・パターン名・ソリッドフラグだけ共通処理へ流す
+                if type == "HATCH" {
+                    switch code {
+                    case 8, 62, 6, 2, 70:
+                        break   // 下の共通switchで処理
+                    case 92:
+                        finishHatchArc(&current!)
+                        current!.hatchLoops += 1
+                        current!.hatchPolylineLoop = ((Int(value) ?? 0) & 2) != 0
+                        current!.hatchEdgeType = 1
+                        continue
+                    case 72:
+                        // エッジループのエッジ種(ポリラインループではbulge有無フラグ)
+                        if current!.hatchLoops >= 1 && !current!.hatchPolylineLoop {
+                            finishHatchArc(&current!)
+                            current!.hatchEdgeType = Int(value) ?? 1
+                        }
+                        continue
+                    case 75, 76, 98:
+                        current!.hatchBoundaryDone = true   // 以降の10/20はシード点等
+                        continue
+                    case 10:
+                        if current!.hatchLoops == 1 && !current!.hatchBoundaryDone {
+                            // 円弧エッジ(72=2)のみ中心+半径+角度で解釈。
+                            // 楕円(3)・スプライン(4)は制御点をそのまま頂点として拾う(近似)
+                            if current!.hatchEdgeType == 2 && !current!.hatchPolylineLoop {
+                                current!.hatchArcActive = true
+                                current!.hatchArcCx = Double(value) ?? 0
+                            } else {
+                                current!.vertices.append(
+                                    DxfVertex(x: Double(value) ?? 0, y: 0, bulge: 0))
+                            }
+                        }
+                        continue
+                    case 20:
+                        if current!.hatchLoops == 1 && !current!.hatchBoundaryDone {
+                            if current!.hatchArcActive {
+                                current!.hatchArcCy = Double(value) ?? 0
+                            } else if !current!.vertices.isEmpty {
+                                current!.vertices[current!.vertices.count - 1].y = Double(value) ?? 0
+                            }
+                        }
+                        continue
+                    case 42:
+                        if current!.hatchLoops == 1 && !current!.hatchBoundaryDone,
+                           !current!.vertices.isEmpty {
+                            current!.vertices[current!.vertices.count - 1].bulge = Double(value) ?? 0
+                        }
+                        continue
+                    case 40:
+                        if current!.hatchArcActive { current!.hatchArcR = Double(value) ?? 0 }
+                        continue
+                    case 50:
+                        if current!.hatchArcActive { current!.hatchArcA0 = Double(value) ?? 0 }
+                        continue
+                    case 51:
+                        if current!.hatchArcActive { current!.hatchArcA1 = Double(value) ?? 0 }
+                        continue
+                    case 73:
+                        if current!.hatchArcActive { current!.hatchArcCCW = (Int(value) ?? 1) != 0 }
+                        continue
+                    case 53:
+                        if current!.patternAngle53 == nil {
+                            current!.patternAngle53 = Double(value)   // 最初のパターン線の角度
+                        }
+                        continue
+                    case 45:
+                        if current!.pat45 == nil { current!.pat45 = Double(value) }
+                        continue
+                    case 46:
+                        if current!.pat46 == nil { current!.pat46 = Double(value) }
+                        continue
+                    default:
+                        continue
+                    }
+                }
+
                 switch code {
                 case 8: current!.layer = value
                 case 62: current!.colorACI = Int(value)
@@ -322,6 +443,10 @@ public struct DxfParser {
                     }
                 case 11: current!.x2 = Double(value) ?? 0; current!.has2 = true
                 case 21: current!.y2 = Double(value) ?? 0; current!.has2 = true
+                case 12: current!.x3 = Double(value) ?? 0
+                case 22: current!.y3 = Double(value) ?? 0
+                case 13: current!.x4 = Double(value) ?? 0; current!.has4 = true
+                case 23: current!.y4 = Double(value) ?? 0
                 case 40: current!.value40 = Double(value) ?? 0
                 case 50: current!.angle50 = Double(value) ?? 0
                 case 51: current!.angle51 = Double(value) ?? 0
