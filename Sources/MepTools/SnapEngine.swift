@@ -141,6 +141,10 @@ public final class SnapEngine {
                 addPoint(layout.dimLine.0, .endpoint)
                 addPoint(layout.dimLine.1, .endpoint)
                 addSegment(layout.dimLine.0, layout.dimLine.1)
+            case .leader(let tip, let elbow, _, _):
+                addPoint(tip, .endpoint)
+                addPoint(elbow, .endpoint)
+                addSegment(tip, elbow)
             }
     }
 

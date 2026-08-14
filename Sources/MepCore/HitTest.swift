@@ -159,6 +159,34 @@ extension Entity {
             best = min(best, HitGeometry.closestPointOnSegment(p, layout.textPosition, textEnd)
                                 .distance(to: p))
             return best
+
+        case .leader(_, _, let content, let attrs):
+            guard let layout = LeaderGeometry.layout(of: self) else { return .infinity }
+            // バルーンの中=ヒット(塊で掴む)
+            if let e = layout.ellipses.first {
+                let nx = (p.x - e.center.x) / e.rx
+                let ny = (p.y - e.center.y) / e.ry
+                if nx * nx + ny * ny <= 1 { return 0 }
+            }
+            var best = Double.infinity
+            for seg in layout.segments {
+                best = min(best, HitGeometry.closestPointOnSegment(p, seg.0, seg.1).distance(to: p))
+            }
+            // 楕円は折れ線近似で距離を取る
+            for e in layout.ellipses {
+                let pts = LeaderGeometry.ellipsePoints(center: e.center, rx: e.rx, ry: e.ry)
+                for i in 0..<pts.count {
+                    best = min(best, HitGeometry.closestPointOnSegment(
+                        p, pts[i], pts[(i + 1) % pts.count]).distance(to: p))
+                }
+            }
+            // 文字ボックス(水平)
+            let w = LeaderGeometry.textWidth(content, height: attrs.textHeight)
+            let dx = max(layout.textPosition.x - p.x, 0, p.x - (layout.textPosition.x + w))
+            let dy = max(layout.textPosition.y - p.y, 0,
+                         p.y - (layout.textPosition.y + attrs.textHeight))
+            best = min(best, (dx * dx + dy * dy).squareRoot())
+            return best
         }
     }
 
@@ -183,7 +211,7 @@ extension Entity {
                 && rect.contains(Vec2(cached.maxX, cached.maxY))
         case .hatch(let boundary, _):
             return !boundary.isEmpty && boundary.allSatisfy { rect.contains($0) }
-        case .dimension:
+        case .dimension, .leader:
             // 導出ジオメトリ全体(bounds)が入っていれば内包
             let box = bounds
             return !box.isEmpty && rect.contains(Vec2(box.minX, box.minY))
@@ -253,6 +281,33 @@ extension Entity {
             let ut = Vec2(cos(layout.textAngle), sin(layout.textAngle))
             return HitGeometry.segmentIntersectsRect(layout.textPosition,
                                                      layout.textPosition + ut * w, rect)
+
+        case .leader(_, _, let content, let attrs):
+            guard let layout = LeaderGeometry.layout(of: self) else { return false }
+            for seg in layout.segments {
+                if HitGeometry.segmentIntersectsRect(seg.0, seg.1, rect) { return true }
+            }
+            for e in layout.ellipses {
+                let pts = LeaderGeometry.ellipsePoints(center: e.center, rx: e.rx, ry: e.ry)
+                if pts.contains(where: { rect.contains($0) }) { return true }
+                for i in 0..<pts.count {
+                    if HitGeometry.segmentIntersectsRect(pts[i], pts[(i + 1) % pts.count], rect) {
+                        return true
+                    }
+                }
+            }
+            // 文字ボックス(水平)との重なり
+            let w = LeaderGeometry.textWidth(content, height: attrs.textHeight)
+            let tp = layout.textPosition
+            if !(tp.x + w < rect.minX || tp.x > rect.maxX ||
+                 tp.y + attrs.textHeight < rect.minY || tp.y > rect.maxY) { return true }
+            // 矩形がバルーンの中に完全に入っているケース
+            if let e = layout.ellipses.first {
+                let nx = (rect.minX - e.center.x) / e.rx
+                let ny = (rect.minY - e.center.y) / e.ry
+                if nx * nx + ny * ny <= 1 { return true }
+            }
+            return false
         }
     }
 
@@ -283,6 +338,9 @@ extension Entity {
         case .dimension(let a, let b, let lp, let angle, let attrs):
             copy.kind = .dimension(a: a + delta, b: b + delta, linePoint: lp + delta,
                                    angle: angle, attrs: attrs)
+        case .leader(let tip, let elbow, let content, let attrs):
+            copy.kind = .leader(tip: tip + delta, elbow: elbow + delta,
+                                content: content, attrs: attrs)
         }
         return copy
     }
@@ -318,6 +376,10 @@ extension Entity {
         case .dimension(let a, let b, let lp, let dimAngle, let attrs):
             copy.kind = .dimension(a: rot(a), b: rot(b), linePoint: rot(lp),
                                    angle: dimAngle + angle, attrs: attrs)
+        case .leader(let tip, let elbow, let content, let attrs):
+            // 位置だけ回す(文字・バルーンは常に水平=CADの慣例)
+            copy.kind = .leader(tip: rot(tip), elbow: rot(elbow),
+                                content: content, attrs: attrs)
         }
         return copy
     }
@@ -387,6 +449,10 @@ extension Entity {
         case .dimension(let p1, let p2, let lp, let dimAngle, let attrs):
             copy.kind = .dimension(a: reflect(p1), b: reflect(p2), linePoint: reflect(lp),
                                    angle: reflectAngle(dimAngle), attrs: attrs)
+        case .leader(let tip, let elbow, let content, let attrs):
+            // 位置だけ鏡映(文字・バルーンは裏返さない)
+            copy.kind = .leader(tip: reflect(tip), elbow: reflect(elbow),
+                                content: content, attrs: attrs)
         }
         return copy
     }
@@ -423,6 +489,10 @@ extension Entity {
             if let len = attrs.extensionLength { attrs.extensionLength = len * abs(f) }
             copy.kind = .dimension(a: sc(a), b: sc(b), linePoint: sc(lp),
                                    angle: angle, attrs: attrs)
+        case .leader(let tip, let elbow, let content, var attrs):
+            attrs.textHeight *= abs(f)
+            copy.kind = .leader(tip: sc(tip), elbow: sc(elbow),
+                                content: content, attrs: attrs)
         }
         return copy
     }

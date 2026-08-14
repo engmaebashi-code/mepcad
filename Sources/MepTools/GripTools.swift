@@ -23,6 +23,8 @@ public struct Grip: Equatable, Sendable {
         case dimEnd                        // 寸法: 測定点b
         case dimLine                       // 寸法: 寸法線の位置(引出し量の調整)
         case dimExtension                  // 寸法: 補助線の端(2本同時に伸縮)
+        case leaderTip                     // 引出線: 指示点(矢印先端)
+        case leaderElbow                   // 引出線: 文字位置/バルーン中心
     }
 
     public let entityID: EntityID
@@ -80,6 +82,9 @@ public enum GripEngine {
                 grips.append(Grip(entityID: entity.id, kind: .dimExtension, point: ext.0))
             }
             return grips
+        case .leader(let tip, let elbow, _, _):
+            return [Grip(entityID: entity.id, kind: .leaderTip, point: tip),
+                    Grip(entityID: entity.id, kind: .leaderElbow, point: elbow)]
         }
     }
 
@@ -136,6 +141,12 @@ public enum GripEngine {
                 attrs.extensionLength = max(len, attrs.extensionGap * 0.5)
             }
             copy.kind = .dimension(a: a, b: b, linePoint: lp, angle: angle, attrs: attrs)
+        case (.leaderTip, .leader(_, let elbow, let content, let attrs)):
+            guard p.distance(to: elbow) > 1e-9 else { return entity }
+            copy.kind = .leader(tip: p, elbow: elbow, content: content, attrs: attrs)
+        case (.leaderElbow, .leader(let tip, _, let content, let attrs)):
+            guard p.distance(to: tip) > 1e-9 else { return entity }
+            copy.kind = .leader(tip: tip, elbow: p, content: content, attrs: attrs)
         default:
             return entity
         }

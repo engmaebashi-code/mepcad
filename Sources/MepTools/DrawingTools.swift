@@ -14,6 +14,18 @@ public enum ToolKind: String, CaseIterable, Sendable {
     case text = "文字"
     case hatch = "ハッチング"
     case dimension = "寸法"
+    case leader = "引出線"
+}
+
+/// 引出線ツールの現在設定(プロパティカードの値。紙面mm→実寸mm換算は実装側で行う)
+public struct LeaderToolStyle: Sendable {
+    public var attrs: LeaderAttributes
+    public var colorIndex: Int?
+
+    public init(attrs: LeaderAttributes = LeaderAttributes(), colorIndex: Int? = nil) {
+        self.attrs = attrs
+        self.colorIndex = colorIndex
+    }
 }
 
 /// 寸法の方向モード(M5.4)
@@ -59,6 +71,7 @@ public enum PreviewShape {
     case doubleLine(Vec2, Vec2, Double, Double)            // 基準線a-b, A側/B側オフセット
     case polygon([Vec2], Vec2)                             // ハッチング境界の確定頂点+カーソル
     case dimension(Vec2, Vec2, Vec2, Double, DimAttributes)  // 測定点a,b・寸法線通過点・方向・属性
+    case leader(Vec2, Vec2, LeaderAttributes)                // 指示点・文字位置(カーソル)・属性
 }
 
 /// 角度拘束モード(常設パレットで切替。⇧押下は一時的に45°拘束)
@@ -85,6 +98,9 @@ public protocol DrawingToolDelegate: AnyObject {
     func toolDidProduceGroup(_ entities: [Entity], name: String)
     /// 文字ツール: テキスト入力UIの表示を依頼
     func toolRequestsText(at point: Vec2, completion: @escaping (String?) -> Void)
+    /// 文字入力UIの表示依頼(フォント高さ指定版。引出線ツールが使う)
+    func toolRequestsText(at point: Vec2, fontHeight: Double,
+                          completion: @escaping (String?) -> Void)
     /// 状態ヒントの変化(ステータスバー表示用)
     func toolStatusChanged(_ hint: String)
     /// ツール切替の通知(UI側の選択状態同期用)
@@ -93,6 +109,8 @@ public protocol DrawingToolDelegate: AnyObject {
     func toolHatchPattern() -> HatchPattern
     /// 寸法の現在設定(プロパティカードの値。紙面mm→実寸mmの換算は実装側で行う)
     func toolDimensionStyle() -> DimensionToolStyle
+    /// 引出線の現在設定(プロパティカードの値。紙面mm→実寸mmの換算は実装側で行う)
+    func toolLeaderStyle() -> LeaderToolStyle
 }
 
 extension DrawingToolDelegate {
@@ -102,6 +120,14 @@ extension DrawingToolDelegate {
     }
     public func toolDimensionStyle() -> DimensionToolStyle {
         DimensionToolStyle()
+    }
+    public func toolLeaderStyle() -> LeaderToolStyle {
+        LeaderToolStyle()
+    }
+    public func toolRequestsText(at point: Vec2, fontHeight: Double,
+                                 completion: @escaping (String?) -> Void) {
+        // 既定実装は従来版へ委譲(テスト用スタブ等が実装しなくても済むように)
+        toolRequestsText(at: point, completion: completion)
     }
 }
 
@@ -132,6 +158,8 @@ public final class DrawingToolController {
     /// 寸法: 測定点1・2(3クリック目=寸法線位置で確定)
     public private(set) var dimA: Vec2?
     public private(set) var dimB: Vec2?
+    /// 引出線: 指示点(2クリック目=文字位置→インライン文字入力で確定)
+    public private(set) var leaderTip: Vec2?
     /// 始点クリックで閉じる判定の許容距離(ワールドmm。呼び出し側がピックボックス幅を設定)
     public var closeTolerance: Double = 0
 
@@ -158,12 +186,14 @@ public final class DrawingToolController {
         hatchPoints = []
         dimA = nil
         dimB = nil
+        leaderTip = nil
     }
 
     /// esc/右クリック: 作図中なら現在の作図を終了、待機中なら選択ツールへ戻る
     public func cancel() {
         if anchor != nil || arcStart != nil || pendingRectSize != nil
-            || !hatchPoints.isEmpty || dimA != nil || !numericBuffer.isEmpty {
+            || !hatchPoints.isEmpty || dimA != nil || leaderTip != nil
+            || !numericBuffer.isEmpty {
             resetPoints()
             numericBuffer = ""
         } else if kind != .select {
@@ -213,6 +243,10 @@ public final class DrawingToolController {
             guard let b = dimB else { return .line(a, cursor) }
             let style = delegate?.toolDimensionStyle() ?? DimensionToolStyle()
             return .dimension(a, b, cursor, style.axis.angle(from: a, to: b), style.attrs)
+        case .leader:
+            guard let tip = leaderTip else { return .none }
+            let style = delegate?.toolLeaderStyle() ?? LeaderToolStyle()
+            return .leader(tip, cursor, style.attrs)
         default:
             return .none
         }
@@ -301,6 +335,24 @@ public final class DrawingToolController {
                 commitDimension(a: a, b: b, linePoint: p)
                 dimA = nil
                 dimB = nil
+            }
+
+        case .leader:
+            if leaderTip == nil {
+                leaderTip = p
+            } else if let tip = leaderTip, tip.distance(to: p) > 0.01 {
+                // 文字位置が決まったらその場でインライン文字入力(入力と連動)
+                let style = delegate?.toolLeaderStyle() ?? LeaderToolStyle()
+                let elbow = p
+                leaderTip = nil
+                delegate?.toolRequestsText(at: elbow, fontHeight: style.attrs.textHeight) { [weak self] text in
+                    guard let self, let text, !text.isEmpty else { return }
+                    self.delegate?.toolDidProduce(
+                        Entity(layer: self.currentLayer,
+                               style: Style(colorIndex: style.colorIndex),
+                               kind: .leader(tip: tip, elbow: elbow,
+                                             content: text, attrs: style.attrs)))
+                }
             }
         }
         numericBuffer = ""
@@ -586,6 +638,11 @@ public final class DrawingToolController {
             if dimA == nil { return "寸法: 測定点1を指示(端点スナップ有効)— 方向・端部は左上のカード" }
             if dimB == nil { return "寸法: 測定点2を指示" }
             return "寸法: 寸法線の位置をクリック(引出し量が決まる)/ esc中止"
+        case .leader:
+            if leaderTip == nil {
+                return "引出線: 指示点(矢印の先端)をクリック — タイプ・矢印は左上のカード"
+            }
+            return "引出線: 文字位置をクリック → その場で文字を入力(⏎確定 / esc中止)"
         }
     }
 }

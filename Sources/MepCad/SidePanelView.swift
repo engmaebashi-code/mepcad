@@ -442,6 +442,41 @@ struct PropertyPanelView: View {
                     }
                 }
 
+                // 引出線セクション(引出線・バルーンを選択中のみ。M5.5)
+                if sel.leaderCount > 0 {
+                    propertyRow("引出線") {
+                        HStack(spacing: 6) {
+                            Menu {
+                                ForEach([2.5, 3.5, 5.0, 7.0], id: \.self) { mm in
+                                    Button(mm == mm.rounded() ? "紙面 \(Int(mm))mm" : String(format: "紙面 %.1fmm", mm)) {
+                                        controller.applyLeaderTextSize(paperMm: mm)
+                                    }
+                                }
+                            } label: {
+                                Text("サイズ").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                            Menu {
+                                Button("矢印あり") { controller.applyLeaderArrow(true) }
+                                Button("矢印なし") { controller.applyLeaderArrow(false) }
+                                Divider()
+                                Button("一重枠") { controller.applyLeaderFrame(double: false) }
+                                Button("二重枠") { controller.applyLeaderFrame(double: true) }
+                            } label: {
+                                Text("形状").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                            if sel.leaderCount == 1 && sel.count == 1 {
+                                Button("内容を編集…") {
+                                    controller.editSelectedLeader()
+                                }
+                                .font(.system(size: 11))
+                                .buttonStyle(.link)
+                            }
+                        }
+                    }
+                }
+
                 if let blockName = sel.commonBlockName {
                     propertyRow("ブロック") {
                         Text(sel.blockCount > 1 ? "\(blockName) ×\(sel.blockCount)" : blockName)
@@ -536,6 +571,7 @@ struct PropertyPanelView: View {
         if sel.blockCount > 0 { parts.append("ブロック\(sel.blockCount)") }
         if sel.hatchCount > 0 { parts.append("塗\(sel.hatchCount)") }
         if sel.dimCount > 0 { parts.append("寸法\(sel.dimCount)") }
+        if sel.leaderCount > 0 { parts.append("引出\(sel.leaderCount)") }
         return "\(sel.count)個選択中(\(parts.joined(separator: " ")))"
     }
 

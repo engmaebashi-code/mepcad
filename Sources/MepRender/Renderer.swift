@@ -269,6 +269,28 @@ public struct Renderer {
             drawText(layout.textContent, at: layout.textPosition,
                      height: layout.textHeight, angle: layout.textAngle,
                      colorIndex: colorIndex, transform: transform, in: ctx)
+
+        case .leader:
+            guard let layout = LeaderGeometry.layout(of: entity) else { break }
+            // 引出線・矢印・バルーン枠は実線で描く
+            ctx.setLineDash(phase: 0, lengths: [])
+            for seg in layout.segments + layout.arrowStrokes {
+                let sa = transform.toScreen(seg.0)
+                let sb = transform.toScreen(seg.1)
+                ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+            }
+            ctx.strokePath()
+            for e in layout.ellipses {
+                let sc = transform.toScreen(e.center)
+                let rx = e.rx * transform.scale
+                let ry = e.ry * transform.scale
+                ctx.strokeEllipse(in: CGRect(x: sc.x - rx, y: sc.y - ry,
+                                             width: rx * 2, height: ry * 2))
+            }
+            drawText(layout.textContent, at: layout.textPosition,
+                     height: layout.textHeight, angle: 0,
+                     colorIndex: colorIndex, transform: transform, in: ctx)
         }
     }
 
@@ -361,6 +383,23 @@ public struct Renderer {
                     ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
                 }
                 ctx.strokePath()
+            case .leader:
+                // 輪郭=引出線+バルーン枠
+                guard let layout = LeaderGeometry.layout(of: entity) else { break }
+                for seg in layout.segments + layout.arrowStrokes {
+                    let sa = transform.toScreen(seg.0)
+                    let sb = transform.toScreen(seg.1)
+                    ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                    ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                }
+                ctx.strokePath()
+                for e in layout.ellipses {
+                    let sc = transform.toScreen(e.center)
+                    let rx = e.rx * transform.scale
+                    let ry = e.ry * transform.scale
+                    ctx.strokeEllipse(in: CGRect(x: sc.x - rx, y: sc.y - ry,
+                                                 width: rx * 2, height: ry * 2))
+                }
             }
         }
         ctx.restoreGState()

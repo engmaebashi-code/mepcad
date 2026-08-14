@@ -43,6 +43,8 @@ public enum EntityKind: Equatable, Codable, Sendable {
     /// 長さ寸法(M5.4)。a,b=測定点、linePoint=寸法線の通過点、angle=寸法線方向(rad)。
     /// 寸法値は幾何からの実測値表示(静的。図形を後から変えても追随しない)
     case dimension(a: Vec2, b: Vec2, linePoint: Vec2, angle: Double, attrs: DimAttributes)
+    /// 引出線文字・バルーン(M5.5)。tip=指示点(矢印先端)、elbow=文字位置/バルーン中心
+    case leader(tip: Vec2, elbow: Vec2, content: String, attrs: LeaderAttributes)
 }
 
 public struct Entity: Identifiable, Equatable, Codable, Sendable {
@@ -111,6 +113,22 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
                 box.union(point: Vec2(layout.textPosition.x + corner.x * c - corner.y * s,
                                       layout.textPosition.y + corner.x * s + corner.y * c))
             }
+        case .leader(let tip, let elbow, let content, let attrs):
+            let layout = LeaderGeometry.layout(tip: tip, elbow: elbow,
+                                               content: content, attrs: attrs)
+            box.union(point: tip)
+            for seg in layout.segments {
+                box.union(point: seg.0)
+                box.union(point: seg.1)
+            }
+            for e in layout.ellipses {
+                box.union(point: Vec2(e.center.x - e.rx, e.center.y - e.ry))
+                box.union(point: Vec2(e.center.x + e.rx, e.center.y + e.ry))
+            }
+            let w = LeaderGeometry.textWidth(content, height: attrs.textHeight)
+            box.union(point: layout.textPosition)
+            box.union(point: Vec2(layout.textPosition.x + w,
+                                  layout.textPosition.y + attrs.textHeight))
         }
         return box
     }
@@ -139,6 +157,8 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             let layout = DimensionGeometry.layout(a: a, b: b, linePoint: lp,
                                                   angle: angle, attrs: attrs)
             return [a, b, layout.dimLine.0, layout.dimLine.1]
+        case .leader(let tip, let elbow, _, _):
+            return [tip, elbow]
         }
     }
 }

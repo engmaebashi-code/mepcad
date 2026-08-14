@@ -67,6 +67,13 @@ final class CanvasUIState: ObservableObject {
     @Published var dimTextSize: Double = 2.5   // 紙面mm
     /// 寸法の色(nil=レイヤ既定)
     @Published var dimColorIndex: Int? = nil
+    // 引出線設定(M5.5: タイプ・矢印・二重枠・文字サイズ・縦横比・色)
+    @Published var leaderBalloon = false        // false=引出線文字、true=バルーン
+    @Published var leaderArrow = true
+    @Published var leaderDoubleFrame = false
+    @Published var leaderTextSize: Double = 3.5 // 紙面mm
+    @Published var leaderAspect: Double = 80    // バルーン縦横比(%)
+    @Published var leaderColorIndex: Int? = nil
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -143,6 +150,7 @@ private func toolIcon(_ kind: ToolKind) -> String {
     case .text: return "textformat"
     case .hatch: return "line.3.horizontal"
     case .dimension: return "ruler"
+    case .leader: return "text.bubble"
     }
 }
 
@@ -188,6 +196,20 @@ struct ContentView: View {
                     VStack {
                         HStack {
                             TextPropertyCard(controller: controller, uiState: uiState)
+                                .onHover { controller.uiHovering = $0 }
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // 引出線プロパティカード(タイプ・矢印・二重枠・文字サイズ・色)
+                if uiState.tool == .leader {
+                    VStack {
+                        HStack {
+                            LeaderPropertyCard(uiState: uiState)
                                 .onHover { controller.uiHovering = $0 }
                             Spacer()
                         }
@@ -493,6 +515,17 @@ struct ContentView: View {
                                          extensionLength: ext),
                     colorIndex: uiState.dimColorIndex)
             }
+            controller.leaderStyleProvider = { [weak controller, weak uiState] in
+                guard let controller, let uiState else { return LeaderToolStyle() }
+                let scale = controller.document.currentScale
+                return LeaderToolStyle(
+                    attrs: LeaderAttributes(balloon: uiState.leaderBalloon,
+                                            doubleFrame: uiState.leaderDoubleFrame,
+                                            arrow: uiState.leaderArrow,
+                                            textHeight: max(uiState.leaderTextSize, 0.5) * scale,
+                                            aspectPercent: min(max(uiState.leaderAspect, 30), 150)),
+                    colorIndex: uiState.leaderColorIndex)
+            }
             controller.onEditOpChanged = { kind in
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                     uiState.activeEditOp = kind
@@ -603,6 +636,122 @@ struct TextPropertyCard: View {
     private func push() {
         controller.setTextStyle(paperMm: uiState.textPaperSize,
                                 angleDegrees: uiState.textAngle)
+    }
+}
+
+/// 引出線ツール中に出るプロパティカード(タイプ・矢印・二重枠・文字サイズ・縦横比・色)
+struct LeaderPropertyCard: View {
+    @ObservedObject var uiState: CanvasUIState
+
+    private let textPresets: [Double] = [2.5, 3.5, 5, 7]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("引出線 — 指示点→文字位置→その場で入力")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Picker("", selection: $uiState.leaderBalloon) {
+                    Text("引出線文字").tag(false)
+                    Text("バルーン").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+                .help("引出線文字=傍記 / バルーン=円形枠に文字(機器番号など)")
+
+                Toggle("矢印", isOn: $uiState.leaderArrow)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                    .help("指示点に矢印を付ける")
+
+                if uiState.leaderBalloon {
+                    Toggle("二重枠", isOn: $uiState.leaderDoubleFrame)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 11))
+                        .help("バルーンの枠を二重にする")
+                    Text("縦横比")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    TextField("", value: $uiState.leaderAspect, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .frame(width: 42)
+                    Text("%")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 5) {
+                Text("文字")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                ForEach(textPresets, id: \.self) { mm in
+                    Button {
+                        uiState.leaderTextSize = mm
+                    } label: {
+                        Text(mm == mm.rounded() ? "\(Int(mm))" : String(format: "%.1f", mm))
+                            .font(.system(size: 11, weight: uiState.leaderTextSize == mm ? .bold : .regular))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(uiState.leaderTextSize == mm ? Color.blue : Color.primary.opacity(0.07),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .foregroundStyle(uiState.leaderTextSize == mm ? Color.white : Color.primary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("mm(紙面)")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+
+                Text("色")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Menu {
+                    Button("レイヤ既定") { uiState.leaderColorIndex = nil }
+                    Divider()
+                    ForEach(0..<uiState.paletteColors.count, id: \.self) { i in
+                        Button {
+                            uiState.leaderColorIndex = i
+                        } label: {
+                            Label {
+                                Text("色 \(i)")
+                            } icon: {
+                                Image(nsImage: uiState.colorSwatch(i))
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        if let idx = uiState.leaderColorIndex {
+                            Circle().fill(uiState.paletteColor(idx)).frame(width: 9, height: 9)
+                            Text("色 \(idx)")
+                        } else {
+                            Text("レイヤ既定")
+                        }
+                    }
+                    .font(.system(size: 11))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+
+            Text(uiState.leaderBalloon
+                 ? "枠は文字数に合わせて自動サイズ。既存バルーンはダブルクリックで再編集"
+                 : "文字は指示点と反対側へ水平に書きます。既存の傍記はダブルクリックで再編集")
+                .font(.system(size: 9.5))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
     }
 }
 

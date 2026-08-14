@@ -17,6 +17,7 @@ struct SelectionSummary: Equatable {
     var blockCount: Int
     var hatchCount: Int
     var dimCount: Int
+    var leaderCount: Int
     /// 選択中のブロックが全て同じ定義ならその名前
     var commonBlockName: String?
     /// 全選択で共通ならその値(内側nil=byLayer)、混在なら外側nil
@@ -124,6 +125,8 @@ final class CanvasController: NSObject {
     var hatchPatternProvider: (() -> HatchPattern)?
     /// 寸法設定の提供(プロパティカードの値。紙面mm→実寸mm換算込み)
     var dimensionStyleProvider: (() -> DimensionToolStyle)?
+    /// 引出線設定の提供(プロパティカードの値。紙面mm→実寸mm換算込み)
+    var leaderStyleProvider: (() -> LeaderToolStyle)?
     /// インライン文字入力の依頼(スクリーン座標・初期文字列・画面上のフォントpx。
     /// CanvasViewがクリック位置にテキスト欄を出し、確定文字列(キャンセルはnil)を返す)
     var onTextInputRequested: ((_ screen: Vec2, _ initial: String, _ fontPx: Double,
@@ -293,7 +296,7 @@ final class CanvasController: NSObject {
     private func selectionSummary() -> SelectionSummary? {
         guard !selectedEntities.isEmpty else { return nil }
         var lines = 0, circles = 0, arcs = 0, texts = 0, points = 0, blocks = 0, hatches = 0
-        var dims = 0
+        var dims = 0, leaders = 0
         var blockDefIDs = Set<UUID>()
         for e in selectedEntities {
             switch e.kind {
@@ -307,6 +310,7 @@ final class CanvasController: NSObject {
                 blockDefIDs.insert(defID)
             case .hatch: hatches += 1
             case .dimension: dims += 1
+            case .leader: leaders += 1
             }
         }
         var blockName: String?
@@ -321,6 +325,7 @@ final class CanvasController: NSObject {
             count: selectedEntities.count,
             lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
             pointCount: points, blockCount: blocks, hatchCount: hatches, dimCount: dims,
+            leaderCount: leaders,
             commonBlockName: blockName,
             commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
             commonLineType: common(selectedEntities.map(\.style.lineType)),
@@ -674,6 +679,10 @@ final class CanvasController: NSObject {
             return "寸法: 寸法線の位置(引出し量)を動かす / \(commit) / esc中止"
         case .dimExtension:
             return "寸法: 補助線の長さを調整(2本同時)— 測定点近くまで引くと「測定点まで」/ \(commit) / esc中止"
+        case .leaderTip:
+            return "引出線: 指示点(矢印の先端)を動かす — スナップ有効 / \(commit) / esc中止"
+        case .leaderElbow:
+            return "引出線: 文字位置を動かす(引出線が追随)/ \(commit) / esc中止"
         }
     }
 
@@ -1365,8 +1374,13 @@ extension CanvasController: DrawingToolDelegate {
 
     func toolRequestsText(at point: Vec2, completion: @escaping (String?) -> Void) {
         // クリック位置にインライン入力欄を出す(M5.3。従来のダイアログは廃止)
+        toolRequestsText(at: point, fontHeight: tools.textHeight, completion: completion)
+    }
+
+    func toolRequestsText(at point: Vec2, fontHeight: Double,
+                          completion: @escaping (String?) -> Void) {
         let screen = transform.toScreen(point)
-        let fontPx = max(tools.textHeight * transform.scale, 9)
+        let fontPx = max(fontHeight * transform.scale, 9)
         if let request = onTextInputRequested {
             request(screen, "", fontPx, completion)
         } else {
@@ -1400,6 +1414,12 @@ extension CanvasController: DrawingToolDelegate {
                                                        extensionLength: nil),
                                   colorIndex: nil)
     }
+
+    func toolLeaderStyle() -> LeaderToolStyle {
+        leaderStyleProvider?()
+            ?? LeaderToolStyle(attrs: LeaderAttributes(textHeight: 3.5 * document.currentScale),
+                               colorIndex: nil)
+    }
 }
 
 // MARK: - 文字パレット(M5.3)
@@ -1424,13 +1444,21 @@ extension CanvasController {
         for e in document.entities.reversed() {
             guard selectable.contains(e.layer),
                   document.showAuxiliary || !e.isAuxiliary,
-                  case .text = e.kind,
                   e.hitDistance(to: world) <= hitToleranceMm * 2 else { continue }
-            target = e
+            switch e.kind {
+            case .text, .leader:
+                target = e
+            default:
+                continue
+            }
             break
         }
         guard let target else { return false }
-        beginTextEdit(target)
+        if case .leader = target.kind {
+            beginLeaderEdit(target)
+        } else {
+            beginTextEdit(target)
+        }
         return true
     }
 
@@ -1519,6 +1547,77 @@ extension CanvasController {
     func applyDimTextSize(paperMm: Double) {
         updateSelectedDimensions(name: "寸法の文字サイズを変更") { attrs, scale in
             attrs.textHeight = max(paperMm, 0.5) * scale
+        }
+    }
+}
+
+// MARK: - 引出線・バルーン(M5.5)
+
+extension CanvasController {
+
+    /// 選択中の引出線の属性を一括変更する共通処理
+    private func updateSelectedLeaders(name: String,
+                                       change: (inout LeaderAttributes, Double) -> Void) {
+        let doc = document
+        let changed = updateSelection(name: name) { entity in
+            guard case .leader(let tip, let elbow, let content, var attrs) = entity.kind else { return }
+            let scale = doc.groups[entity.layer.group].scale
+            change(&attrs, scale)
+            entity.kind = .leader(tip: tip, elbow: elbow, content: content, attrs: attrs)
+        }
+        if changed {
+            onInfo?("\(name)しました(⌘Zで取り消し)")
+        }
+    }
+
+    /// 引出線の文字サイズの一括変更(紙面mm。バルーンは枠も追随)
+    func applyLeaderTextSize(paperMm: Double) {
+        updateSelectedLeaders(name: "引出線の文字サイズを変更") { attrs, scale in
+            attrs.textHeight = max(paperMm, 0.5) * scale
+        }
+    }
+
+    /// 矢印の有無の一括変更
+    func applyLeaderArrow(_ on: Bool) {
+        updateSelectedLeaders(name: on ? "引出線に矢印を追加" : "引出線の矢印を削除") { attrs, _ in
+            attrs.arrow = on
+        }
+    }
+
+    /// バルーン枠(一重/二重)の一括変更
+    func applyLeaderFrame(double: Bool) {
+        updateSelectedLeaders(name: double ? "バルーンを二重枠に変更" : "バルーンを一重枠に変更") { attrs, _ in
+            attrs.doubleFrame = double
+        }
+    }
+
+    /// 選択中の引出線(1つ)の文字をインライン再編集
+    func editSelectedLeader() {
+        guard let e = selectedEntities.first(where: {
+            if case .leader = $0.kind { return true }
+            return false
+        }) else { return }
+        beginLeaderEdit(e)
+    }
+
+    /// 引出線の文字をインライン再編集(ダブルクリック/パネルの「内容を編集」)
+    func beginLeaderEdit(_ entity: Entity) {
+        guard case .leader(let tip, let elbow, let content, let attrs) = entity.kind else { return }
+        guard let layout = LeaderGeometry.layout(of: entity) else { return }
+        var screen = transform.toScreen(layout.textPosition)
+        if let size = viewSizeProvider?(), size.width > 320 {
+            screen = Vec2(min(max(screen.x, 10), Double(size.width) - 300),
+                          min(max(screen.y, 40), Double(size.height) - 20))
+        }
+        let fontPx = max(attrs.textHeight * transform.scale, 9)
+        onTextInputRequested?(screen, content, fontPx) { [weak self] newText in
+            guard let self, let newText, !newText.isEmpty, newText != content else { return }
+            var after = entity
+            after.kind = .leader(tip: tip, elbow: elbow, content: newText, attrs: attrs)
+            self.commandStack.run(UpdateEntitiesCommand(name: "引出線の文字変更",
+                                                        before: [entity], after: [after]))
+            self.selectionDidChange()
+            self.onInfo?("引出線の文字を変更しました(⌘Zで取り消し)")
         }
     }
 }

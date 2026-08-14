@@ -24,6 +24,8 @@ final class DrawingToolTests: XCTestCase {
         func toolKindChanged(_ kind: ToolKind) { kinds.append(kind) }
         var dimStyle = DimensionToolStyle()
         func toolDimensionStyle() -> DimensionToolStyle { dimStyle }
+        var leaderStyle = LeaderToolStyle()
+        func toolLeaderStyle() -> LeaderToolStyle { leaderStyle }
     }
 
     func makeTool() -> (DrawingToolController, Capture) {
@@ -426,6 +428,53 @@ final class DrawingToolTests: XCTestCase {
         XCTAssertNil(tool.dimB)
         XCTAssertTrue(cap.produced.isEmpty)
         XCTAssertEqual(tool.kind, .dimension)
+    }
+
+    // MARK: - 引出線(M5.5)
+
+    func testLeaderTwoClicksOpensTextAndProduces() {
+        let (tool, cap) = makeTool()
+        cap.leaderStyle = LeaderToolStyle(
+            attrs: LeaderAttributes(balloon: true, doubleFrame: false, arrow: true,
+                                    textHeight: 175, aspectPercent: 80),
+            colorIndex: 4)
+        cap.textToReturn = "PAC-1"
+        tool.select(.leader)
+        tool.click(at: Vec2(0, 0), shiftDown: false)        // 指示点
+        XCTAssertTrue(cap.produced.isEmpty)
+        tool.click(at: Vec2(1000, 800), shiftDown: false)   // 文字位置 → 入力 → 確定
+        XCTAssertEqual(cap.produced.count, 1)
+        guard case .leader(let tip, let elbow, let content, let attrs) = cap.produced[0].kind else {
+            return XCTFail("引出線でない")
+        }
+        XCTAssertEqual(tip, Vec2(0, 0))
+        XCTAssertEqual(elbow, Vec2(1000, 800))
+        XCTAssertEqual(content, "PAC-1")
+        XCTAssertTrue(attrs.balloon)
+        XCTAssertEqual(cap.produced[0].style.colorIndex, 4)
+        // 確定後は次の引出線の待機状態(連続記入)
+        XCTAssertNil(tool.leaderTip)
+        XCTAssertEqual(tool.kind, .leader)
+    }
+
+    func testLeaderCancelledTextProducesNothing() {
+        let (tool, cap) = makeTool()
+        cap.textToReturn = nil                              // 入力をesc
+        tool.select(.leader)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 800), shiftDown: false)
+        XCTAssertTrue(cap.produced.isEmpty)
+        XCTAssertNil(tool.leaderTip)
+    }
+
+    func testLeaderEscCancels() {
+        let (tool, cap) = makeTool()
+        tool.select(.leader)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.cancel()
+        XCTAssertNil(tool.leaderTip)
+        XCTAssertTrue(cap.produced.isEmpty)
+        XCTAssertEqual(tool.kind, .leader)
     }
 
     func testEscEndsChainThenReturnsToSelect() {
