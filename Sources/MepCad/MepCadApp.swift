@@ -351,7 +351,7 @@ struct ContentView: View {
                     Image(systemName: "folder")
                 }
                 .keyboardShortcut("o", modifiers: .command)
-                .help("JWWファイルを開く(⌘O)")
+                .help("図面を開く(JWW / DXF)(⌘O)")
 
                 // パネルのピン留め(自動格納⇔常時表示)
                 Button {

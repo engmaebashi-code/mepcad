@@ -1135,17 +1135,63 @@ final class CanvasController: NSObject {
         commandStack.redo()
     }
 
-    // MARK: - JWW読込(M2 → M4.1で16×16展開に変更)
+    // MARK: - 図面読込(JWW: M2〜 / DXF: M5.0)
 
     func openJwwPanel() {
         let panel = NSOpenPanel()
-        panel.title = "JWWファイルを開く"
-        if let jwwType = UTType(filenameExtension: "jww") {
-            panel.allowedContentTypes = [jwwType]
-        }
+        panel.title = "図面ファイルを開く(JWW / DXF)"
+        var types: [UTType] = []
+        if let jwwType = UTType(filenameExtension: "jww") { types.append(jwwType) }
+        if let dxfType = UTType(filenameExtension: "dxf") { types.append(dxfType) }
+        panel.allowedContentTypes = types
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        loadJww(url: url)
+        if url.pathExtension.lowercased() == "dxf" {
+            loadDxf(url: url)
+        } else {
+            loadJww(url: url)
+        }
+    }
+
+    /// DXF読込(R12〜2007のモデル空間2D。開く=編集可能に展開)
+    func loadDxf(url: URL) {
+        onInfo?("DXF読込中… \(url.lastPathComponent)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let data = try Data(contentsOf: url)
+                let start = Date()
+                let drawing = try DxfParser(data: data).parse()
+                let parseMs = Int(Date().timeIntervalSince(start) * 1000)
+
+                DispatchQueue.main.async {
+                    self.selection = []
+                    self.cancelGripDrag()
+                    self.cancelEditOperation()
+                    let stats = DxfReader.importDrawing(drawing, into: self.document)
+                    self.commandStack.clear()   // 前の図面へのUndoは残さない
+                    self.selectionDidChange()
+                    if let size = self.viewSizeProvider?() {
+                        self.fit(viewSize: size)
+                    }
+                    var parts = ["\(stats.entityCount)要素"]
+                    if stats.blockRefCount > 0 {
+                        parts.append("ブロック配置\(stats.blockRefCount)(定義\(stats.blockDefinitionCount))")
+                    }
+                    if stats.dimensionCount > 0 { parts.append("寸法\(stats.dimensionCount)") }
+                    if stats.paperDetected {
+                        parts.append("\(self.document.paperSize.label)・1/\(Int(stats.scaleDenominator))を復元")
+                    }
+                    let skipped = stats.skippedTypes.map { "\($0.key)×\($0.value)" }.sorted().joined(separator: " ")
+                    let skippedNote = skipped.isEmpty ? "" : " / 未対応スキップ: \(skipped)"
+                    self.onInfo?("\(url.lastPathComponent) — \(parts.joined(separator: " ")) / 解析\(parseMs)ms\(skippedNote)")
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.onInfo?("DXF読込エラー: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     func loadJww(url: URL) {
@@ -1163,7 +1209,10 @@ final class CanvasController: NSObject {
                 DispatchQueue.main.async {
                     // 「開く」= 図面全体の置き換え(レイヤ構造ごとJWWの16×16を展開)
                     self.selection = []
+                    self.cancelGripDrag()
+                    self.cancelEditOperation()
                     let stats = JwwReader.importDrawingWithStats(drawing, into: self.document)
+                    self.commandStack.clear()   // 前の図面へのUndoは残さない
                     self.selectionDidChange()
                     if let size = self.viewSizeProvider?() {
                         self.fit(viewSize: size)
