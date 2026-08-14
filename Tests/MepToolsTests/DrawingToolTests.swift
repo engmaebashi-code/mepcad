@@ -299,6 +299,23 @@ final class DrawingToolTests: XCTestCase {
         XCTAssertEqual(cap.produced[0].style.lineType, 4)  // 一点鎖1
     }
 
+    /// 文字パレットのサイズ・角度が配置に反映される(M5.3)
+    func testTextHeightAndAngleApplied() {
+        let (tool, cap) = makeTool()
+        tool.textHeight = 175          // 紙面3.5mm×1/50
+        tool.textAngleDegrees = 90
+        tool.select(.text)
+        tool.click(at: Vec2(100, 200), shiftDown: false)   // スタブが「テスト」を返す
+        XCTAssertEqual(cap.produced.count, 1)
+        guard case .text(let p, let content, let h, let angle) = cap.produced[0].kind else {
+            return XCTFail()
+        }
+        XCTAssertEqual(p, Vec2(100, 200))
+        XCTAssertEqual(content, "テスト")
+        XCTAssertEqual(h, 175, accuracy: 1e-9)
+        XCTAssertEqual(angle, .pi / 2, accuracy: 1e-9)
+    }
+
     // MARK: - ハッチング(M5.2)
 
     func testHatchPolygonClickAndEnterCommit() {

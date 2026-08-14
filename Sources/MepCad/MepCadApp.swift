@@ -50,6 +50,9 @@ final class CanvasUIState: ObservableObject {
     @Published var activeEditOp: EditOpKind?
     /// 移動・複写の角度プロパティ(度)
     @Published var editRotation: Double = 0
+    // 文字設定(文字種チップ: 紙面mm+角度。内部は実寸mm保持)
+    @Published var textPaperSize: Double = 3.5
+    @Published var textAngle: Double = 0
     // ハッチング設定(FILDER準拠: パターン・A/B間隔・角度・実寸/印刷寸)
     @Published var hatchKind: HatchPattern.Kind = .horizontal
     @Published var hatchA: Double = 2      // A間隔
@@ -162,6 +165,20 @@ struct ContentView: View {
                     VStack {
                         HStack {
                             EditPropertyCard(controller: controller, uiState: uiState)
+                                .onHover { controller.uiHovering = $0 }
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // 文字パレット(文字種チップ: 紙面mmサイズ+角度)
+                if uiState.tool == .text {
+                    VStack {
+                        HStack {
+                            TextPropertyCard(controller: controller, uiState: uiState)
                                 .onHover { controller.uiHovering = $0 }
                             Spacer()
                         }
@@ -472,6 +489,85 @@ struct ContentView: View {
         panelHideWork = work
         // 少し待ってから格納(右端→パネルへ移動する間に消えないよう猶予を持たせる)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+}
+
+/// 文字ツール中に出る文字パレット(文字種チップ: 紙面mm 2.5/3.5/5/7+自由、角度)
+struct TextPropertyCard: View {
+    let controller: CanvasController
+    @ObservedObject var uiState: CanvasUIState
+
+    private let presets: [Double] = [2.5, 3.5, 5, 7]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("文字 — クリック位置でそのまま入力")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 5) {
+                Text("文字種")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                ForEach(presets, id: \.self) { mm in
+                    Button {
+                        uiState.textPaperSize = mm
+                        push()
+                    } label: {
+                        Text(mm == mm.rounded() ? "\(Int(mm))" : String(format: "%.1f", mm))
+                            .font(.system(size: 11, weight: uiState.textPaperSize == mm ? .bold : .regular))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(uiState.textPaperSize == mm ? Color.blue : Color.primary.opacity(0.07),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .foregroundStyle(uiState.textPaperSize == mm ? Color.white : Color.primary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                TextField("自由", value: $uiState.textPaperSize, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 46)
+                    .onSubmit { push() }
+                Text("mm(紙面)")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Text("角度")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                TextField("", value: $uiState.textAngle, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 42)
+                    .onSubmit { push() }
+                Text("°")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(String(format: "実寸 %.0fmm(縮尺1/%.0f換算)。既存の文字はダブルクリックで再編集",
+                        uiState.textPaperSize * uiState.scaleDenominator, uiState.scaleDenominator))
+                .font(.system(size: 9.5))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
+        .onAppear { push() }
+        .onChange(of: uiState.scaleDenominator) { _, _ in
+            push()   // 縮尺変更に追従(紙面mm→実寸mm換算をやり直す)
+        }
+    }
+
+    private func push() {
+        controller.setTextStyle(paperMm: uiState.textPaperSize,
+                                angleDegrees: uiState.textAngle)
     }
 }
 

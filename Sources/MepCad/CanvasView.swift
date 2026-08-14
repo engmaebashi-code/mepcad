@@ -543,7 +543,7 @@ final class CrosshairOverlayView: NSView {
 
 // MARK: - イベントを受けるコンテナ
 
-final class CanvasContainerView: NSView {
+final class CanvasContainerView: NSView, NSTextFieldDelegate {
     let controller: CanvasController
     private let content = CanvasContentView()
     private let overlay = CrosshairOverlayView()
@@ -551,6 +551,10 @@ final class CanvasContainerView: NSView {
     /// 選択ツールでのクリック/ドラッグ判定用
     private var mouseDownScreen: Vec2?
     private var isMarqueeDragging = false
+
+    /// インライン文字入力(M5.3: クリック位置で直接入力)
+    private var inlineField: NSTextField?
+    private var inlineCompletion: ((String?) -> Void)?
 
     private var invisibleCursor: NSCursor = {
         let image = NSImage(size: NSSize(width: 1, height: 1))
@@ -594,6 +598,72 @@ final class CanvasContainerView: NSView {
             guard let self else { return }
             self.window?.invalidateCursorRects(for: self)
         }
+        controller.onTextInputRequested = { [weak self] screen, initial, fontPx, completion in
+            self?.beginInlineTextInput(at: screen, initial: initial,
+                                       fontPx: fontPx, completion: completion)
+        }
+    }
+
+    // MARK: - インライン文字入力(M5.3)
+
+    private func beginInlineTextInput(at screen: Vec2, initial: String, fontPx: Double,
+                                      completion: @escaping (String?) -> Void) {
+        finishInlineInput(commit: false)   // 進行中のものがあれば破棄
+        let fontSize = min(max(fontPx, 11), 48)
+        let height = fontSize + 12
+        let field = NSTextField(frame: NSRect(x: screen.x - 3,
+                                              y: screen.y - height + 4,
+                                              width: 280, height: height))
+        field.stringValue = initial
+        field.font = .systemFont(ofSize: fontSize)
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.backgroundColor = .textBackgroundColor
+        field.drawsBackground = true
+        field.placeholderString = "文字を入力(⏎確定 / esc中止)"
+        field.target = self
+        field.action = #selector(inlineFieldCommitted)
+        field.delegate = self
+        addSubview(field)
+        inlineField = field
+        inlineCompletion = completion
+        window?.makeFirstResponder(field)
+    }
+
+    @objc private func inlineFieldCommitted() {
+        finishInlineInput(commit: true)
+    }
+
+    private func finishInlineInput(commit: Bool) {
+        guard let field = inlineField else { return }
+        let text = field.stringValue
+        let completion = inlineCompletion
+        // フォーカスがまだこの欄にある時だけキャンバスへ戻す
+        // (他のコントロールへのクリックで確定した場合は、そちらのフォーカスを奪わない)
+        let hadFocus = (window?.firstResponder as? NSText)?.delegate === field
+            || window?.firstResponder === field
+        inlineField = nil
+        inlineCompletion = nil
+        field.removeFromSuperview()
+        if hadFocus {
+            window?.makeFirstResponder(self)
+        }
+        completion?(commit && !text.isEmpty ? text : nil)
+    }
+
+    /// escで中止、クリックアウェイ(編集終了)で確定
+    func control(_ control: NSControl, textView: NSTextView,
+                 doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            finishInlineInput(commit: false)
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        // Enter確定はaction経由で処理済み。フォーカスが外れた場合はここで確定
+        finishInlineInput(commit: true)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -703,7 +773,10 @@ final class CanvasContainerView: NSView {
             return
         }
         if event.clickCount == 2 {
-            controller.fit(viewSize: bounds.size)
+            // 文字の上ならインライン再編集、それ以外は全体表示
+            if !controller.beginTextEditAtCursor() {
+                controller.fit(viewSize: bounds.size)
+            }
             return
         }
         mouseDownScreen = p

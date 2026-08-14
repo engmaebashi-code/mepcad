@@ -382,6 +382,31 @@ struct PropertyPanelView: View {
                     }
                 }
 
+                // 文字セクション(文字を選択中のみ。M5.3)
+                if sel.textCount > 0 {
+                    propertyRow("文字") {
+                        HStack(spacing: 6) {
+                            Menu {
+                                ForEach([2.5, 3.5, 5.0, 7.0], id: \.self) { mm in
+                                    Button(mm == mm.rounded() ? "紙面 \(Int(mm))mm" : String(format: "紙面 %.1fmm", mm)) {
+                                        controller.applyTextPaperSize(mm)
+                                    }
+                                }
+                            } label: {
+                                Text("サイズ").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                            if sel.textCount == 1 && sel.count == 1 {
+                                Button("内容を編集…") {
+                                    controller.editSelectedText()
+                                }
+                                .font(.system(size: 11))
+                                .buttonStyle(.link)
+                            }
+                        }
+                    }
+                }
+
                 if let blockName = sel.commonBlockName {
                     propertyRow("ブロック") {
                         Text(sel.blockCount > 1 ? "\(blockName) ×\(sel.blockCount)" : blockName)

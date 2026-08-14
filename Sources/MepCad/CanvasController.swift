@@ -121,6 +121,10 @@ final class CanvasController: NSObject {
     var onDrawingSetupChanged: ((PaperSize, Double) -> Void)?
     /// ハッチング設定の提供(プロパティカードの値。印刷寸→実寸換算込み)
     var hatchPatternProvider: (() -> HatchPattern)?
+    /// インライン文字入力の依頼(スクリーン座標・初期文字列・画面上のフォントpx。
+    /// CanvasViewがクリック位置にテキスト欄を出し、確定文字列(キャンセルはnil)を返す)
+    var onTextInputRequested: ((_ screen: Vec2, _ initial: String, _ fontPx: Double,
+                                _ completion: @escaping (String?) -> Void) -> Void)?
 
     override init() {
         let doc = Document()
@@ -322,15 +326,17 @@ final class CanvasController: NSObject {
 
     // MARK: - 選択オブジェクトの属性変更(プロパティパネルから)
 
-    /// スタイル・レイヤの一括変更。changeでコピーを書き換える
-    private func updateSelection(name: String, change: (inout Entity) -> Void) {
-        guard !selectedEntities.isEmpty else { return }
+    /// スタイル・レイヤの一括変更。changeでコピーを書き換える。変更が無ければfalse
+    @discardableResult
+    private func updateSelection(name: String, change: (inout Entity) -> Void) -> Bool {
+        guard !selectedEntities.isEmpty else { return false }
         let before = selectedEntities
         var after = before
         for i in after.indices { change(&after[i]) }
-        guard after != before else { return }
+        guard after != before else { return false }
         commandStack.run(UpdateEntitiesCommand(name: name, before: before, after: after))
         selectionDidChange()
+        return true
     }
 
     func applyColorIndex(_ index: Int?) {
@@ -1347,16 +1353,14 @@ extension CanvasController: DrawingToolDelegate {
     }
 
     func toolRequestsText(at point: Vec2, completion: @escaping (String?) -> Void) {
-        let alert = NSAlert()
-        alert.messageText = "文字を入力"
-        alert.informativeText = "配置位置: X \(Int(point.x))  Y \(Int(point.y))"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        alert.accessoryView = field
-        alert.addButton(withTitle: "配置")
-        alert.addButton(withTitle: "キャンセル")
-        alert.window.initialFirstResponder = field
-        let response = alert.runModal()
-        completion(response == .alertFirstButtonReturn ? field.stringValue : nil)
+        // クリック位置にインライン入力欄を出す(M5.3。従来のダイアログは廃止)
+        let screen = transform.toScreen(point)
+        let fontPx = max(tools.textHeight * transform.scale, 9)
+        if let request = onTextInputRequested {
+            request(screen, "", fontPx, completion)
+        } else {
+            completion(nil)
+        }
     }
 
     func toolStatusChanged(_ hint: String) {
@@ -1375,5 +1379,83 @@ extension CanvasController: DrawingToolDelegate {
                             spacingA: 2 * document.currentScale,
                             spacingB: 1 * document.currentScale,
                             angle: .pi / 4)
+    }
+}
+
+// MARK: - 文字パレット(M5.3)
+
+extension CanvasController {
+
+    /// 文字種チップの設定を反映(紙面mm→実寸mmは書込グループの縮尺で換算)
+    func setTextStyle(paperMm: Double, angleDegrees: Double) {
+        tools.textHeight = max(paperMm, 0.5) * document.currentScale
+        tools.textAngleDegrees = angleDegrees
+    }
+
+    /// ダブルクリック位置の文字をインライン再編集する。文字が無ければfalse(呼び出し側が全体表示へ)
+    @discardableResult
+    func beginTextEditAtCursor() -> Bool {
+        guard tools.kind == .select, !editOp.isActive, gripDrag == nil,
+              let cursor = cursorScreen else { return false }
+        let world = transform.toWorld(cursor)
+        // 最前面の文字を探す(文字以外がヒットしても文字を優先)
+        let selectable = SelectionEngine.selectableAddresses(document.groups)
+        var target: Entity?
+        for e in document.entities.reversed() {
+            guard selectable.contains(e.layer),
+                  document.showAuxiliary || !e.isAuxiliary,
+                  case .text = e.kind,
+                  e.hitDistance(to: world) <= hitToleranceMm * 2 else { continue }
+            target = e
+            break
+        }
+        guard let target else { return false }
+        beginTextEdit(target)
+        return true
+    }
+
+    /// 選択中の文字(1つ)をインライン再編集(プロパティパネルの「内容を編集」から)
+    func editSelectedText() {
+        guard let e = selectedEntities.first(where: {
+            if case .text = $0.kind { return true }
+            return false
+        }) else { return }
+        beginTextEdit(e)
+    }
+
+    private func beginTextEdit(_ entity: Entity) {
+        guard case .text(let position, let content, let height, _) = entity.kind else { return }
+        var screen = transform.toScreen(position)
+        // 画面外の文字を編集する場合は入力欄が見える位置に収める
+        if let size = viewSizeProvider?(), size.width > 320 {
+            screen = Vec2(min(max(screen.x, 10), Double(size.width) - 300),
+                          min(max(screen.y, 40), Double(size.height) - 20))
+        }
+        let fontPx = max(height * transform.scale, 9)
+        onTextInputRequested?(screen, content, fontPx) { [weak self] newText in
+            guard let self, let newText, !newText.isEmpty, newText != content else { return }
+            var after = entity
+            if case .text(let p, _, let h, let a) = entity.kind {
+                after.kind = .text(position: p, content: newText, height: h, angle: a)
+            }
+            self.commandStack.run(UpdateEntitiesCommand(name: "文字変更",
+                                                        before: [entity], after: [after]))
+            self.selectionDidChange()
+            self.onInfo?("文字を変更しました(⌘Zで取り消し)")
+        }
+    }
+
+    /// 選択中の文字のサイズを紙面mmで一括変更(実寸は各文字の所属グループ縮尺で換算)
+    func applyTextPaperSize(_ paperMm: Double) {
+        let doc = document
+        let changed = updateSelection(name: "文字サイズ変更") { entity in
+            guard case .text(let p, let content, _, let angle) = entity.kind else { return }
+            let scale = doc.groups[entity.layer.group].scale
+            entity.kind = .text(position: p, content: content,
+                                height: max(paperMm, 0.5) * scale, angle: angle)
+        }
+        if changed {
+            onInfo?(String(format: "文字サイズを紙面%.1fmmにしました(⌘Zで取り消し)", paperMm))
+        }
     }
 }

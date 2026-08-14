@@ -76,8 +76,10 @@ public final class DrawingToolController {
     /// 円弧: 始点(中心の次に指示。半径が確定する)
     private var arcStart: Vec2?
     public private(set) var lastCursor: Vec2 = .zero
-    /// 文字の既定高さ(実寸mm。1/50印刷で紙面6mm相当)
+    /// 文字の既定高さ(実寸mm。文字種チップの紙面mm×縮尺で設定される)
     public var textHeight: Double = 300
+    /// 文字の角度(度・反時計回り正。文字パレットから設定)
+    public var textAngleDegrees: Double = 0
     /// 2線のA側/B側オフセット(実寸mm・基準線からの距離)。`a,b⏎`で個別、`w⏎`で振分半々。記憶される
     public private(set) var doubleLineOffsetA: Double = 50
     public private(set) var doubleLineOffsetB: Double = 50
@@ -227,7 +229,8 @@ public final class DrawingToolController {
                 self.delegate?.toolDidProduce(
                     Entity(layer: self.currentLayer,
                            kind: .text(position: p, content: text,
-                                       height: self.textHeight, angle: 0)))
+                                       height: self.textHeight,
+                                       angle: self.textAngleDegrees * .pi / 180)))
             }
 
         case .hatch:
@@ -497,7 +500,7 @@ public final class DrawingToolController {
         case .point:
             return "点: 配置位置をクリック"
         case .text:
-            return "文字: 配置位置をクリック"
+            return "文字: 配置位置をクリック(その場で入力 — ⏎確定 / esc中止。サイズ・角度は左上のカード)"
         case .hatch:
             if hatchPoints.isEmpty {
                 return "ハッチング: 領域の頂点を順にクリック(スナップ有効)— パターンは左上のカードで設定"
