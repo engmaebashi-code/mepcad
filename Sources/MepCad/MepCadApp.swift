@@ -286,11 +286,13 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
             }
 
-            // 角度拘束パレット(常設・マウスだけで切替)
+            // 角度拘束パレット(常設・マウスだけで切替。表記を短くして幅を節約)
             ToolbarItemGroup {
                 Picker("角度拘束", selection: $angle) {
                     ForEach(AngleConstraint.allCases, id: \.self) { constraint in
-                        Text(constraint.rawValue).tag(constraint)
+                        Text(constraint == .free ? "自由"
+                             : constraint.rawValue.replacingOccurrences(of: "°", with: ""))
+                            .tag(constraint)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -317,60 +319,50 @@ struct ContentView: View {
                 .help("やり直し(⇧⌘Z)")
             }
 
-            // スナップ設定(将来は環境設定に移設)
+            // ファイル(新規・開く)— ⌘N/⌘Oはメニューバー側(commands)にも登録
             ToolbarItemGroup {
                 Menu {
-                    Toggle("端点", isOn: $snapEndpoint)
-                        .onChange(of: snapEndpoint) { _, v in controller.snapEngine.settings.endpoint = v }
-                    Toggle("交点", isOn: $snapIntersection)
-                        .onChange(of: snapIntersection) { _, v in controller.snapEngine.settings.intersection = v }
-                    Toggle("中点", isOn: $snapMidpoint)
-                        .onChange(of: snapMidpoint) { _, v in controller.snapEngine.settings.midpoint = v }
-                    Toggle("円の中心", isOn: $snapCenter)
-                        .onChange(of: snapCenter) { _, v in controller.snapEngine.settings.center = v }
-                    Toggle("線上", isOn: $snapOnLine)
-                        .onChange(of: snapOnLine) { _, v in controller.snapEngine.settings.onLine = v }
-                } label: {
-                    Image(systemName: "scope")
-                }
-                .help("スナップ設定(種別ごとのON/OFF)")
-            }
-
-            ToolbarItemGroup {
-                Button {
-                    controller.newDrawingPanel()
-                } label: {
-                    Image(systemName: "doc.badge.plus")
-                }
-                .keyboardShortcut("n", modifiers: .command)
-                .help("新規図面(⌘N)— 用紙と縮尺を決めてから白紙で開始")
-
-                Button {
-                    controller.openJwwPanel()
+                    Button("新規図面…(用紙・縮尺を指定)") {
+                        controller.newDrawingPanel()
+                    }
+                    Button("開く…(JWW / DXF)") {
+                        controller.openJwwPanel()
+                    }
                 } label: {
                     Image(systemName: "folder")
                 }
-                .keyboardShortcut("o", modifiers: .command)
-                .help("図面を開く(JWW / DXF)(⌘O)")
+                .help("ファイル: 新規図面(⌘N)/ 開く(⌘O)")
 
-                // パネルのピン留め(自動格納⇔常時表示)
-                Button {
-                    uiState.panelPinned.toggle()
-                    if uiState.panelPinned { panelRevealed = true }
+                // 設定(パネル固定・背景色・スナップ種別)
+                Menu {
+                    Toggle("パネルを固定表示", isOn: $uiState.panelPinned)
+                    Button(isDark ? "背景をライトに" : "背景をダークに") {
+                        controller.toggleTheme()
+                        isDark.toggle()
+                        uiState.updatePalette(from: controller.theme)
+                    }
+                    Divider()
+                    Section("スナップ") {
+                        Toggle("端点", isOn: $snapEndpoint)
+                            .onChange(of: snapEndpoint) { _, v in controller.snapEngine.settings.endpoint = v }
+                        Toggle("交点", isOn: $snapIntersection)
+                            .onChange(of: snapIntersection) { _, v in controller.snapEngine.settings.intersection = v }
+                        Toggle("中点", isOn: $snapMidpoint)
+                            .onChange(of: snapMidpoint) { _, v in controller.snapEngine.settings.midpoint = v }
+                        Toggle("円の中心", isOn: $snapCenter)
+                            .onChange(of: snapCenter) { _, v in controller.snapEngine.settings.center = v }
+                        Toggle("線上", isOn: $snapOnLine)
+                            .onChange(of: snapOnLine) { _, v in controller.snapEngine.settings.onLine = v }
+                    }
                 } label: {
-                    Image(systemName: uiState.panelPinned ? "sidebar.trailing" : "sidebar.right")
+                    Image(systemName: "gearshape")
                 }
-                .help("レイヤ/プロパティパネル(右端にカーソルを寄せても出ます)")
-
-                Button {
-                    controller.toggleTheme()
-                    isDark.toggle()
-                    uiState.updatePalette(from: controller.theme)
-                } label: {
-                    Image(systemName: isDark ? "sun.max" : "moon")
-                }
-                .help("背景色(ライト/ダーク)切替 — 正式版では環境設定に配置")
+                .help("設定: パネル固定 / 背景色 / スナップ種別")
             }
+        }
+        .onChange(of: uiState.panelPinned) { _, pinned in
+            // メニューから固定をONにしたら即表示する
+            if pinned { revealPanel() }
         }
         .onAppear {
             controller.onStatusUpdate = { coords, zoom, snap in
@@ -530,8 +522,21 @@ struct MepCadApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("MepCad — M4") {
+        WindowGroup("MepCad — M5") {
             ContentView(controller: controller, uiState: uiState)
+        }
+        .commands {
+            // ファイルメニュー(⌘N/⌘Oのショートカットはここで一元管理)
+            CommandGroup(replacing: .newItem) {
+                Button("新規図面…") {
+                    controller.newDrawingPanel()
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                Button("開く…(JWW / DXF)") {
+                    controller.openJwwPanel()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
         }
     }
 }
