@@ -59,6 +59,14 @@ final class CanvasUIState: ObservableObject {
     @Published var hatchB: Double = 1      // B間隔
     @Published var hatchAngle: Double = 45 // 度
     @Published var hatchPaperUnits = true  // true=印刷寸(紙面mm×縮尺)、false=実寸mm
+    // 寸法設定(M5.4: 方向・端部・補助線長さ・文字サイズ・色)
+    @Published var dimAxis: DimAxisMode = .horizontal
+    @Published var dimTerminator: DimTerminator = .dot
+    /// 寸法補助線の長さ(紙面mm)。-1=測定点まで、0=なし、>0=指定長さ
+    @Published var dimExtension: Double = -1
+    @Published var dimTextSize: Double = 2.5   // 紙面mm
+    /// 寸法の色(nil=レイヤ既定)
+    @Published var dimColorIndex: Int? = nil
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -134,6 +142,7 @@ private func toolIcon(_ kind: ToolKind) -> String {
     case .point: return "smallcircle.filled.circle"
     case .text: return "textformat"
     case .hatch: return "line.3.horizontal"
+    case .dimension: return "ruler"
     }
 }
 
@@ -179,6 +188,20 @@ struct ContentView: View {
                     VStack {
                         HStack {
                             TextPropertyCard(controller: controller, uiState: uiState)
+                                .onHover { controller.uiHovering = $0 }
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // 寸法プロパティカード(方向・端部・補助線・文字サイズ・色)
+                if uiState.tool == .dimension {
+                    VStack {
+                        HStack {
+                            DimensionPropertyCard(uiState: uiState)
                                 .onHover { controller.uiHovering = $0 }
                             Spacer()
                         }
@@ -458,6 +481,18 @@ struct ContentView: View {
                                     spacingB: max(uiState.hatchB, 0.1) * factor,
                                     angle: uiState.hatchAngle * .pi / 180)
             }
+            controller.dimensionStyleProvider = { [weak controller, weak uiState] in
+                guard let controller, let uiState else { return DimensionToolStyle() }
+                // 紙面mm→実寸mm(書込グループの縮尺で換算。文字パレットと同じ流儀)
+                let scale = controller.document.currentScale
+                let ext: Double? = uiState.dimExtension < 0 ? nil : uiState.dimExtension * scale
+                return DimensionToolStyle(
+                    axis: uiState.dimAxis,
+                    attrs: DimAttributes(terminator: uiState.dimTerminator,
+                                         textHeight: max(uiState.dimTextSize, 0.5) * scale,
+                                         extensionLength: ext),
+                    colorIndex: uiState.dimColorIndex)
+            }
             controller.onEditOpChanged = { kind in
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                     uiState.activeEditOp = kind
@@ -568,6 +603,134 @@ struct TextPropertyCard: View {
     private func push() {
         controller.setTextStyle(paperMm: uiState.textPaperSize,
                                 angleDegrees: uiState.textAngle)
+    }
+}
+
+/// 寸法ツール中に出るプロパティカード(方向・端部・補助線長さ・文字サイズ・色)
+struct DimensionPropertyCard: View {
+    @ObservedObject var uiState: CanvasUIState
+
+    private let textPresets: [Double] = [2.5, 3.5, 5, 7]
+    /// (表示名, dimExtension値): -1=測定点まで 0=なし >0=紙面mm
+    private let extPresets: [(String, Double)] = [("測定点まで", -1), ("5mm", 5), ("3mm", 3), ("なし", 0)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("寸法 — 測定点1→測定点2→寸法線の位置")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Picker("", selection: $uiState.dimAxis) {
+                    ForEach(DimAxisMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+                .help("寸法線の方向: 水平/垂直/平行(測定点2点の方向)")
+
+                Picker("", selection: $uiState.dimTerminator) {
+                    ForEach(DimTerminator.allCases, id: \.self) { t in
+                        Text(t.label).tag(t)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 100)
+                .help("端部記号: 黒丸(実点)/ 矢印")
+
+                Text("補助線")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(extPresets, id: \.1) { preset in
+                        Button((uiState.dimExtension == preset.1 ? "✓ " : "   ") + preset.0) {
+                            uiState.dimExtension = preset.1
+                        }
+                    }
+                } label: {
+                    Text(extLabel)
+                        .font(.system(size: 11))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("寸法補助線の長さ(紙面mm)。測定点まで/指定長さ/なし")
+            }
+
+            HStack(spacing: 5) {
+                Text("文字")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                ForEach(textPresets, id: \.self) { mm in
+                    Button {
+                        uiState.dimTextSize = mm
+                    } label: {
+                        Text(mm == mm.rounded() ? "\(Int(mm))" : String(format: "%.1f", mm))
+                            .font(.system(size: 11, weight: uiState.dimTextSize == mm ? .bold : .regular))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(uiState.dimTextSize == mm ? Color.blue : Color.primary.opacity(0.07),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .foregroundStyle(uiState.dimTextSize == mm ? Color.white : Color.primary)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("mm(紙面)")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+
+                Text("色")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Menu {
+                    Button("レイヤ既定") { uiState.dimColorIndex = nil }
+                    Divider()
+                    ForEach(0..<uiState.paletteColors.count, id: \.self) { i in
+                        Button {
+                            uiState.dimColorIndex = i
+                        } label: {
+                            Label {
+                                Text("色 \(i)")
+                            } icon: {
+                                Image(nsImage: uiState.colorSwatch(i))
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        if let idx = uiState.dimColorIndex {
+                            Circle().fill(uiState.paletteColor(idx)).frame(width: 9, height: 9)
+                            Text("色 \(idx)")
+                        } else {
+                            Text("レイヤ既定")
+                        }
+                    }
+                    .font(.system(size: 11))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("寸法の色(線・端部・寸法値とも)。レイヤ既定か色番号を指定")
+            }
+
+            Text("寸法値は実測値を自動記入(実寸mm)。既存寸法の変更はプロパティパネルから")
+                .font(.system(size: 9.5))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
+    }
+
+    private var extLabel: String {
+        if uiState.dimExtension < 0 { return "測定点まで" }
+        if uiState.dimExtension == 0 { return "なし" }
+        return String(format: "%.0fmm", uiState.dimExtension)
     }
 }
 

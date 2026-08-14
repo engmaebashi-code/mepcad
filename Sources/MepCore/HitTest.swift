@@ -78,6 +78,18 @@ extension Entity {
         return BBox(minX: p.x, minY: p.y, maxX: p.x + width, maxY: p.y + height)
     }
 
+    /// 回転を考慮した文字グリフボックスの四隅(基準点→幅方向→対角→高さ方向の順)。
+    /// 90°/270°の縦文字も本体クリックで選択できるようにする(M5.4)
+    public var textGlyphCorners: [Vec2]? {
+        guard case .text(let p, let content, let height, let angle) = kind else { return nil }
+        let width = max(height * 0.6, Double(content.count) * height * 0.9)
+        let c = cos(angle)
+        let s = sin(angle)
+        return [Vec2(0, 0), Vec2(width, 0), Vec2(width, height), Vec2(0, height)].map {
+            Vec2(p.x + $0.x * c - $0.y * s, p.y + $0.x * s + $0.y * c)
+        }
+    }
+
     /// 点からエンティティ(の輪郭)への距離。選択のヒットテストに使う
     public func hitDistance(to p: Vec2) -> Double {
         switch kind {
@@ -97,11 +109,18 @@ extension Entity {
             let pb = Vec2(c.x + r * cos(ea), c.y + r * sin(ea))
             return min(pa.distance(to: p), pb.distance(to: p))
 
-        case .text:
-            guard let box = approximateTextBounds else { return .infinity }
-            if box.contains(p) { return 0 }
-            let dx = max(box.minX - p.x, 0, p.x - box.maxX)
-            let dy = max(box.minY - p.y, 0, p.y - box.maxY)
+        case .text(let pos, let content, let height, let angle):
+            // 回転を戻したローカル座標で判定(回転は距離を保つのでそのまま距離になる)。
+            // 90°/270°の縦文字も本体クリックで選択できる
+            let width = max(height * 0.6, Double(content.count) * height * 0.9)
+            let c = cos(angle)
+            let s = sin(angle)
+            let dxp = p.x - pos.x
+            let dyp = p.y - pos.y
+            let lx = dxp * c + dyp * s
+            let ly = -dxp * s + dyp * c
+            let dx = max(-lx, 0, lx - width)
+            let dy = max(-ly, 0, ly - height)
             return (dx * dx + dy * dy).squareRoot()
 
         case .point(let pos):
@@ -126,6 +145,20 @@ extension Entity {
                 best = min(best, HitGeometry.closestPointOnSegment(p, a, b).distance(to: p))
             }
             return best
+
+        case .dimension:
+            guard let layout = DimensionGeometry.layout(of: self) else { return .infinity }
+            var best = Double.infinity
+            for seg in layout.hitSegments {
+                best = min(best, HitGeometry.closestPointOnSegment(p, seg.0, seg.1).distance(to: p))
+            }
+            // 寸法値文字はベースライン線分で近似(高さ分は下の許容距離が拾う)
+            let w = DimensionGeometry.textWidth(layout.textContent, height: layout.textHeight)
+            let ut = Vec2(cos(layout.textAngle), sin(layout.textAngle))
+            let textEnd = layout.textPosition + ut * w
+            best = min(best, HitGeometry.closestPointOnSegment(p, layout.textPosition, textEnd)
+                                .distance(to: p))
+            return best
         }
     }
 
@@ -140,8 +173,8 @@ extension Entity {
             return HitGeometry.arcSamplePoints(center: c, radius: r, startAngle: sa, endAngle: ea)
                 .allSatisfy { rect.contains($0) }
         case .text:
-            guard let box = approximateTextBounds else { return false }
-            return rect.contains(Vec2(box.minX, box.minY)) && rect.contains(Vec2(box.maxX, box.maxY))
+            guard let corners = textGlyphCorners else { return false }
+            return corners.allSatisfy { rect.contains($0) }
         case .point(let pos):
             return rect.contains(pos)
         case .blockRef(_, let insert, _, _, _, let cached):
@@ -150,6 +183,11 @@ extension Entity {
                 && rect.contains(Vec2(cached.maxX, cached.maxY))
         case .hatch(let boundary, _):
             return !boundary.isEmpty && boundary.allSatisfy { rect.contains($0) }
+        case .dimension:
+            // 導出ジオメトリ全体(bounds)が入っていれば内包
+            let box = bounds
+            return !box.isEmpty && rect.contains(Vec2(box.minX, box.minY))
+                && rect.contains(Vec2(box.maxX, box.maxY))
         }
     }
 
@@ -178,9 +216,16 @@ extension Entity {
             return false
 
         case .text:
-            guard let box = approximateTextBounds else { return false }
-            return !(box.maxX < rect.minX || box.minX > rect.maxX ||
-                     box.maxY < rect.minY || box.minY > rect.maxY)
+            // 回転したグリフボックス(凸四角形)と矩形の交差判定
+            guard let corners = textGlyphCorners else { return false }
+            if corners.contains(where: { rect.contains($0) }) { return true }
+            for i in 0..<4 {
+                if HitGeometry.segmentIntersectsRect(corners[i], corners[(i + 1) % 4], rect) {
+                    return true
+                }
+            }
+            // 矩形がグリフボックスに完全に入っているケース
+            return HatchGeometry.polygonContains(Vec2(rect.minX, rect.minY), corners)
         case .point(let pos):
             return rect.contains(pos)
         case .blockRef(_, let insert, _, _, _, let cached):
@@ -198,6 +243,16 @@ extension Entity {
             }
             // 矩形がポリゴンに完全に入っているケース
             return HatchGeometry.polygonContains(Vec2(rect.minX, rect.minY), boundary)
+
+        case .dimension:
+            guard let layout = DimensionGeometry.layout(of: self) else { return false }
+            for seg in layout.hitSegments {
+                if HitGeometry.segmentIntersectsRect(seg.0, seg.1, rect) { return true }
+            }
+            let w = DimensionGeometry.textWidth(layout.textContent, height: layout.textHeight)
+            let ut = Vec2(cos(layout.textAngle), sin(layout.textAngle))
+            return HitGeometry.segmentIntersectsRect(layout.textPosition,
+                                                     layout.textPosition + ut * w, rect)
         }
     }
 
@@ -225,6 +280,9 @@ extension Entity {
                                   rotation: rot, scale: scale, mirrored: mir, cachedBounds: box)
         case .hatch(let boundary, let pattern):
             copy.kind = .hatch(boundary: boundary.map { $0 + delta }, pattern: pattern)
+        case .dimension(let a, let b, let lp, let angle, let attrs):
+            copy.kind = .dimension(a: a + delta, b: b + delta, linePoint: lp + delta,
+                                   angle: angle, attrs: attrs)
         }
         return copy
     }
@@ -257,6 +315,9 @@ extension Entity {
         case .hatch(let boundary, var pattern):
             pattern.angle += angle
             copy.kind = .hatch(boundary: boundary.map(rot), pattern: pattern)
+        case .dimension(let a, let b, let lp, let dimAngle, let attrs):
+            copy.kind = .dimension(a: rot(a), b: rot(b), linePoint: rot(lp),
+                                   angle: dimAngle + angle, attrs: attrs)
         }
         return copy
     }
@@ -323,6 +384,9 @@ extension Entity {
             // パターン方向も鏡映(文字角度と同じ合成則)
             pattern.angle = 2 * axisAngle - pattern.angle
             copy.kind = .hatch(boundary: boundary.map(reflect), pattern: pattern)
+        case .dimension(let p1, let p2, let lp, let dimAngle, let attrs):
+            copy.kind = .dimension(a: reflect(p1), b: reflect(p2), linePoint: reflect(lp),
+                                   angle: reflectAngle(dimAngle), attrs: attrs)
         }
         return copy
     }
@@ -353,6 +417,12 @@ extension Entity {
             pattern.spacingA *= abs(f)
             pattern.spacingB *= abs(f)
             copy.kind = .hatch(boundary: boundary.map(sc), pattern: pattern)
+        case .dimension(let a, let b, let lp, let angle, var attrs):
+            // 見た目属性も倍率に追随(寸法値は幾何からの実測なので自動で変わる)
+            attrs.textHeight *= abs(f)
+            if let len = attrs.extensionLength { attrs.extensionLength = len * abs(f) }
+            copy.kind = .dimension(a: sc(a), b: sc(b), linePoint: sc(lp),
+                                   angle: angle, attrs: attrs)
         }
         return copy
     }

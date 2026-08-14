@@ -244,6 +244,31 @@ public struct Renderer {
                 }
                 ctx.strokePath()
             }
+
+        case .dimension:
+            guard let layout = DimensionGeometry.layout(of: entity) else { break }
+            // 寸法線・補助線・矢印は線種によらず実線で描く(CADの慣例)
+            ctx.setLineDash(phase: 0, lengths: [])
+            for seg in layout.hitSegments + layout.arrowStrokes {
+                let sa = transform.toScreen(seg.0)
+                let sb = transform.toScreen(seg.1)
+                ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+            }
+            ctx.strokePath()
+            // 黒丸(実点)は最低でも見えるサイズを確保
+            if !layout.dotCenters.isEmpty {
+                ctx.setFillColor(theme.color(forIndex: colorIndex))
+                let r = max(layout.dotRadius * transform.scale, 1.5)
+                for c in layout.dotCenters {
+                    let sc = transform.toScreen(c)
+                    ctx.fillEllipse(in: CGRect(x: sc.x - r, y: sc.y - r,
+                                               width: r * 2, height: r * 2))
+                }
+            }
+            drawText(layout.textContent, at: layout.textPosition,
+                     height: layout.textHeight, angle: layout.textAngle,
+                     colorIndex: colorIndex, transform: transform, in: ctx)
         }
     }
 
@@ -292,13 +317,17 @@ public struct Renderer {
                 ctx.addArc(center: CGPoint(x: sc.x, y: sc.y), radius: r,
                            startAngle: -startAngle, endAngle: -endAngle, clockwise: true)
                 ctx.strokePath()
-            case .text(let position, let content, let height, _):
-                // 文字は概算バウンディングボックスで示す
-                let widthMm = max(height * 0.6, Double(content.count) * height * 0.9)
-                let p0 = transform.toScreen(position)
-                let p1 = transform.toScreen(Vec2(position.x + widthMm, position.y + height))
-                ctx.stroke(CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y),
-                                  width: abs(p1.x - p0.x), height: abs(p1.y - p0.y)))
+            case .text:
+                // 文字は回転を考慮した概算グリフボックスで示す(縦文字も正しい向きの枠)
+                guard let corners = entity.textGlyphCorners else { break }
+                let first = transform.toScreen(corners[0])
+                ctx.move(to: CGPoint(x: first.x, y: first.y))
+                for corner in corners.dropFirst() {
+                    let sp = transform.toScreen(corner)
+                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                }
+                ctx.closePath()
+                ctx.strokePath()
             case .point(let position):
                 let sp = transform.toScreen(position)
                 let r: CGFloat = 4
@@ -321,6 +350,16 @@ public struct Renderer {
                     ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
                 }
                 ctx.closePath()
+                ctx.strokePath()
+            case .dimension:
+                // 輪郭=寸法線+補助線(ゴースト・選択ハイライト用)
+                guard let layout = DimensionGeometry.layout(of: entity) else { break }
+                for seg in layout.hitSegments + layout.arrowStrokes {
+                    let sa = transform.toScreen(seg.0)
+                    let sb = transform.toScreen(seg.1)
+                    ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                    ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                }
                 ctx.strokePath()
             }
         }

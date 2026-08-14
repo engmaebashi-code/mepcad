@@ -40,6 +40,9 @@ public enum EntityKind: Equatable, Codable, Sendable {
                   mirrored: Bool, cachedBounds: BBox)
     /// 塗り・ハッチング(境界ポリゴン+パターン。M5.2)
     case hatch(boundary: [Vec2], pattern: HatchPattern)
+    /// 長さ寸法(M5.4)。a,b=測定点、linePoint=寸法線の通過点、angle=寸法線方向(rad)。
+    /// 寸法値は幾何からの実測値表示(静的。図形を後から変えても追随しない)
+    case dimension(a: Vec2, b: Vec2, linePoint: Vec2, angle: Double, attrs: DimAttributes)
 }
 
 public struct Entity: Identifiable, Equatable, Codable, Sendable {
@@ -93,6 +96,21 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             }
         case .hatch(let boundary, _):
             for p in boundary { box.union(point: p) }
+        case .dimension(let a, let b, let lp, let angle, let attrs):
+            let layout = DimensionGeometry.layout(a: a, b: b, linePoint: lp,
+                                                  angle: angle, attrs: attrs)
+            for seg in layout.hitSegments {
+                box.union(point: seg.0)
+                box.union(point: seg.1)
+            }
+            // 寸法値文字の概算ボックス(回転考慮)
+            let w = DimensionGeometry.textWidth(layout.textContent, height: layout.textHeight)
+            let c = cos(layout.textAngle)
+            let s = sin(layout.textAngle)
+            for corner in [Vec2(0, 0), Vec2(w, 0), Vec2(w, layout.textHeight), Vec2(0, layout.textHeight)] {
+                box.union(point: Vec2(layout.textPosition.x + corner.x * c - corner.y * s,
+                                      layout.textPosition.y + corner.x * s + corner.y * c))
+            }
         }
         return box
     }
@@ -117,6 +135,10 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             return [insert]
         case .hatch(let boundary, _):
             return boundary
+        case .dimension(let a, let b, let lp, let angle, let attrs):
+            let layout = DimensionGeometry.layout(a: a, b: b, linePoint: lp,
+                                                  angle: angle, attrs: attrs)
+            return [a, b, layout.dimLine.0, layout.dimLine.1]
         }
     }
 }

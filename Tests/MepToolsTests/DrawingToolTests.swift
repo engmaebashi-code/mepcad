@@ -22,6 +22,8 @@ final class DrawingToolTests: XCTestCase {
         }
         func toolStatusChanged(_ hint: String) { hints.append(hint) }
         func toolKindChanged(_ kind: ToolKind) { kinds.append(kind) }
+        var dimStyle = DimensionToolStyle()
+        func toolDimensionStyle() -> DimensionToolStyle { dimStyle }
     }
 
     func makeTool() -> (DrawingToolController, Capture) {
@@ -356,6 +358,74 @@ final class DrawingToolTests: XCTestCase {
         XCTAssertTrue(tool.hatchPoints.isEmpty)
         XCTAssertTrue(cap.produced.isEmpty)
         XCTAssertEqual(tool.kind, .hatch)                  // 1回目のescは中止のみ
+    }
+
+    // MARK: - 寸法(M5.4)
+
+    func testDimensionThreeClicksProduce() {
+        let (tool, cap) = makeTool()
+        cap.dimStyle = DimensionToolStyle(
+            axis: .horizontal,
+            attrs: DimAttributes(terminator: .arrow, textHeight: 175, extensionLength: nil),
+            colorIndex: 2)
+        tool.select(.dimension)
+        tool.click(at: Vec2(0, 0), shiftDown: false)        // 測定点1
+        tool.click(at: Vec2(1000, 300), shiftDown: false)   // 測定点2
+        XCTAssertTrue(cap.produced.isEmpty)                 // まだ確定しない
+        tool.click(at: Vec2(500, 800), shiftDown: false)    // 寸法線位置
+        XCTAssertEqual(cap.produced.count, 1)
+        guard case .dimension(let a, let b, let lp, let angle, let attrs) = cap.produced[0].kind else {
+            return XCTFail("寸法でない")
+        }
+        XCTAssertEqual(a, Vec2(0, 0))
+        XCTAssertEqual(b, Vec2(1000, 300))
+        XCTAssertEqual(lp, Vec2(500, 800))
+        XCTAssertEqual(angle, 0, accuracy: 1e-9)
+        XCTAssertEqual(attrs.terminator, .arrow)
+        XCTAssertEqual(attrs.textHeight, 175, accuracy: 1e-9)
+        XCTAssertEqual(cap.produced[0].style.colorIndex, 2)
+        // 確定後は次の寸法の待機状態(連続記入)
+        XCTAssertNil(tool.dimA)
+        XCTAssertNil(tool.dimB)
+        XCTAssertEqual(tool.kind, .dimension)
+    }
+
+    func testDimensionAlignedAngle() {
+        let (tool, cap) = makeTool()
+        cap.dimStyle.axis = .aligned
+        tool.select(.dimension)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(300, 400), shiftDown: false)
+        tool.click(at: Vec2(0, 1000), shiftDown: false)
+        XCTAssertEqual(cap.produced.count, 1)
+        guard case .dimension(_, _, _, let angle, _) = cap.produced[0].kind else {
+            return XCTFail("寸法でない")
+        }
+        XCTAssertEqual(angle, atan2(400.0, 300.0), accuracy: 1e-9)
+        let layout = DimensionGeometry.layout(of: cap.produced[0])!
+        XCTAssertEqual(layout.value, 500, accuracy: 1e-9)
+    }
+
+    func testDimensionDegenerateSpanNotProduced() {
+        let (tool, cap) = makeTool()
+        cap.dimStyle.axis = .vertical
+        tool.select(.dimension)
+        tool.click(at: Vec2(0, 100), shiftDown: false)
+        tool.click(at: Vec2(1000, 100), shiftDown: false)   // 垂直方向の差0
+        tool.click(at: Vec2(500, 800), shiftDown: false)
+        XCTAssertTrue(cap.produced.isEmpty)                 // 長さ0の寸法は作らない
+    }
+
+    func testDimensionEscCancels() {
+        let (tool, cap) = makeTool()
+        tool.select(.dimension)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 0), shiftDown: false)
+        tool.cancel()
+        XCTAssertNil(tool.dimA)
+        XCTAssertNil(tool.dimB)
+        XCTAssertTrue(cap.produced.isEmpty)
+        XCTAssertEqual(tool.kind, .dimension)
     }
 
     func testEscEndsChainThenReturnsToSelect() {

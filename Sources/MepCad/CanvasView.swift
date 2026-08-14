@@ -293,6 +293,29 @@ final class CrosshairOverlayView: NSView {
                 let sp = controller.transform.toScreen(p)
                 ctx.stroke(CGRect(x: sp.x - 2.5, y: sp.y - 2.5, width: 5, height: 5))
             }
+
+        case .dimension(let a, let b, let linePoint, let angle, let attrs):
+            // 寸法ゴースト: 寸法線・補助線・端部を実際の見た目で、寸法値はラベルで表示
+            let layout = DimensionGeometry.layout(a: a, b: b, linePoint: linePoint,
+                                                  angle: angle, attrs: attrs)
+            ctx.setLineDash(phase: 0, lengths: [])
+            for seg in layout.hitSegments + layout.arrowStrokes {
+                let sa = controller.transform.toScreen(seg.0)
+                let sb = controller.transform.toScreen(seg.1)
+                ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+            }
+            ctx.strokePath()
+            ctx.setFillColor(accent)
+            let dr = max(layout.dotRadius * controller.transform.scale, 1.5)
+            for c in layout.dotCenters {
+                let sc = controller.transform.toScreen(c)
+                ctx.fillEllipse(in: CGRect(x: sc.x - dr, y: sc.y - dr,
+                                           width: dr * 2, height: dr * 2))
+            }
+            let st = controller.transform.toScreen(layout.textPosition)
+            drawOverlayLabel(layout.textContent,
+                             at: CGPoint(x: st.x, y: st.y - 4), in: ctx)
         }
         ctx.setLineDash(phase: 0, lengths: [])
 

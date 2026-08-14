@@ -407,6 +407,41 @@ struct PropertyPanelView: View {
                     }
                 }
 
+                // 寸法セクション(寸法を選択中のみ。M5.4)
+                if sel.dimCount > 0 {
+                    propertyRow("寸法") {
+                        HStack(spacing: 6) {
+                            Menu {
+                                ForEach(DimTerminator.allCases, id: \.self) { t in
+                                    Button(t.label) { controller.applyDimTerminator(t) }
+                                }
+                            } label: {
+                                Text("端部").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                            Menu {
+                                Button("測定点まで") { controller.applyDimExtension(paperMm: nil) }
+                                Button("紙面 5mm") { controller.applyDimExtension(paperMm: 5) }
+                                Button("紙面 3mm") { controller.applyDimExtension(paperMm: 3) }
+                                Button("なし") { controller.applyDimExtension(paperMm: 0) }
+                            } label: {
+                                Text("補助線").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                            Menu {
+                                ForEach([2.5, 3.5, 5.0, 7.0], id: \.self) { mm in
+                                    Button(mm == mm.rounded() ? "紙面 \(Int(mm))mm" : String(format: "紙面 %.1fmm", mm)) {
+                                        controller.applyDimTextSize(paperMm: mm)
+                                    }
+                                }
+                            } label: {
+                                Text("文字").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                        }
+                    }
+                }
+
                 if let blockName = sel.commonBlockName {
                     propertyRow("ブロック") {
                         Text(sel.blockCount > 1 ? "\(blockName) ×\(sel.blockCount)" : blockName)
@@ -500,6 +535,7 @@ struct PropertyPanelView: View {
         if sel.pointCount > 0 { parts.append("点\(sel.pointCount)") }
         if sel.blockCount > 0 { parts.append("ブロック\(sel.blockCount)") }
         if sel.hatchCount > 0 { parts.append("塗\(sel.hatchCount)") }
+        if sel.dimCount > 0 { parts.append("寸法\(sel.dimCount)") }
         return "\(sel.count)個選択中(\(parts.joined(separator: " ")))"
     }
 

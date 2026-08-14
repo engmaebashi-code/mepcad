@@ -33,6 +33,7 @@ final class DxfFixtureTests: XCTestCase {
             case .point: key = "point"
             case .blockRef: key = "blockRef"
             case .hatch: key = "hatch"
+            case .dimension: key = "dimension"
             }
             counts[key, default: 0] += 1
         }

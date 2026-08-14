@@ -19,6 +19,9 @@ public struct Grip: Equatable, Sendable {
         case arcEnd
         case circleRadius(quadrant: Int)   // 0=+X 1=+Y 2=-X 3=-Y の四半点
         case position                      // 文字・点・ブロック配置の位置
+        case dimStart                      // 寸法: 測定点a
+        case dimEnd                        // 寸法: 測定点b
+        case dimLine                       // 寸法: 寸法線の位置(引出し量の調整)
     }
 
     public let entityID: EntityID
@@ -64,6 +67,13 @@ public enum GripEngine {
             // v1は位置グリップのみ(先頭頂点を掴んで全体移動。頂点伸縮は次回)
             guard let first = boundary.first else { return [] }
             return [Grip(entityID: entity.id, kind: .position, point: first)]
+        case .dimension(let a, let b, _, _, _):
+            guard let layout = DimensionGeometry.layout(of: entity) else { return [] }
+            let mid = Vec2((layout.dimLine.0.x + layout.dimLine.1.x) / 2,
+                           (layout.dimLine.0.y + layout.dimLine.1.y) / 2)
+            return [Grip(entityID: entity.id, kind: .dimStart, point: a),
+                    Grip(entityID: entity.id, kind: .dimEnd, point: b),
+                    Grip(entityID: entity.id, kind: .dimLine, point: mid)]
         }
     }
 
@@ -93,6 +103,15 @@ public enum GripEngine {
         case (.position, _):
             guard let anchor = anchorPoint(of: entity) else { return entity }
             return entity.translated(by: p - anchor)
+        case (.dimStart, .dimension(_, let b, let lp, let angle, let attrs)):
+            guard p.distance(to: b) > 1e-9 else { return entity }
+            copy.kind = .dimension(a: p, b: b, linePoint: lp, angle: angle, attrs: attrs)
+        case (.dimEnd, .dimension(let a, _, let lp, let angle, let attrs)):
+            guard p.distance(to: a) > 1e-9 else { return entity }
+            copy.kind = .dimension(a: a, b: p, linePoint: lp, angle: angle, attrs: attrs)
+        case (.dimLine, .dimension(let a, let b, _, let angle, let attrs)):
+            // 寸法線がpを通るように動かす(方向・測定点は不変=引出し量の調整)
+            copy.kind = .dimension(a: a, b: b, linePoint: p, angle: angle, attrs: attrs)
         default:
             return entity
         }

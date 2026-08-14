@@ -133,6 +133,14 @@ public final class SnapEngine {
                     addPoint(boundary[i], .endpoint)
                     addSegment(boundary[i], boundary[(i + 1) % boundary.count])
                 }
+            case .dimension(let a, let b, _, _, _):
+                // 測定点と寸法線の両端(連続寸法の起点に使える)
+                guard let layout = DimensionGeometry.layout(of: entity) else { break }
+                addPoint(a, .endpoint)
+                addPoint(b, .endpoint)
+                addPoint(layout.dimLine.0, .endpoint)
+                addPoint(layout.dimLine.1, .endpoint)
+                addSegment(layout.dimLine.0, layout.dimLine.1)
             }
     }
 

@@ -13,6 +13,40 @@ public enum ToolKind: String, CaseIterable, Sendable {
     case point = "点"
     case text = "文字"
     case hatch = "ハッチング"
+    case dimension = "寸法"
+}
+
+/// 寸法の方向モード(M5.4)
+public enum DimAxisMode: String, CaseIterable, Sendable {
+    case horizontal = "水平"
+    case vertical = "垂直"
+    case aligned = "平行"
+
+    /// 寸法線方向(rad)。平行は測定点2点の方向
+    public func angle(from a: Vec2, to b: Vec2) -> Double {
+        switch self {
+        case .horizontal: return 0
+        case .vertical: return .pi / 2
+        case .aligned:
+            let d = b - a
+            return d.length > 1e-9 ? atan2(d.y, d.x) : 0
+        }
+    }
+}
+
+/// 寸法ツールの現在設定(コマンドプロパティカードの値。紙面mm→実寸mm換算は実装側で行う)
+public struct DimensionToolStyle: Sendable {
+    public var axis: DimAxisMode
+    public var attrs: DimAttributes   // 実寸mm換算済み
+    public var colorIndex: Int?       // nil=レイヤ既定
+
+    public init(axis: DimAxisMode = .horizontal,
+                attrs: DimAttributes = DimAttributes(),
+                colorIndex: Int? = nil) {
+        self.axis = axis
+        self.attrs = attrs
+        self.colorIndex = colorIndex
+    }
 }
 
 /// オーバーレイに描くプレビュー形状(ワールド座標)
@@ -24,6 +58,7 @@ public enum PreviewShape {
     case arc(Vec2, Double, Double, Double)                 // 中心, 半径, 開始角, 終了角(CCW)
     case doubleLine(Vec2, Vec2, Double, Double)            // 基準線a-b, A側/B側オフセット
     case polygon([Vec2], Vec2)                             // ハッチング境界の確定頂点+カーソル
+    case dimension(Vec2, Vec2, Vec2, Double, DimAttributes)  // 測定点a,b・寸法線通過点・方向・属性
 }
 
 /// 角度拘束モード(常設パレットで切替。⇧押下は一時的に45°拘束)
@@ -56,12 +91,17 @@ public protocol DrawingToolDelegate: AnyObject {
     func toolKindChanged(_ kind: ToolKind)
     /// ハッチングの現在設定(プロパティカードの値。印刷寸→実寸の換算は実装側で行う)
     func toolHatchPattern() -> HatchPattern
+    /// 寸法の現在設定(プロパティカードの値。紙面mm→実寸mmの換算は実装側で行う)
+    func toolDimensionStyle() -> DimensionToolStyle
 }
 
 extension DrawingToolDelegate {
     /// 既定実装(テスト用スタブ等が実装しなくても済むように)
     public func toolHatchPattern() -> HatchPattern {
         HatchPattern(kind: .horizontal, spacingA: 100, spacingB: 50, angle: .pi / 4)
+    }
+    public func toolDimensionStyle() -> DimensionToolStyle {
+        DimensionToolStyle()
     }
 }
 
@@ -89,6 +129,9 @@ public final class DrawingToolController {
     public var angleConstraint: AngleConstraint = .free
     /// ハッチング境界の確定済み頂点
     public private(set) var hatchPoints: [Vec2] = []
+    /// 寸法: 測定点1・2(3クリック目=寸法線位置で確定)
+    public private(set) var dimA: Vec2?
+    public private(set) var dimB: Vec2?
     /// 始点クリックで閉じる判定の許容距離(ワールドmm。呼び出し側がピックボックス幅を設定)
     public var closeTolerance: Double = 0
 
@@ -113,12 +156,14 @@ public final class DrawingToolController {
         arcStart = nil
         pendingRectSize = nil
         hatchPoints = []
+        dimA = nil
+        dimB = nil
     }
 
     /// esc/右クリック: 作図中なら現在の作図を終了、待機中なら選択ツールへ戻る
     public func cancel() {
         if anchor != nil || arcStart != nil || pendingRectSize != nil
-            || !hatchPoints.isEmpty || !numericBuffer.isEmpty {
+            || !hatchPoints.isEmpty || dimA != nil || !numericBuffer.isEmpty {
             resetPoints()
             numericBuffer = ""
         } else if kind != .select {
@@ -163,6 +208,11 @@ public final class DrawingToolController {
         case .hatch:
             guard !hatchPoints.isEmpty else { return .none }
             return .polygon(hatchPoints, cursor)
+        case .dimension:
+            guard let a = dimA else { return .none }
+            guard let b = dimB else { return .line(a, cursor) }
+            let style = delegate?.toolDimensionStyle() ?? DimensionToolStyle()
+            return .dimension(a, b, cursor, style.axis.angle(from: a, to: b), style.attrs)
         default:
             return .none
         }
@@ -241,9 +291,35 @@ public final class DrawingToolController {
             } else if hatchPoints.last.map({ $0.distance(to: p) > 1e-9 }) ?? true {
                 hatchPoints.append(p)
             }
+
+        case .dimension:
+            if dimA == nil {
+                dimA = p
+            } else if dimB == nil {
+                if let a = dimA, a.distance(to: p) > 0.01 { dimB = p }
+            } else if let a = dimA, let b = dimB {
+                commitDimension(a: a, b: b, linePoint: p)
+                dimA = nil
+                dimB = nil
+            }
         }
         numericBuffer = ""
         publishHint()
+    }
+
+    /// 寸法の確定(3クリック目=寸法線位置)
+    private func commitDimension(a: Vec2, b: Vec2, linePoint: Vec2) {
+        let style = delegate?.toolDimensionStyle() ?? DimensionToolStyle()
+        let angle = style.axis.angle(from: a, to: b)
+        // 水平/垂直で測定点の投影が重なる(=長さ0)寸法は作らない
+        let u = Vec2(cos(angle), sin(angle))
+        let span = abs((b.x - a.x) * u.x + (b.y - a.y) * u.y)
+        guard span > 0.01 else { return }
+        delegate?.toolDidProduce(
+            Entity(layer: currentLayer,
+                   style: Style(colorIndex: style.colorIndex),
+                   kind: .dimension(a: a, b: b, linePoint: linePoint,
+                                    angle: angle, attrs: style.attrs)))
     }
 
     /// ハッチングの確定(境界を閉じてエンティティ化。確定後は次の領域へ)
@@ -506,6 +582,10 @@ public final class DrawingToolController {
                 return "ハッチング: 領域の頂点を順にクリック(スナップ有効)— パターンは左上のカードで設定"
             }
             return "ハッチング: 次の頂点を指示(\(hatchPoints.count)点)— 始点クリックか⏎で閉じて確定 / esc中止"
+        case .dimension:
+            if dimA == nil { return "寸法: 測定点1を指示(端点スナップ有効)— 方向・端部は左上のカード" }
+            if dimB == nil { return "寸法: 測定点2を指示" }
+            return "寸法: 寸法線の位置をクリック(引出し量が決まる)/ esc中止"
         }
     }
 }

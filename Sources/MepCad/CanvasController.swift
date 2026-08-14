@@ -16,6 +16,7 @@ struct SelectionSummary: Equatable {
     var pointCount: Int
     var blockCount: Int
     var hatchCount: Int
+    var dimCount: Int
     /// 選択中のブロックが全て同じ定義ならその名前
     var commonBlockName: String?
     /// 全選択で共通ならその値(内側nil=byLayer)、混在なら外側nil
@@ -121,6 +122,8 @@ final class CanvasController: NSObject {
     var onDrawingSetupChanged: ((PaperSize, Double) -> Void)?
     /// ハッチング設定の提供(プロパティカードの値。印刷寸→実寸換算込み)
     var hatchPatternProvider: (() -> HatchPattern)?
+    /// 寸法設定の提供(プロパティカードの値。紙面mm→実寸mm換算込み)
+    var dimensionStyleProvider: (() -> DimensionToolStyle)?
     /// インライン文字入力の依頼(スクリーン座標・初期文字列・画面上のフォントpx。
     /// CanvasViewがクリック位置にテキスト欄を出し、確定文字列(キャンセルはnil)を返す)
     var onTextInputRequested: ((_ screen: Vec2, _ initial: String, _ fontPx: Double,
@@ -290,6 +293,7 @@ final class CanvasController: NSObject {
     private func selectionSummary() -> SelectionSummary? {
         guard !selectedEntities.isEmpty else { return nil }
         var lines = 0, circles = 0, arcs = 0, texts = 0, points = 0, blocks = 0, hatches = 0
+        var dims = 0
         var blockDefIDs = Set<UUID>()
         for e in selectedEntities {
             switch e.kind {
@@ -302,6 +306,7 @@ final class CanvasController: NSObject {
                 blocks += 1
                 blockDefIDs.insert(defID)
             case .hatch: hatches += 1
+            case .dimension: dims += 1
             }
         }
         var blockName: String?
@@ -315,7 +320,7 @@ final class CanvasController: NSObject {
         return SelectionSummary(
             count: selectedEntities.count,
             lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
-            pointCount: points, blockCount: blocks, hatchCount: hatches,
+            pointCount: points, blockCount: blocks, hatchCount: hatches, dimCount: dims,
             commonBlockName: blockName,
             commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
             commonLineType: common(selectedEntities.map(\.style.lineType)),
@@ -663,6 +668,10 @@ final class CanvasController: NSObject {
             return "伸縮: 円弧の端を動かす(半径は維持・角度が変化)/ \(commit) / esc中止"
         case .position:
             return "移動: 位置を動かす — スナップ有効 / \(commit) / esc中止"
+        case .dimStart, .dimEnd:
+            return "寸法: 測定点を動かす(寸法値も追随)— スナップ有効 / \(commit) / esc中止"
+        case .dimLine:
+            return "寸法: 寸法線の位置(引出し量)を動かす / \(commit) / esc中止"
         }
     }
 
@@ -1380,6 +1389,15 @@ extension CanvasController: DrawingToolDelegate {
                             spacingB: 1 * document.currentScale,
                             angle: .pi / 4)
     }
+
+    func toolDimensionStyle() -> DimensionToolStyle {
+        dimensionStyleProvider?()
+            ?? DimensionToolStyle(axis: .horizontal,
+                                  attrs: DimAttributes(terminator: .dot,
+                                                       textHeight: 2.5 * document.currentScale,
+                                                       extensionLength: nil),
+                                  colorIndex: nil)
+    }
 }
 
 // MARK: - 文字パレット(M5.3)
@@ -1458,6 +1476,47 @@ extension CanvasController {
             onInfo?(String(format: "文字サイズを紙面%.1fmmにしました(⌘Zで取り消し)", paperMm))
         } else if selectedEntities.contains(where: { if case .text = $0.kind { return true }; return false }) {
             onInfo?(String(format: "選択中の文字はすでに紙面%.1fmmです", paperMm))
+        }
+    }
+}
+
+// MARK: - 寸法プロパティ(M5.4)
+
+extension CanvasController {
+
+    /// 選択中の寸法の属性を一括変更する共通処理
+    private func updateSelectedDimensions(name: String,
+                                          change: (inout DimAttributes, Double) -> Void) {
+        let doc = document
+        let changed = updateSelection(name: name) { entity in
+            guard case .dimension(let a, let b, let lp, let angle, var attrs) = entity.kind else { return }
+            let scale = doc.groups[entity.layer.group].scale
+            change(&attrs, scale)
+            entity.kind = .dimension(a: a, b: b, linePoint: lp, angle: angle, attrs: attrs)
+        }
+        if changed {
+            onInfo?("\(name)しました(⌘Zで取り消し)")
+        }
+    }
+
+    /// 端部記号(黒丸/矢印)の一括変更
+    func applyDimTerminator(_ terminator: DimTerminator) {
+        updateSelectedDimensions(name: "寸法の端部を\(terminator.label)に変更") { attrs, _ in
+            attrs.terminator = terminator
+        }
+    }
+
+    /// 寸法補助線の長さの一括変更(紙面mm。nil=測定点まで、0=なし)
+    func applyDimExtension(paperMm: Double?) {
+        updateSelectedDimensions(name: "寸法補助線を変更") { attrs, scale in
+            attrs.extensionLength = paperMm.map { $0 * scale }
+        }
+    }
+
+    /// 寸法値の文字サイズの一括変更(紙面mm)
+    func applyDimTextSize(paperMm: Double) {
+        updateSelectedDimensions(name: "寸法の文字サイズを変更") { attrs, scale in
+            attrs.textHeight = max(paperMm, 0.5) * scale
         }
     }
 }
