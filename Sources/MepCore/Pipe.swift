@@ -44,6 +44,9 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     public var fittingDims: PipeFittingDims
     /// 接続されていない端部にキャップを付ける(FILDERの端部品相当)
     public var capEnds: Bool
+    /// 単線シンボルの基準寸法(実寸mm=紙面mm×縮尺。0なら文字高さから既定)。M6.5
+    /// 管サイズに依らず紙面上で一定(FILDER: 排水2.5mm・給水は一回り小さく)
+    public var symbolSize: Double
 
     public init(usage: String = "CW", usageName: String = "給水",
                 material: String = "HIVP", materialLabel: String = "HIVP",
@@ -53,7 +56,7 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
                 datum: String = "1FL", showLevel: Bool = false,
                 doubleLine: Bool = false, autoFittings: Bool = true,
                 fittingSeries: String = "", fittingDims: PipeFittingDims = PipeFittingDims(),
-                capEnds: Bool = false) {
+                capEnds: Bool = false, symbolSize: Double = 0) {
         self.usage = usage
         self.usageName = usageName
         self.material = material
@@ -70,6 +73,15 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         self.fittingSeries = fittingSeries
         self.fittingDims = fittingDims
         self.capEnds = capEnds
+        self.symbolSize = symbolSize
+    }
+
+    /// 単線シンボルの実効基準寸法(実寸mm)。未設定なら文字高さ(排水)・その0.8倍(給水)
+    public var effectiveSymbolSize: Double {
+        if symbolSize > 0 { return symbolSize }
+        let drain = fittingSeries == "DV" || fittingSeries == "HTDV"
+            || (fittingSeries.isEmpty && ["S", "W", "RW", "VT"].contains(usage))
+        return max(textHeight * (drain ? 1.0 : 0.8), 1)
     }
 
     /// 継手の実効寸法(マスタ値があればそれ、無ければ外径からの概算)
@@ -145,13 +157,34 @@ public struct PipeRiser: Equatable, Sendable {
     public var isUp: Bool { deltaZ > 0 }
 }
 
+/// 継手1個の平面形状(複線用)。部品は描画順(後の部品が上)。塗り+線で描く
+public struct PipeFittingShape: Equatable, Sendable {
+    public enum Part: Equatable, Sendable {
+        case polygon([Vec2])
+        case circle(center: Vec2, radius: Double)
+    }
+    public var parts: [Part]
+    public init(parts: [Part]) { self.parts = parts }
+    /// 形状に含まれる点(bounds用)
+    public var points: [Vec2] {
+        parts.flatMap { part -> [Vec2] in
+            switch part {
+            case .polygon(let pts): return pts
+            case .circle(let c, let r):
+                return [Vec2(c.x - r, c.y - r), Vec2(c.x + r, c.y + r)]
+            }
+        }
+    }
+}
+
 /// 複線表現の導出ジオメトリ(平面図)
 public struct PipeDoubleLineLayout: Sendable {
-    /// 水平区間(ラン)ごとの外形線(左側・右側)。マイター処理済み
+    /// 外形線(左側・右側)と芯線。継手ありなら区間ごと(継手位置で受口底まで切り詰め)、
+    /// 継手なしならランごと(折れ点はマイター)
     public var runs: [(left: [Vec2], right: [Vec2], center: [Vec2])]
-    /// 継手(エルボ)の外形四角形(各4点)
-    public var fittingBoxes: [[Vec2]]
-    /// 端部の閉じ線(ランの両端)
+    /// 継手(折れ点エルボ・立管の付け根の受口)の形状
+    public var fittings: [PipeFittingShape]
+    /// 端部の閉じ線(自由端のみ)
     public var endCaps: [(Vec2, Vec2)]
 }
 
@@ -254,9 +287,14 @@ public enum PipeGeometry {
         return max(height * 0.6, w)
     }
 
-    /// 立上り/立下り記号の半径(実寸mm)。管の外径と文字高さの大きい方
+    /// 立上り/立下り記号の半径(実寸mm)。複線(継手あり)は受口外径の半分(=継手の円)、
+    /// 単線は紙面基準寸法の半分(FILDER: 直径=基準寸法)
     public static func riserSymbolRadius(_ attrs: PipeAttributes) -> Double {
-        max(attrs.outerDiameter / 2, attrs.textHeight * 0.45)
+        if attrs.doubleLine {
+            let dims = attrs.effectiveFittingDims
+            return max(dims.socketOD / 2, attrs.outerDiameter / 2 * 1.05)
+        }
+        return attrs.effectiveSymbolSize / 2
     }
 
     // MARK: - 継手(折れ点)
@@ -299,18 +337,104 @@ public enum PipeGeometry {
 
     // MARK: - 複線表現
 
-    /// 複線レイアウト(平面図)。ランごとに外形線を作り、折れ点はマイター、
-    /// 折れ角が急でマイターが伸びすぎる場合(>3×半径)はベベル(面取り)に落とす。
-    /// 立管の付け根には水平側にだけ継手ボックスを置く
+    /// エルボの外形寸法(実効。角度で90°/45°を選ぶ)
+    static func elbowA(_ dims: PipeFittingDims, turnDeg: Double) -> Double {
+        turnDeg > 67.5 ? dims.elbow90A : dims.elbow45A
+    }
+
+    /// エルボの受口底までの距離a2(脚の長さで頭打ち。外形線の切り詰め量と共通)
+    static func elbowSocketBottom(dims: PipeFittingDims, turnDeg: Double, len1: Double, len2: Double) -> Double {
+        let a = elbowA(dims, turnDeg: turnDeg)
+        let a1 = min(a, len1)
+        let a2Leg = min(a, len2)
+        return min(max(a - dims.socketDepth, 0), max(a1 - 1, 0), max(a2Leg - 1, 0))
+    }
+
+    /// 平面エルボの実形状(受口2つ+曲がり本体)。メーカー図面どおり、本体は
+    /// 「受口底の面同士の交点C」を中心とする環状扇形(外径=t+r、内径=t−r)。
+    /// - u1: 折れ点→手前の頂点方向、u2: 折れ点→次の頂点方向(単位)。len1/len2: 各脚の長さ
+    public static func elbowShape(corner p: Vec2, u1: Vec2, u2: Vec2, len1: Double, len2: Double,
+                                  dims: PipeFittingDims, pipeRadius r: Double) -> PipeFittingShape? {
+        let dot = max(-1, min(1, u1.x * u2.x + u1.y * u2.y))
+        let phi = acos(dot)                       // 脚と脚のなす角(π=直進)
+        let turn = Double.pi - phi                // 折れ角
+        let turnDeg = turn * 180 / .pi
+        guard turnDeg > 2, phi > 0.05 else { return nil }
+        let a = elbowA(dims, turnDeg: turnDeg)
+        let s = dims.socketOD / 2
+        guard a > 0, s > 0 else { return nil }
+        // 各脚の受口端(A)は脚の長さで頭打ち。受口底(a2)は共通(短い方に合わせる)
+        let a1 = min(a, len1)
+        let a2Leg = min(a, len2)
+        let a2 = elbowSocketBottom(dims: dims, turnDeg: turnDeg, len1: len1, len2: len2)
+        // 内側二等分線方向と受口底面の交点C
+        let bis = u1 + u2
+        let bl = bis.length
+        guard bl > 1e-9 else { return nil }
+        let m = bis * (1 / bl)
+        let c = p + m * (a2 / cos(phi / 2))
+        // 各脚の外側法線(Cから遠ざかる側)
+        func outward(_ u: Vec2) -> Vec2 {
+            let n = Vec2(-u.y, u.x)
+            return (n.x * m.x + n.y * m.y) < 0 ? n : Vec2(-n.x, -n.y)
+        }
+        let n1 = outward(u1)
+        let n2 = outward(u2)
+        let t = a2 * tan(phi / 2)                 // C から脚の芯までの距離
+        let ro = t + r
+        let ri = max(t - r, 0)
+        let q1 = p + u1 * a2 + n1 * r             // 外側円弧の始点(脚1の受口底×外側)
+        let q2 = p + u2 * a2 + n2 * r
+        // 円弧の分割(外側: q1→q2、内側: 逆)
+        let ang1 = atan2(q1.y - c.y, q1.x - c.x)
+        let ang2 = atan2(q2.y - c.y, q2.x - c.x)
+        var sweep = ang2 - ang1
+        while sweep > .pi { sweep -= 2 * .pi }
+        while sweep < -.pi { sweep += 2 * .pi }
+        let segs = max(4, Int((abs(sweep) * 180 / .pi / 10).rounded(.up)))
+        var poly: [Vec2] = []
+        poly.append(p + u1 * a1 + n1 * s)
+        poly.append(p + u1 * a2 + n1 * s)
+        for k in 0...segs {
+            let ang = ang1 + sweep * Double(k) / Double(segs)
+            poly.append(c + Vec2(cos(ang), sin(ang)) * ro)
+        }
+        poly.append(p + u2 * a2 + n2 * s)
+        poly.append(p + u2 * a2Leg + n2 * s)
+        poly.append(p + u2 * a2Leg - n2 * s)
+        poly.append(p + u2 * a2 - n2 * s)
+        if ri > 1e-9 {
+            for k in 0...segs {
+                let ang = ang2 - sweep * Double(k) / Double(segs)
+                poly.append(c + Vec2(cos(ang), sin(ang)) * ri)
+            }
+        } else {
+            poly.append(c)
+        }
+        poly.append(p + u1 * a2 - n1 * s)
+        poly.append(p + u1 * a1 - n1 * s)
+        return PipeFittingShape(parts: [.polygon(poly)])
+    }
+
+    /// 受口1個の四角形(始点aから方向uへ、a2〜aの区間、幅=受口外径)
+    static func socketRect(from p: Vec2, dir u: Vec2, a2: Double, a: Double, halfWidth s: Double) -> [Vec2] {
+        let n = Vec2(-u.y, u.x)
+        let b0 = p + u * a2
+        let b1 = p + u * a
+        return [b0 + n * s, b1 + n * s, b1 - n * s, b0 - n * s]
+    }
+
+    /// 複線レイアウト(平面図)。継手ありなら区間ごとの外形線を継手の受口底まで切り詰め、
+    /// 折れ点に実形状のエルボ、立管の付け根に水平側の受口を置く。
+    /// 継手なしならランごとにマイター(急角度はベベル)
     public static func doubleLineLayout(points: [Vec3], attrs: PipeAttributes)
         -> PipeDoubleLineLayout? {
         guard points.count >= 2, attrs.outerDiameter > 1e-9 else { return nil }
         let r = attrs.outerDiameter / 2
         let dims = attrs.effectiveFittingDims
-        let rf = max(dims.socketOD / 2, r * 1.05)
-        let reach = dims.elbow90A
+        let s = max(dims.socketOD / 2, r * 1.05)
         var runsOut: [(left: [Vec2], right: [Vec2], center: [Vec2])] = []
-        var boxes: [[Vec2]] = []
+        var shapes: [PipeFittingShape] = []
         var caps: [(Vec2, Vec2)] = []
         let runs = planRuns(points: points)
         guard !runs.isEmpty else { return nil }
@@ -320,13 +444,75 @@ public enum PipeGeometry {
             let n = pts.count
             var dirs: [Vec2] = []
             var normals: [Vec2] = []
+            var lens: [Double] = []
             for i in 0..<(n - 1) {
                 let d = pts[i + 1] - pts[i]
                 let len = d.length
                 let u = len > 1e-9 ? d * (1 / len) : Vec2(1, 0)
                 dirs.append(u)
                 normals.append(Vec2(-u.y, u.x))
+                lens.append(len)
             }
+            // 立管の付け根判定(ランの両端)
+            let firstIdx = points.firstIndex(where: { $0 == run[0] }) ?? 0
+            let lastIdx = points.firstIndex(where: { $0 == run[n - 1] }) ?? (points.count - 1)
+            let riserAtStart = firstIdx > 0
+                && points[firstIdx - 1].xy.distance(to: pts[0]) <= planEpsilon
+                && abs(points[firstIdx - 1].z - run[0].z) > 0.5
+            let riserAtEnd = lastIdx < points.count - 1
+                && points[lastIdx + 1].xy.distance(to: pts[n - 1]) <= planEpsilon
+                && abs(points[lastIdx + 1].z - run[n - 1].z) > 0.5
+
+            if attrs.autoFittings {
+                // 区間ごとの切り詰め量(始点側・終点側)
+                var trimStart = [Double](repeating: 0, count: n - 1)
+                var trimEnd = [Double](repeating: 0, count: n - 1)
+                let a90 = dims.elbow90A
+                let a2Riser = max(a90 - dims.socketDepth, 0)
+                if n >= 3 {
+                    for i in 1..<(n - 1) {
+                        let u1 = Vec2(-dirs[i - 1].x, -dirs[i - 1].y)
+                        let u2 = dirs[i]
+                        if let shape = elbowShape(corner: pts[i], u1: u1, u2: u2,
+                                                  len1: lens[i - 1], len2: lens[i],
+                                                  dims: dims, pipeRadius: r) {
+                            shapes.append(shape)
+                            let dot = max(-1, min(1, u1.x * u2.x + u1.y * u2.y))
+                            let turnDeg = (Double.pi - acos(dot)) * 180 / .pi
+                            let a2 = elbowSocketBottom(dims: dims, turnDeg: turnDeg,
+                                                       len1: lens[i - 1], len2: lens[i])
+                            trimEnd[i - 1] = min(a2, lens[i - 1] * 0.5)
+                            trimStart[i] = min(a2, lens[i] * 0.5)
+                        }
+                    }
+                }
+                if riserAtStart {
+                    let a = min(a90, lens[0])
+                    let a2 = min(a2Riser, max(a - 1, 0), lens[0] * 0.5)
+                    shapes.append(PipeFittingShape(parts: [
+                        .polygon(socketRect(from: pts[0], dir: dirs[0], a2: a2, a: a, halfWidth: s))]))
+                    trimStart[0] = a2
+                }
+                if riserAtEnd {
+                    let u = Vec2(-dirs[n - 2].x, -dirs[n - 2].y)
+                    let a = min(a90, lens[n - 2])
+                    let a2 = min(a2Riser, max(a - 1, 0), lens[n - 2] * 0.5)
+                    shapes.append(PipeFittingShape(parts: [
+                        .polygon(socketRect(from: pts[n - 1], dir: u, a2: a2, a: a, halfWidth: s))]))
+                    trimEnd[n - 2] = a2
+                }
+                for i in 0..<(n - 1) {
+                    let a = pts[i] + dirs[i] * trimStart[i]
+                    let b = pts[i + 1] - dirs[i] * trimEnd[i]
+                    let nn = normals[i]
+                    runsOut.append(([a + nn * r, b + nn * r], [a - nn * r, b - nn * r], [pts[i], pts[i + 1]]))
+                }
+                if !riserAtStart { caps.append((pts[0] + normals[0] * r, pts[0] - normals[0] * r)) }
+                if !riserAtEnd { caps.append((pts[n - 1] + normals[n - 2] * r, pts[n - 1] - normals[n - 2] * r)) }
+                continue
+            }
+
+            // 継手なし: ランごとにマイター
             var left: [Vec2] = [pts[0] + normals[0] * r]
             var right: [Vec2] = [pts[0] - normals[0] * r]
             if n >= 3 {
@@ -350,26 +536,6 @@ public enum PipeGeometry {
                         left.append(pts[i] + m * miterLen)
                         right.append(pts[i] - m * miterLen)
                     }
-                    // 平面折れ点のエルボ(前後2枚)
-                    if attrs.autoFittings {
-                        let d1 = pts[i] - pts[i - 1]
-                        let d2 = pts[i + 1] - pts[i]
-                        let a1 = atan2(d1.y, d1.x)
-                        let a2 = atan2(d2.y, d2.x)
-                        var turn = a2 - a1
-                        while turn > .pi { turn -= 2 * .pi }
-                        while turn < -.pi { turn += 2 * .pi }
-                        if abs(turn) * 180 / .pi > 2 {
-                            let u1 = dirs[i - 1], nn1 = normals[i - 1]
-                            let back = pts[i] - u1 * min(reach, d1.length)
-                            boxes.append([back + nn1 * rf, pts[i] + nn1 * rf,
-                                          pts[i] - nn1 * rf, back - nn1 * rf])
-                            let u2 = dirs[i], nn2 = normals[i]
-                            let fwd = pts[i] + u2 * min(reach, d2.length)
-                            boxes.append([pts[i] + nn2 * rf, fwd + nn2 * rf,
-                                          fwd - nn2 * rf, pts[i] - nn2 * rf])
-                        }
-                    }
                 }
             }
             left.append(pts[n - 1] + normals[n - 2] * r)
@@ -377,30 +543,8 @@ public enum PipeGeometry {
             caps.append((left[0], right[0]))
             caps.append((left[left.count - 1], right[right.count - 1]))
             runsOut.append((left, right, pts))
-
-            // 立管の付け根(ランの端が立管に接する)には水平側の受口を1枚
-            if attrs.autoFittings, n >= 2 {
-                let firstIdx = points.firstIndex(where: { $0 == run[0] }) ?? 0
-                let lastIdx = points.firstIndex(where: { $0 == run[n - 1] }) ?? (points.count - 1)
-                // ラン始点の直前が立管なら(平面同一点かつ高さ違い)
-                if firstIdx > 0, points[firstIdx - 1].xy.distance(to: pts[0]) <= planEpsilon,
-                   abs(points[firstIdx - 1].z - run[0].z) > 0.5 {
-                    let u = dirs[0], nn = normals[0]
-                    let fwd = pts[0] + u * min(reach, pts[1].distance(to: pts[0]))
-                    boxes.append([pts[0] + nn * rf, fwd + nn * rf, fwd - nn * rf, pts[0] - nn * rf])
-                }
-                // ラン終点の直後が立管なら(平面同一点かつ高さ違い)
-                if lastIdx < points.count - 1,
-                   points[lastIdx + 1].xy.distance(to: pts[n - 1]) <= planEpsilon,
-                   abs(points[lastIdx + 1].z - run[n - 1].z) > 0.5 {
-                    let u = dirs[n - 2], nn = normals[n - 2]
-                    let back = pts[n - 1] - u * min(reach, pts[n - 1].distance(to: pts[n - 2]))
-                    boxes.append([back + nn * rf, pts[n - 1] + nn * rf,
-                                  pts[n - 1] - nn * rf, back - nn * rf])
-                }
-            }
         }
-        return PipeDoubleLineLayout(runs: runsOut, fittingBoxes: boxes, endCaps: caps)
+        return PipeDoubleLineLayout(runs: runsOut, fittings: shapes, endCaps: caps)
     }
 
     /// 平面上の線分列(ヒットテスト・スナップ用。立管=長さ0は除く)

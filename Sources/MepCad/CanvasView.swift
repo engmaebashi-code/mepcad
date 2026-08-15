@@ -365,6 +365,20 @@ final class CrosshairOverlayView: NSView {
                             }
                         }
                     }
+                    // 継手(エルボ)の実形状もゴースト
+                    for shape in layout.fittings {
+                        for part in shape.parts {
+                            if case .polygon(let pts) = part, let f0 = pts.first {
+                                let f = controller.transform.toScreen(f0)
+                                ctx.move(to: CGPoint(x: f.x, y: f.y))
+                                for p in pts.dropFirst() {
+                                    let sp = controller.transform.toScreen(p)
+                                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                                }
+                                ctx.closePath()
+                            }
+                        }
+                    }
                     ctx.strokePath()
                     ctx.setLineDash(phase: 0, lengths: [6, 4])
                 }

@@ -136,7 +136,7 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             for p in points { box.union(point: p.xy) }
             if attrs.doubleLine, let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
                 for run in layout.runs { for p in run.left + run.right { box.union(point: p) } }
-                for b in layout.fittingBoxes { for p in b { box.union(point: p) } }
+                for f in layout.fittings { for p in f.points { box.union(point: p) } }
             }
             // 立上り/立下り記号
             let rs = PipeGeometry.riserSymbolRadius(attrs)

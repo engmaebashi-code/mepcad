@@ -137,9 +137,9 @@ final class PipeTests: XCTestCase {
         XCTAssertTrue(PipeGeometry.fittings(points: v3([Vec2(0, 0), Vec2(1000, 0)])).isEmpty)
     }
 
-    /// 複線: 外形線は芯から±r、直角の折れ点はマイター(角の外側は(r,r)だけ張り出す)
+    /// 複線(継手なし): 外形線は芯から±r、直角の折れ点はマイター(角の外側は(r,r)だけ張り出す)
     func testDoubleLineMiter() {
-        let attrs = PipeAttributes(outerDiameter: 100, doubleLine: true, autoFittings: true)
+        let attrs = PipeAttributes(outerDiameter: 100, doubleLine: true, autoFittings: false)
         let pts = v3([Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000)])
         guard let layout = PipeGeometry.doubleLineLayout(points: pts, attrs: attrs),
               layout.runs.count == 1 else {
@@ -159,10 +159,44 @@ final class PipeTests: XCTestCase {
         // 終点: 左法線(-1,0)×50
         XCTAssertEqual(run.left[2], Vec2(950, 1000))
         XCTAssertEqual(run.right[2], Vec2(1050, 1000))
-        // 端部閉じ線2本、エルボ1箇所=前後2枚の四角形
+        // 端部閉じ線2本、継手なし
         XCTAssertEqual(layout.endCaps.count, 2)
-        XCTAssertEqual(layout.fittingBoxes.count, 2)
-        XCTAssertTrue(layout.fittingBoxes.allSatisfy { $0.count == 4 })
+        XCTAssertTrue(layout.fittings.isEmpty)
+    }
+
+    /// 複線(継手あり): 区間ごとの外形線が受口底まで切り詰められ、折れ点にエルボ実形状(受口2+環状本体)。
+    /// DV100(A=112・深さ50・受口外径124・外径114): メーカー図面どおり本体は外R115/内R9(中心=受口底面の交点)
+    func testDoubleLineElbowShape() {
+        let dims = PipeFittingDims(elbow90A: 112, elbow45A: 80, teeA: 113,
+                                   socketDepth: 50, socketOD: 124, capLength: 58)
+        let attrs = PipeAttributes(outerDiameter: 114, annotate: false, doubleLine: true,
+                                   autoFittings: true, fittingDims: dims)
+        let pts = v3([Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000)])
+        guard let layout = PipeGeometry.doubleLineLayout(points: pts, attrs: attrs) else { return XCTFail() }
+        // 区間2本、それぞれ折れ点側が受口底(A2=62)まで切り詰め
+        XCTAssertEqual(layout.runs.count, 2)
+        XCTAssertEqual(layout.runs[0].left.last!.x, 1000 - 62, accuracy: 1e-9)
+        XCTAssertEqual(layout.runs[1].left.first!.y, 62, accuracy: 1e-9)
+        XCTAssertEqual(layout.endCaps.count, 2)
+        XCTAssertEqual(layout.fittings.count, 1)
+        guard case .polygon(let poly) = layout.fittings[0].parts[0] else { return XCTFail() }
+        // 受口端: x=1000-112=888、幅±62
+        XCTAssertEqual(poly[0].x, 888, accuracy: 1e-9)
+        XCTAssertEqual(abs(poly[0].y), 62, accuracy: 1e-9)
+        // 本体の外側円弧: 中心C=(1000-62, 62)=受口底面の交点、半径=62+57=119
+        // (左折なので外側は-y側。外側円弧の点はCから119)
+        let c = Vec2(938, 62)
+        XCTAssertTrue(poly.contains { abs($0.distance(to: c) - 119) < 1e-6 })
+        // 内側円弧: 半径62-57=5
+        XCTAssertTrue(poly.contains { abs($0.distance(to: c) - 5) < 1e-6 })
+        // 多角形はすべての点が折れ点の周り(0..1000)に収まる
+        XCTAssertTrue(poly.allSatisfy { $0.x >= 888 - 1e-9 && $0.y <= 1000 + 1e-9 })
+        // 45°: DV100の45L(A=80)。折れ点から80の位置に受口端
+        let pts45 = v3([Vec2(0, 0), Vec2(1000, 0), Vec2(2000, 1000)])
+        let l45 = PipeGeometry.doubleLineLayout(points: pts45, attrs: attrs)!
+        XCTAssertEqual(l45.fittings.count, 1)
+        guard case .polygon(let p45) = l45.fittings[0].parts[0] else { return XCTFail() }
+        XCTAssertEqual(p45[0].x, 920, accuracy: 1e-9)
     }
 
     /// 継手Offなら継手四角形は出ない
@@ -170,7 +204,7 @@ final class PipeTests: XCTestCase {
         let attrs = PipeAttributes(outerDiameter: 100, doubleLine: true, autoFittings: false)
         let layout = PipeGeometry.doubleLineLayout(
             points: v3([Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000)]), attrs: attrs)
-        XCTAssertTrue(layout?.fittingBoxes.isEmpty ?? false)
+        XCTAssertTrue(layout?.fittings.isEmpty ?? false)
     }
 
     /// 複線+立管: ランごとに外形線、立管の付け根に水平側の受口ボックス
@@ -182,9 +216,12 @@ final class PipeTests: XCTestCase {
             return XCTFail()
         }
         XCTAssertEqual(layout.runs.count, 2)
-        XCTAssertEqual(layout.endCaps.count, 4)
-        // 立管の根元(ラン1終点)と天端(ラン2始点)に1枚ずつ
-        XCTAssertEqual(layout.fittingBoxes.count, 2)
+        // 立管側の端には閉じ線を出さない(継手の円で閉じる) → 自由端2本のみ
+        XCTAssertEqual(layout.endCaps.count, 2)
+        // 立管の根元(ラン1終点)と天端(ラン2始点)に受口1枚ずつ
+        XCTAssertEqual(layout.fittings.count, 2)
+        // 複線の立管記号半径=受口外径/2(概算 115/2)
+        XCTAssertEqual(PipeGeometry.riserSymbolRadius(attrs), 57.5, accuracy: 1e-9)
     }
 
     /// 複線の配管は管の太さの中ならどこでもヒット

@@ -90,6 +90,8 @@ final class CanvasUIState: ObservableObject {
     @Published var pipeDoubleLine = false
     @Published var pipeAutoFittings = true
     @Published var pipeCapEnds = false          // 接続されていない端部にキャップ(M6.3)
+    @Published var pipeSymbolDrain: Double = 2.5   // 単線記号サイズ 排水(紙面mm)M6.5
+    @Published var pipeSymbolSupply: Double = 2.0  // 単線記号サイズ 給水ほか(紙面mm)M6.5
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -579,6 +581,9 @@ struct ContentView: View {
                 // 継手の規格シリーズと寸法(fittings.csv)。無ければ外径概算にフォールバック
                 let series = FittingMaster.series(material: material.id, usage: usage.id)
                 let dims = FittingMaster.standard.dims(series: series, size: size.size)
+                // 単線記号の基準寸法(紙面mm→実寸)。排水系は大きめ・給水系は一回り小さく(FILDER準拠)
+                let drainStyle = series == "DV" || ["S", "W", "RW", "VT"].contains(usage.id)
+                let symbol = max(drainStyle ? uiState.pipeSymbolDrain : uiState.pipeSymbolSupply, 0.5) * scale
                 return PipeToolStyle(
                     attrs: PipeAttributes(usage: usage.id, usageName: usage.name,
                                           material: material.id,
@@ -592,7 +597,7 @@ struct ContentView: View {
                                           doubleLine: uiState.pipeDoubleLine,
                                           autoFittings: uiState.pipeAutoFittings,
                                           fittingSeries: series, fittingDims: dims,
-                                          capEnds: uiState.pipeCapEnds),
+                                          capEnds: uiState.pipeCapEnds, symbolSize: symbol),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
                     z: uiState.pipeLevel)
             }
@@ -834,8 +839,20 @@ struct PipePropertyCard: View {
                 Toggle("継手", isOn: $uiState.pipeAutoFittings)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 11))
-                    .disabled(!uiState.pipeDoubleLine)
-                    .help("折れ点にエルボ、分岐にティーズ、口径違いにレデューサを自動発生(規格: \(seriesLabel))。集計にも個数が出ます")
+                    .help("折れ点にエルボ、分岐にティーズ、口径違いにレデューサを自動発生(規格: \(seriesLabel))。複線は実形状、単線は記号。集計にも個数が出ます")
+                if !uiState.pipeDoubleLine {
+                    Text("記号")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    TextField("", value: symbolSizeBinding, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .frame(width: 44)
+                        .help("単線記号の基準寸法(紙面mm)。管サイズに依らず一定。排水\(isDrainStyleNow ? "(この配管)" : "")2.5 / 給水2.0が既定。縮尺で詰まるときは小さく")
+                    Text("mm")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
                 Toggle("端部キャップ", isOn: $uiState.pipeCapEnds)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 11))
@@ -859,6 +876,24 @@ struct PipePropertyCard: View {
                 .strokeBorder(.white.opacity(0.18), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
+    }
+
+    /// 現在の用途・管種が排水系(単線記号は排水サイズを使う)か
+    private var isDrainStyleNow: Bool {
+        let s = FittingMaster.series(material: uiState.pipeMaterial, usage: uiState.pipeUsage)
+        return s == "DV" || ["S", "W", "RW", "VT"].contains(uiState.pipeUsage)
+    }
+
+    /// 単線記号サイズ(紙面mm)。排水系/給水系のどちらの設定値かは現在の用途で切替。
+    /// 変更は選択中の配管にも反映
+    private var symbolSizeBinding: Binding<Double> {
+        Binding(
+            get: { isDrainStyleNow ? uiState.pipeSymbolDrain : uiState.pipeSymbolSupply },
+            set: { v in
+                let mm = max(min(v, 20), 0.5)
+                if isDrainStyleNow { uiState.pipeSymbolDrain = mm } else { uiState.pipeSymbolSupply = mm }
+                controller.applyPipeSymbolSize(mm)
+            })
     }
 
     /// 継手の規格シリーズ表示("DV" / "HI" / …。マスタ未整備なら"概算")

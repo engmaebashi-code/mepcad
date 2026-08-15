@@ -529,6 +529,11 @@ struct PropertyPanelView: View {
                                 Button("端部キャップあり") { controller.applyPipeCapEnds(true) }
                                 Button("端部キャップなし") { controller.applyPipeCapEnds(false) }
                                 Divider()
+                                Menu("単線記号サイズ") {
+                                    ForEach([1.5, 2.0, 2.5, 3.0, 3.5], id: \.self) { mm in
+                                        Button(String(format: "%.1fmm", mm)) { controller.applyPipeSymbolSize(mm) }
+                                    }
+                                }
                                 Button("高さ…") { controller.promptPipeLevel() }
                             } label: {
                                 Text("表現").font(.system(size: 11))

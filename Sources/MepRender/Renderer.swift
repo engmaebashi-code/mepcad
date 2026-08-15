@@ -107,6 +107,17 @@ public struct Renderer {
             drawEntity(entity, layer: layer, transform: transform, definitions: defs,
                        junctions: junctions[entity.id] ?? [], in: ctx)
         }
+        // 配管の継手・記号・傍記は全配管の管体の後に描く(継手の下地塗りで枝管の外形線を隠すため)M6.5
+        for entity in entities {
+            guard case .pipe = entity.kind else { continue }
+            let g = groups[entity.layer.group]
+            guard g.isVisible else { continue }
+            let layer = g.layers[entity.layer.layer]
+            guard layer.isVisible else { continue }
+            if !showAuxiliary, entity.isAuxiliary { continue }
+            drawEntity(entity, layer: layer, transform: transform, definitions: defs,
+                       junctions: junctions[entity.id] ?? [], pipeFittingsPass: true, in: ctx)
+        }
     }
 
     // MARK: - 用紙枠(M4.10)
@@ -168,7 +179,8 @@ public struct Renderer {
 
     private func drawEntity(_ entity: Entity, layer: Layer, transform: ViewTransform,
                             definitions: [UUID: BlockDefinition] = [:],
-                            junctions: [PipeJunction] = [], in ctx: CGContext) {
+                            junctions: [PipeJunction] = [],
+                            pipeFittingsPass: Bool = false, in ctx: CGContext) {
         let colorIndex = entity.style.colorIndex ?? layer.defaultColorIndex
         let weight = entity.style.lineWeight ?? layer.defaultLineWeight
         let lineType = entity.style.lineType ?? layer.defaultLineType
@@ -218,10 +230,16 @@ public struct Renderer {
             // 配置側のスタイル(色・線種・太さ)は上書きとして中身へ伝播する(M4.8.1)
             guard let def = definitions[defID] else { break }
             ctx.setLineDash(phase: 0, lengths: [])
-            for sub in def.instantiate(insert: insert, rotation: rotation, scale: scale,
+            let subs = def.instantiate(insert: insert, rotation: rotation, scale: scale,
                                        mirrored: mirrored, layer: entity.layer,
-                                       overrideStyle: entity.style) {
+                                       overrideStyle: entity.style)
+            for sub in subs {
                 drawEntity(sub, layer: layer, transform: transform, in: ctx)
+            }
+            // ブロック内の配管は継手・記号・傍記もここで(2パス目は最上位の配管のみ回るため)
+            for sub in subs {
+                guard case .pipe = sub.kind else { continue }
+                drawEntity(sub, layer: layer, transform: transform, pipeFittingsPass: true, in: ctx)
             }
 
         case .hatch(let boundary, let pattern):
@@ -311,93 +329,132 @@ public struct Renderer {
                 if close { ctx.closePath() }
             }
             let baseWidth = max(1, weight * transform.scale * 10)
-            if attrs.doubleLine,
-               let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
-                // 複線: ランごとに外形線2本+端部(実線)、芯線(一点鎖線・細)、継手(実線)
-                ctx.setLineDash(phase: 0, lengths: [])
-                for run in layout.runs {
-                    poly(run.left)
-                    poly(run.right)
-                }
-                for cap in layout.endCaps {
-                    let sa = transform.toScreen(cap.0)
-                    let sb = transform.toScreen(cap.1)
-                    ctx.move(to: CGPoint(x: sa.x, y: sa.y))
-                    ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
-                }
-                ctx.strokePath()
-                // 継手はやや太く(折れ点のエルボ+分岐ティーズ・端部キャップ・レデューサ)
-                ctx.setLineWidth(baseWidth * 1.3)
-                for box in layout.fittingBoxes { poly(box, close: true) }
-                if attrs.autoFittings {
-                    for j in junctions {
-                        for box in PipeNetwork.junctionBoxes(j, attrs: attrs) { poly(box, close: true) }
-                    }
-                }
-                ctx.strokePath()
-                // 芯線: 一点鎖線(細)
-                ctx.setLineWidth(1)
-                ctx.setLineDash(phase: 0, lengths: LineTypeTable.dashPattern(4).map { CGFloat($0) })
-                for run in layout.runs { poly(run.center) }
-                ctx.strokePath()
-                ctx.setLineDash(phase: 0, lengths: [])
-                ctx.setLineWidth(baseWidth)
-            } else {
-                // 単線: 水平区間ごとの折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)
-                for run in PipeGeometry.planRuns(points: points) {
-                    poly(run.map(\.xy))
-                }
-                ctx.strokePath()
-                // 単線の継手シンボル(排水=受口ティック+丸み、給水=×、キャップ○×、レデューサ>)
-                let symbols = PipeSymbols.elements(points: points, attrs: attrs, junctions: junctions)
-                if !symbols.isEmpty {
+            let layout = attrs.doubleLine
+                ? PipeGeometry.doubleLineLayout(points: points, attrs: attrs) : nil
+
+            if !pipeFittingsPass {
+                // ---- 第1パス: 管体 ----
+                if let layout {
+                    // 複線: 外形線2本+端部(実線)、芯線(一点鎖線・細)
                     ctx.setLineDash(phase: 0, lengths: [])
-                    for el in symbols {
-                        switch el {
-                        case .segment(let a, let b):
-                            let sa = transform.toScreen(a)
-                            let sb = transform.toScreen(b)
-                            ctx.move(to: CGPoint(x: sa.x, y: sa.y))
-                            ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
-                        case .arc(let c, let r, let s, let e):
-                            let sc = transform.toScreen(c)
-                            ctx.addArc(center: CGPoint(x: sc.x, y: sc.y), radius: r * transform.scale,
-                                       startAngle: -s, endAngle: -e, clockwise: true)
-                        case .circle(let c, let r):
-                            let sc = transform.toScreen(c)
-                            let sr = r * transform.scale
-                            ctx.strokeEllipse(in: CGRect(x: sc.x - sr, y: sc.y - sr,
-                                                         width: sr * 2, height: sr * 2))
-                        }
-                        ctx.strokePath()
+                    for run in layout.runs {
+                        poly(run.left)
+                        poly(run.right)
                     }
+                    for cap in layout.endCaps {
+                        let sa = transform.toScreen(cap.0)
+                        let sb = transform.toScreen(cap.1)
+                        ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                        ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                    }
+                    ctx.strokePath()
+                    ctx.setLineWidth(1)
+                    ctx.setLineDash(phase: 0, lengths: LineTypeTable.dashPattern(4).map { CGFloat($0) })
+                    for run in layout.runs { poly(run.center) }
+                    ctx.strokePath()
+                    ctx.setLineDash(phase: 0, lengths: [])
+                    ctx.setLineWidth(baseWidth)
+                } else {
+                    // 単線: 水平区間ごとの折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)
+                    for run in PipeGeometry.planRuns(points: points) {
+                        poly(run.map(\.xy))
+                    }
+                    ctx.strokePath()
+                }
+                break
+            }
+
+            // ---- 第2パス: 継手・記号・立管・傍記 ----
+            ctx.setLineDash(phase: 0, lengths: [])
+            if let layout {
+                // 複線の継手: 実形状(受口+本体)を背景色で塗ってから線(やや太く)
+                if attrs.autoFittings {
+                    ctx.setLineWidth(baseWidth * 1.3)
+                    var shapes = layout.fittings
+                    for j in junctions { shapes += PipeNetwork.junctionShapes(j, attrs: attrs) }
+                    for shape in shapes {
+                        for part in shape.parts {
+                            switch part {
+                            case .polygon(let pts):
+                                poly(pts, close: true)
+                                ctx.setFillColor(theme.background)
+                                ctx.drawPath(using: .fillStroke)
+                            case .circle(let c, let r):
+                                let sc = transform.toScreen(c)
+                                let sr = r * transform.scale
+                                let rect = CGRect(x: sc.x - sr, y: sc.y - sr, width: sr * 2, height: sr * 2)
+                                ctx.setFillColor(theme.background)
+                                ctx.fillEllipse(in: rect)
+                                ctx.strokeEllipse(in: rect)
+                            }
+                        }
+                    }
+                    ctx.setLineWidth(baseWidth)
+                }
+            } else {
+                // 単線の継手シンボル(紙面mm基準。排水=ティック+丸み、給水=ティック、Y、▷、○×)
+                let symbols = PipeSymbols.elements(points: points, attrs: attrs, junctions: junctions)
+                for el in symbols {
+                    switch el {
+                    case .segment(let a, let b):
+                        let sa = transform.toScreen(a)
+                        let sb = transform.toScreen(b)
+                        ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                        ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                    case .arc(let c, let r, let s, let e):
+                        let sc = transform.toScreen(c)
+                        ctx.addArc(center: CGPoint(x: sc.x, y: sc.y), radius: r * transform.scale,
+                                   startAngle: -s, endAngle: -e, clockwise: true)
+                    case .circle(let c, let r):
+                        let sc = transform.toScreen(c)
+                        let sr = r * transform.scale
+                        ctx.strokeEllipse(in: CGRect(x: sc.x - sr, y: sc.y - sr,
+                                                     width: sr * 2, height: sr * 2))
+                    }
+                    ctx.strokePath()
                 }
             }
-            // 立上り(○+●)/立下り(○+×)記号
+            // 立上り/立下り記号。複線=継手の円(受口外径)+●/×、単線=直径uの円(上り=閉・●なし、下り=管側が開いたC形)
             let risers = PipeGeometry.risers(points: points)
             if !risers.isEmpty {
-                ctx.setLineDash(phase: 0, lengths: [])
                 let rs = PipeGeometry.riserSymbolRadius(attrs) * transform.scale
-                let r = max(rs, 4)
-                for riser in risers {
+                let r = max(rs, 3)
+                if attrs.doubleLine { ctx.setLineWidth(baseWidth * 1.3) }
+                for (idx, riser) in risers.enumerated() {
                     let c = transform.toScreen(riser.position)
-                    // 記号の下地(背景色で塗って線を隠す)
+                    let rect = CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
                     ctx.setFillColor(theme.background)
-                    ctx.fillEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
-                    ctx.strokeEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
-                    if riser.isUp {
-                        ctx.setFillColor(theme.color(forIndex: colorIndex))
-                        let d = r * 0.4
-                        ctx.fillEllipse(in: CGRect(x: c.x - d, y: c.y - d, width: d * 2, height: d * 2))
+                    ctx.fillEllipse(in: rect)
+                    if attrs.doubleLine || !attrs.autoFittings {
+                        ctx.strokeEllipse(in: rect)
+                        if riser.isUp {
+                            ctx.setFillColor(theme.color(forIndex: colorIndex))
+                            let d = r * 0.4
+                            ctx.fillEllipse(in: CGRect(x: c.x - d, y: c.y - d, width: d * 2, height: d * 2))
+                        } else {
+                            let d = r * 0.6
+                            ctx.move(to: CGPoint(x: c.x - d, y: c.y - d))
+                            ctx.addLine(to: CGPoint(x: c.x + d, y: c.y + d))
+                            ctx.move(to: CGPoint(x: c.x - d, y: c.y + d))
+                            ctx.addLine(to: CGPoint(x: c.x + d, y: c.y - d))
+                            ctx.strokePath()
+                        }
+                    } else if riser.isUp {
+                        // 立上り: 閉じた円
+                        ctx.strokeEllipse(in: rect)
                     } else {
-                        let d = r * 0.6
-                        ctx.move(to: CGPoint(x: c.x - d, y: c.y - d))
-                        ctx.addLine(to: CGPoint(x: c.x + d, y: c.y + d))
-                        ctx.move(to: CGPoint(x: c.x - d, y: c.y + d))
-                        ctx.addLine(to: CGPoint(x: c.x + d, y: c.y - d))
+                        // 立下り: 管側60°が開いたC形。開き方向=水平脚の方向
+                        let lead = PipeSymbols.riserLead(points: points, riserIndex: idx)
+                        let toward = lead?.toward ?? Vec2(-1, 0)
+                        let a0 = atan2(toward.y, toward.x)
+                        // ワールド角a0±30°を開ける → 画面はy反転なので角度符号反転
+                        ctx.addArc(center: CGPoint(x: c.x, y: c.y), radius: r,
+                                   startAngle: -(a0 + .pi / 6), endAngle: -(a0 - .pi / 6),
+                                   clockwise: true)
                         ctx.strokePath()
                     }
                 }
+                ctx.setLineWidth(baseWidth)
             }
             // 口径傍記
             if let note = PipeGeometry.annotation(points: points, attrs: attrs) {

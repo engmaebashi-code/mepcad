@@ -104,12 +104,24 @@ final class PipeMasterTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(m.rows.count, 300)
         XCTAssertTrue(m.seriesList.contains("DV"))
         XCTAssertTrue(m.seriesList.contains("SGP"))
-        // DV 100: エルボA=90・受口深さ50・受口外径130
+        // DV 100(メーカー図面実寸): DLエルボA=112・45L=80・DT=113・受口深さ50・受口外径124
         let dv100 = m.dims(series: "DV", size: "100")
-        XCTAssertEqual(dv100.elbow90A, 90, accuracy: 1e-9)
+        XCTAssertEqual(dv100.elbow90A, 112, accuracy: 1e-9)
+        XCTAssertEqual(dv100.elbow45A, 80, accuracy: 1e-9)
+        XCTAssertEqual(dv100.teeA, 113, accuracy: 1e-9)
         XCTAssertEqual(dv100.socketDepth, 50, accuracy: 1e-9)
-        XCTAssertEqual(dv100.socketOD, 130, accuracy: 1e-9)
+        XCTAssertEqual(dv100.socketOD, 124, accuracy: 1e-9)
         XCTAssertFalse(dv100.isEmpty)
+        // HI 100(HI-TS実寸): エルボ153・受口84・受口外径130・キャップ138。TSはHIと同寸
+        let hi100 = m.dims(series: "HI", size: "100")
+        XCTAssertEqual(hi100.elbow90A, 153, accuracy: 1e-9)
+        XCTAssertEqual(hi100.socketDepth, 84, accuracy: 1e-9)
+        XCTAssertEqual(hi100.socketOD, 130, accuracy: 1e-9)
+        XCTAssertEqual(hi100.capLength, 138, accuracy: 1e-9)
+        XCTAssertEqual(m.dims(series: "TS", size: "50"), m.dims(series: "HI", size: "50"))
+        // 大曲エルボ(LL)・大曲Y(LT)・45°Yも行として持つ
+        XCTAssertEqual(m.row(series: "DV", kind: "elbow90LL", size: "100")?.a, 178)
+        XCTAssertEqual(m.row(series: "DV", kind: "y45", size: "100")?.a, 194)
         // 未整備(銅管)は空 → 呼び出し側で外径概算
         XCTAssertTrue(m.dims(series: "", size: "20").isEmpty)
         XCTAssertTrue(m.dims(series: "DV", size: "13").isEmpty)   // DVに13は無い

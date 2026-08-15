@@ -1496,6 +1496,13 @@ extension CanvasController {
         }
     }
 
+    /// 単線記号の基準寸法(紙面mm)の一括変更。M6.5
+    func applyPipeSymbolSize(_ paperMM: Double) {
+        updateSelectedPipes(name: String(format: "単線記号サイズを%.1fmmに変更", paperMM)) { attrs, _, scale in
+            attrs.symbolSize = max(paperMM, 0.5) * scale
+        }
+    }
+
     /// 口径傍記の表示/非表示の一括変更
     func applyPipeAnnotate(_ on: Bool) {
         updateSelectedPipes(name: on ? "口径傍記を表示" : "口径傍記を非表示") { attrs, _, _ in

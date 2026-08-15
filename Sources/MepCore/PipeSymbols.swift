@@ -1,13 +1,16 @@
 import Foundation
 
-// MARK: - 単線表現の継手シンボル(FILDER準拠)M6.4
+// MARK: - 単線表現の継手シンボル(FILDER準拠)M6.4 → M6.5で紙面mm基準に全面改訂
 //
-// 単線でも継手の位置に記号を出す(施工図の慣例):
-// - 排水系(DV/HTDV): 継手の受口位置(折れ点からA寸法)に芯線と直交する短いティック、
-//   折れ点は角を落として丸み(受口が見える表現)、ティーズは本管側にティック
-// - 給水系(TS/HI/HT/SGPねじ込み): 継手位置に×印(ソケット・エルボ・ティーズ共通)
-// - キャップ: ○の中に×(端部)、レデューサ: 「>」形(大径→小径)
-// 記号の大きさは紙面上で一定に見えるよう文字高さ(textHeight)を基準にする
+// 単線でも継手の位置に記号を出す(施工図の慣例)。記号は管サイズに依らず
+// 紙面上で一定の大きさ(基準寸法u=attrs.effectiveSymbolSize。FILDER: 排水2.5mm・給水2.0mm)。
+// - 排水系(DV/HTDV): 折れ点から各脚uの位置に直交ティック(受口)、90°/45°は脚に接する
+//   丸み(90°: R=u、45°: R=u/tan22.5°)。ティーズはティック3本、45°YはY形
+// - 給水系(TS/HI/HT/SGP): 同じ組立てで角は丸めない。レデューサは中抜き三角▷
+// - 立上り: 管端手前uにティック+直径uの円(閉)。立下り: 管側60°が開いたC形
+// - キャップ: ○の中に×
+// 立上り/立下りの円はRenderer側(riserSymbolRadius=u/2)で描くので、ここではティックと
+// C形の「開き方向」(riserLead)だけを提供する
 
 /// 単線シンボルの図形要素(平面)
 public enum PipeSymbolElement: Equatable, Sendable {
@@ -19,34 +22,56 @@ public enum PipeSymbolElement: Equatable, Sendable {
 
 public enum PipeSymbols {
 
-    /// 排水系(受口ティック表現)かどうか
+    /// 排水系(受口ティック+丸み表現)かどうか
     public static func isDrainStyle(_ attrs: PipeAttributes) -> Bool {
         attrs.fittingSeries == "DV" || attrs.fittingSeries == "HTDV"
             || (attrs.fittingSeries.isEmpty && ["S", "W", "RW", "VT"].contains(attrs.usage))
     }
 
-    /// ティックの半長さ(記号の大きさ。紙面上で一定に見せる)
-    public static func tickHalf(_ attrs: PipeAttributes) -> Double {
-        max(attrs.textHeight * 0.45, attrs.outerDiameter * 0.5)
+    /// 基準寸法u(実寸mm)
+    public static func unit(_ attrs: PipeAttributes) -> Double { attrs.effectiveSymbolSize }
+
+    /// ティックの半長さ(=u/2)
+    public static func tickHalf(_ attrs: PipeAttributes) -> Double { unit(attrs) / 2 }
+
+    /// 立管の記号に付くティック位置と、立下りC形の開き方向。
+    /// 戻り値: (立管点, 管の方向(単位・立管点→水平脚)) — 水平脚が無ければnil。
+    /// riserIndexはrisers(points:)の順
+    public static func riserLead(points: [Vec3], riserIndex: Int) -> (position: Vec2, toward: Vec2)? {
+        var k = -1
+        for i in 0..<(points.count - 1) {
+            let a = points[i], b = points[i + 1]
+            if a.xy.distance(to: b.xy) <= PipeGeometry.planEpsilon, abs(b.z - a.z) > 0.5 {
+                k += 1
+                if k == riserIndex {
+                    // 手前の水平脚(優先)、無ければ先の水平脚
+                    if i > 0 {
+                        let d = points[i - 1].xy - a.xy
+                        if d.length > PipeGeometry.planEpsilon { return (a.xy, d * (1 / d.length)) }
+                    }
+                    if i + 2 < points.count {
+                        let d = points[i + 2].xy - b.xy
+                        if d.length > PipeGeometry.planEpsilon { return (a.xy, d * (1 / d.length)) }
+                    }
+                    return nil
+                }
+            }
+        }
+        return nil
     }
 
-    /// 単線シンボル一式(折れ点エルボ+ネットワーク由来の継手)。autoFittings=falseなら空
+    /// 単線シンボル一式(折れ点エルボ+ネットワーク由来の継手+立管のティック)。autoFittings=falseなら空
     public static func elements(points: [Vec3], attrs: PipeAttributes,
                                 junctions: [PipeJunction]) -> [PipeSymbolElement] {
         guard attrs.autoFittings, points.count >= 2 else { return [] }
         var out: [PipeSymbolElement] = []
-        let dims = attrs.effectiveFittingDims
-        let t = tickHalf(attrs)
+        let u = unit(attrs)
+        let t = u / 2
         let drain = isDrainStyle(attrs)
 
-        func tick(at p: Vec2, along u: Vec2) {
-            let n = Vec2(-u.y, u.x)
-            out.append(.segment(p + n * t, p - n * t))
-        }
-        func cross(at p: Vec2) {
-            let d = t * 0.7
-            out.append(.segment(Vec2(p.x - d, p.y - d), Vec2(p.x + d, p.y + d)))
-            out.append(.segment(Vec2(p.x - d, p.y + d), Vec2(p.x + d, p.y - d)))
+        func tick(at p: Vec2, along dir: Vec2, half: Double = t) {
+            let n = Vec2(-dir.y, dir.x)
+            out.append(.segment(p + n * half, p - n * half))
         }
 
         // 折れ点(平面)ごとのエルボ記号
@@ -58,76 +83,83 @@ public enum PipeSymbols {
                 let d2 = pts[i + 1] - pts[i]
                 let l1 = d1.length, l2 = d2.length
                 guard l1 > 1e-9, l2 > 1e-9 else { continue }
-                let u1 = d1 * (1 / l1)
-                let u2 = d2 * (1 / l2)
+                let u1 = d1 * (1 / l1)          // 進行方向(手前→折れ点)
+                let u2 = d2 * (1 / l2)          // 進行方向(折れ点→先)
                 let a1 = atan2(u1.y, u1.x)
                 let a2 = atan2(u2.y, u2.x)
                 var turn = a2 - a1
                 while turn > .pi { turn -= 2 * .pi }
                 while turn < -.pi { turn += 2 * .pi }
                 let deg = abs(turn) * 180 / .pi
-                guard deg > 2 else { continue }
+                guard deg > 2, deg < 175 else { continue }
+                let reach = min(u, l1 * 0.5, l2 * 0.5)
+                let back = pts[i] - u1 * reach
+                let fwd = pts[i] + u2 * reach
+                tick(at: back, along: u1)
+                tick(at: fwd, along: u2)
                 if drain {
-                    // 受口位置(折れ点からA寸法)にティック×2。90°は丸みコーナーも
-                    let a = deg > 60 ? dims.elbow90A : dims.elbow45A
-                    let back = pts[i] - u1 * min(a, l1 * 0.5)
-                    let fwd = pts[i] + u2 * min(a, l2 * 0.5)
-                    tick(at: back, along: u1)
-                    tick(at: fwd, along: u2)
-                    if abs(deg - 90) < 2 {
-                        // 角の丸み: 内側に半径a/2の円弧(back→fwdを結ぶ)
-                        let r = min(a, l1 * 0.5, l2 * 0.5) * 0.5
-                        let c1 = pts[i] - u1 * r
-                        let c2 = pts[i] + u2 * r
-                        // 円弧の中心は折れ点から内側へ(r,r)
-                        let center = c1 + u2 * r
-                        let s = atan2(c1.y - center.y, c1.x - center.x)
-                        let e = atan2(c2.y - center.y, c2.x - center.x)
-                        // 左折(turn>0)なら反時計、右折なら時計
-                        if turn > 0 {
-                            out.append(.arc(center, r, s, e))
-                        } else {
-                            out.append(.arc(center, r, e, s))
-                        }
+                    // 脚に接する丸み: back/fwdを結ぶ円弧。R = reach / tan(turn/2)
+                    let half = abs(turn) / 2
+                    guard half > 0.02 else { continue }
+                    let rad = reach / tan(half)
+                    // 中心: backから脚1に直交して内側(折れる側)へrad
+                    let n1 = Vec2(-u1.y, u1.x) * (turn > 0 ? 1 : -1)
+                    let center = back + n1 * rad
+                    let s = atan2(back.y - center.y, back.x - center.x)
+                    let e = atan2(fwd.y - center.y, fwd.x - center.x)
+                    if turn > 0 {
+                        out.append(.arc(center, rad, s, e))
+                    } else {
+                        out.append(.arc(center, rad, e, s))
                     }
-                } else {
-                    cross(at: pts[i])
                 }
             }
         }
 
-        // 立管の付け根(水平→鉛直): 排水はティック、給水は×(記号は立上り○の脇)
-        // → 立管記号自体が別途描かれるので、ここでは何もしない
+        // 立管: 手前uの位置にティック(円はRenderer)
+        var ri = 0
+        for _ in PipeGeometry.risers(points: points) {
+            if let lead = riserLead(points: points, riserIndex: ri) {
+                tick(at: lead.position + lead.toward * u, along: lead.toward)
+            }
+            ri += 1
+        }
 
         // ネットワーク由来(ティーズ・キャップ・レデューサ)
         for j in junctions {
             switch j.kind {
-            case .tee(let bdir, _, _):
-                if drain {
-                    // 本管側: 分岐位置の両側A寸法にティック(受口)、枝管側にもティック
-                    let along = Vec2(-bdir.y, bdir.x)
-                    let a = dims.teeA
-                    tick(at: j.position - along * a, along: along)
-                    tick(at: j.position + along * a, along: along)
-                    tick(at: j.position + bdir * a, along: bdir)
+            case .tee(let bdir, _, _, _, let along):
+                // 枝の傾き(主管軸方向成分)。|cos|>0.5なら45°Y
+                let c = bdir.x * along.x + bdir.y * along.y
+                if abs(c) > 0.5 && drain {
+                    // 45°Y: 主管ティック 上流側-0.75u/下流側+1.25u(下流=枝が傾く側)、
+                    // 枝は1.25u先に長さ0.8uのティック
+                    let down = along * (c > 0 ? 1 : -1)
+                    tick(at: j.position - down * (0.75 * u), along: along)
+                    tick(at: j.position + down * (1.25 * u), along: along)
+                    tick(at: j.position + bdir * (1.25 * u), along: bdir, half: 0.4 * u)
                 } else {
-                    cross(at: j.position)
+                    // T: 主管±u、枝u
+                    tick(at: j.position - along * u, along: along)
+                    tick(at: j.position + along * u, along: along)
+                    tick(at: j.position + bdir * u, along: bdir)
                 }
             case .cap(let dir):
                 // ○の中に×(端部)
-                let r = t * 0.8
-                let c = j.position + dir * (r * 0.2)
-                out.append(.circle(c, r))
-                let d = r * 0.6
-                out.append(.segment(Vec2(c.x - d, c.y - d), Vec2(c.x + d, c.y + d)))
-                out.append(.segment(Vec2(c.x - d, c.y + d), Vec2(c.x + d, c.y - d)))
-            case .reducer(let dir, _, _):
-                // 「>」形: 大径側(内側)から小径側(dir方向)へすぼまる
+                let rr = t * 0.8
+                let cc = j.position + dir * (rr * 0.2)
+                out.append(.circle(cc, rr))
+                let d = rr * 0.6
+                out.append(.segment(Vec2(cc.x - d, cc.y - d), Vec2(cc.x + d, cc.y + d)))
+                out.append(.segment(Vec2(cc.x - d, cc.y + d), Vec2(cc.x + d, cc.y - d)))
+            case .reducer(let dir, _, _, _):
+                // ▷: 大径側にティック(長さu)、その両端から小径側u先の頂点へ
                 let n = Vec2(-dir.y, dir.x)
-                let back = j.position - dir * (t * 1.2)
-                let tip = j.position + dir * (t * 0.6)
-                out.append(.segment(back + n * t, tip))
-                out.append(.segment(back - n * t, tip))
+                let base = j.position - dir * (u * 0.5)
+                let tip = base + dir * u
+                out.append(.segment(base + n * t, base - n * t))
+                out.append(.segment(base + n * t, tip))
+                out.append(.segment(base - n * t, tip))
             }
         }
         return out

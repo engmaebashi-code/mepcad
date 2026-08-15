@@ -22,7 +22,7 @@ final class PipeNetworkTests: XCTestCase {
         let j = PipeNetwork.junctions(in: [main, branch])
         XCTAssertEqual(j[main.id]?.count, 1)
         XCTAssertNil(j[branch.id])
-        guard let tee = j[main.id]?.first, case .tee(let dir, let bod, let label) = tee.kind else {
+        guard let tee = j[main.id]?.first, case .tee(let dir, let bod, let label, _, let mainDir) = tee.kind else {
             return XCTFail("ティーズでない")
         }
         XCTAssertEqual(tee.position, Vec2(1500, 0))
@@ -30,8 +30,16 @@ final class PipeNetworkTests: XCTestCase {
         XCTAssertEqual(dir.y, 1, accuracy: 1e-9)      // 本管→枝管(+y)
         XCTAssertEqual(bod, 48, accuracy: 1e-9)
         XCTAssertEqual(label, "40")
-        // 継手の外形: 本管方向の帯+枝管方向の受口の2枚
-        XCTAssertEqual(PipeNetwork.junctionBoxes(tee, attrs: PipeAttributes(outerDiameter: 60)).count, 2)
+        XCTAssertEqual(mainDir.x, 1, accuracy: 1e-9)   // 本管方向(+x)
+        // 継手の実形状: T形の1多角形(20頂点)
+        let shapes = PipeNetwork.junctionShapes(tee, attrs: PipeAttributes(outerDiameter: 60))
+        XCTAssertEqual(shapes.count, 1)
+        guard case .polygon(let poly) = shapes[0].parts[0] else { return XCTFail() }
+        XCTAssertEqual(poly.count, 20)
+        // 径違い(60/48): 主管・枝のA = 本管概算teeA(54)と枝概算teeA(43.2)の平均=48.6
+        XCTAssertEqual(poly.map(\.x).min()!, 1500 - 48.6, accuracy: 1e-9)
+        XCTAssertEqual(poly.map(\.x).max()!, 1500 + 48.6, accuracy: 1e-9)
+        XCTAssertEqual(poly.map(\.y).max()!, 48.6, accuracy: 1e-9)
     }
 
     /// 高さが違えば平面上で重なっても接続しない(立体交差)
@@ -55,14 +63,20 @@ final class PipeNetworkTests: XCTestCase {
         let j = PipeNetwork.junctions(in: [big, small])
         XCTAssertEqual(j[big.id]?.count, 1)
         XCTAssertNil(j[small.id])
-        guard let r = j[big.id]?.first, case .reducer(let dir, let od, let label) = r.kind else {
+        guard let r = j[big.id]?.first, case .reducer(let dir, let od, let label, _) = r.kind else {
             return XCTFail("レデューサでない")
         }
         XCTAssertEqual(r.position, Vec2(2000, 0))
         XCTAssertEqual(dir.x, 1, accuracy: 1e-9)       // 内側→端(+x)
         XCTAssertEqual(od, 60, accuracy: 1e-9)
         XCTAssertEqual(label, "50")
-        XCTAssertEqual(PipeNetwork.junctionBoxes(r, attrs: PipeAttributes(outerDiameter: 76)).count, 1)
+        let shapes = PipeNetwork.junctionShapes(r, attrs: PipeAttributes(outerDiameter: 76))
+        XCTAssertEqual(shapes.count, 1)
+        guard case .polygon(let poly) = shapes[0].parts[0] else { return XCTFail() }
+        XCTAssertEqual(poly.count, 8)
+        // 大径受口は接続点から-x側に受口深さ、小径側は+x側へ
+        XCTAssertLessThan(poly.map(\.x).min()!, 2000)
+        XCTAssertGreaterThan(poly.map(\.x).max()!, 2000)
     }
 
     /// キャップ: capEndsの配管の、接続されていない端だけ
@@ -97,14 +111,15 @@ final class PipeNetworkTests: XCTestCase {
                                    socketDepth: 30, socketOD: 70, capLength: 38)
         XCTAssertFalse(dims.isEmpty)
         XCTAssertEqual(PipeAttributes(outerDiameter: 60, fittingDims: dims).effectiveFittingDims, dims)
-        // 複線レイアウトの継手ボックスはマスタの受口外径・A寸法を使う
+        // 複線レイアウトの継手形状はマスタの受口外径・A寸法を使う
         let attrs = PipeAttributes(outerDiameter: 60, annotate: false, doubleLine: true,
                                    fittingDims: dims)
         let layout = PipeGeometry.doubleLineLayout(
             points: [Vec3(0, 0, 0), Vec3(1000, 0, 0), Vec3(1000, 1000, 0)], attrs: attrs)!
-        // 手前側ボックス: 折れ点から-x方向にA=50、幅は受口外径70/2=35
-        let box = layout.fittingBoxes[0]
-        XCTAssertEqual(box[0].x, 950, accuracy: 1e-9)
-        XCTAssertEqual(box[0].y, 35, accuracy: 1e-9)
+        XCTAssertEqual(layout.fittings.count, 1)
+        guard case .polygon(let poly) = layout.fittings[0].parts[0] else { return XCTFail() }
+        // 手前側受口端: 折れ点から-x方向にA=50(x=950)、幅は受口外径70/2=35
+        XCTAssertEqual(poly[0].x, 950, accuracy: 1e-9)
+        XCTAssertEqual(poly[0].y, -35, accuracy: 1e-9)   // 外側(右折→外側は-y)
     }
 }
