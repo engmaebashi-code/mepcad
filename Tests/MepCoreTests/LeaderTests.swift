@@ -21,8 +21,8 @@ final class LeaderTests: XCTestCase {
         XCTAssertEqual(layout.segments[1].1.x, 500 + w, accuracy: 1e-9)
         XCTAssertEqual(layout.segments[1].1.y, 300, accuracy: 1e-9)
         // 文字は水平線の少し上・折れ点から書き出し
-        XCTAssertEqual(layout.textPosition.x, 500, accuracy: 1e-9)
-        XCTAssertGreaterThan(layout.textPosition.y, 300)
+        XCTAssertEqual(layout.texts[0].position.x, 500, accuracy: 1e-9)
+        XCTAssertGreaterThan(layout.texts[0].position.y, 300)
         // 矢印は2本
         XCTAssertEqual(layout.arrowStrokes.count, 2)
         XCTAssertEqual(layout.arrowStrokes[0].0, Vec2(0, 0))
@@ -36,7 +36,7 @@ final class LeaderTests: XCTestCase {
                                            content: "AB", attrs: attrs)
         let w = LeaderGeometry.textWidth("AB", height: 175)
         XCTAssertEqual(layout.segments[1].1.x, 200 - w, accuracy: 1e-9)
-        XCTAssertEqual(layout.textPosition.x, 200 - w, accuracy: 1e-9)
+        XCTAssertEqual(layout.texts[0].position.x, 200 - w, accuracy: 1e-9)
         XCTAssertTrue(layout.arrowStrokes.isEmpty)   // 矢印Off
     }
 
@@ -65,8 +65,8 @@ final class LeaderTests: XCTestCase {
               + ((end.y - 1000) / e.ry) * ((end.y - 1000) / e.ry)
         XCTAssertEqual(q, 1.0, accuracy: 1e-6)
         // 文字はバルーン中央(左下基準)
-        XCTAssertEqual(layout.textPosition.x, 1000 - w / 2, accuracy: 1e-9)
-        XCTAssertEqual(layout.textPosition.y, 1000 - 87.5, accuracy: 1e-9)
+        XCTAssertEqual(layout.texts[0].position.x, 1000 - w / 2, accuracy: 1e-9)
+        XCTAssertEqual(layout.texts[0].position.y, 1000 - 87.5, accuracy: 1e-9)
     }
 
     /// 二重枠: 楕円2個、引出線は外側の枠まで
@@ -109,6 +109,60 @@ final class LeaderTests: XCTestCase {
         XCTAssertEqual(LeaderGeometry.textWidth("AB", height: 100), 124, accuracy: 1e-9)
         XCTAssertEqual(LeaderGeometry.textWidth("あい", height: 100), 190, accuracy: 1e-9)
         XCTAssertEqual(LeaderGeometry.textWidth("A明", height: 100), 157, accuracy: 1e-9)
+    }
+
+    // MARK: - 複数行バルーン(M5.5.2: 「,」区切りで二段・三段)
+
+    /// 「,」区切りで行が分かれ、行間に区切り線(楕円の弦)が入る
+    func testBalloonMultiLine() {
+        let attrs = LeaderAttributes(balloon: true, arrow: true,
+                                     textHeight: 175, aspectPercent: 80)
+        let layout = LeaderGeometry.layout(tip: Vec2(0, 0), elbow: Vec2(1000, 1000),
+                                           content: "排水管,125φ,GL-250", attrs: attrs)
+        XCTAssertEqual(layout.texts.count, 3)
+        XCTAssertEqual(layout.texts[0].content, "排水管")
+        XCTAssertEqual(layout.texts[1].content, "125φ")
+        XCTAssertEqual(layout.texts[2].content, "GL-250")
+        XCTAssertEqual(layout.dividers.count, 2)
+        // 行は上から下へ並ぶ
+        XCTAssertGreaterThan(layout.texts[0].position.y, layout.texts[1].position.y)
+        XCTAssertGreaterThan(layout.texts[1].position.y, layout.texts[2].position.y)
+        // 各行は水平中央
+        let e = layout.ellipses[0]
+        for t in layout.texts {
+            let w = LeaderGeometry.textWidth(t.content, height: 175)
+            XCTAssertEqual(t.position.x + w / 2, 1000, accuracy: 1e-9)
+        }
+        // 区切り線の端点は内側の楕円周上
+        for d in layout.dividers {
+            for p in [d.0, d.1] {
+                let q = ((p.x - 1000) / e.rx) * ((p.x - 1000) / e.rx)
+                      + ((p.y - 1000) / e.ry) * ((p.y - 1000) / e.ry)
+                XCTAssertEqual(q, 1.0, accuracy: 1e-6)
+            }
+        }
+        // 自動サイズは3行ぶんの高さを包む(1行より大きい)
+        let single = LeaderGeometry.balloonRadii(content: "排水管", attrs: attrs)
+        XCTAssertGreaterThan(e.ry, single.ry)
+        // 全行の文字ボックスが楕円の内側
+        for t in layout.texts {
+            let w = LeaderGeometry.textWidth(t.content, height: 175)
+            for corner in [Vec2(t.position.x, t.position.y),
+                           Vec2(t.position.x + w, t.position.y + 175)] {
+                let q = ((corner.x - 1000) / e.rx) * ((corner.x - 1000) / e.rx)
+                      + ((corner.y - 1000) / e.ry) * ((corner.y - 1000) / e.ry)
+                XCTAssertLessThanOrEqual(q, 1.0 + 1e-9)
+            }
+        }
+    }
+
+    /// 区切りの解釈: 全角カンマも可・空要素は捨てる・区切りなしは1行
+    func testSplitLines() {
+        XCTAssertEqual(LeaderGeometry.splitLines("A,B"), ["A", "B"])
+        XCTAssertEqual(LeaderGeometry.splitLines("A，B，C"), ["A", "B", "C"])
+        XCTAssertEqual(LeaderGeometry.splitLines("A,,B"), ["A", "B"])
+        XCTAssertEqual(LeaderGeometry.splitLines("PAC-1"), ["PAC-1"])
+        XCTAssertEqual(LeaderGeometry.splitLines(" A , B "), ["A", "B"])
     }
 
     // MARK: - エンティティ(ヒット・変換)

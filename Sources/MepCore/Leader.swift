@@ -51,9 +51,10 @@ public struct LeaderLayout: Sendable {
     public var arrowStrokes: [(Vec2, Vec2)]
     /// バルーンの楕円(中心, 横半径, 縦半径)。二重枠なら2個
     public var ellipses: [(center: Vec2, rx: Double, ry: Double)]
-    /// 文字(基準点=左下・水平。既存の文字描画と同じ流儀)
-    public var textPosition: Vec2
-    public var textContent: String
+    /// バルーン内の行区切り線(水平弦。複数行のとき。M5.5.2)
+    public var dividers: [(Vec2, Vec2)]
+    /// 文字(行ごと。基準点=左下・水平。既存の文字描画と同じ流儀)
+    public var texts: [(position: Vec2, content: String)]
     public var textHeight: Double
 }
 
@@ -69,9 +70,27 @@ public enum LeaderGeometry {
         return max(height * 0.6, w)
     }
 
+    /// バルーンの行分割: 「,」「，」区切りで二段・三段に分かれる(FILDER方式。M5.5.2)。
+    /// 区切りが無ければ1行。空要素は捨てる
+    public static func splitLines(_ content: String) -> [String] {
+        let parts = content
+            .split(whereSeparator: { $0 == "," || $0 == "，" || $0 == "\n" })
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? [content] : parts
+    }
+
+    /// 行送りピッチ(実寸mm)
+    public static func rowPitch(_ textHeight: Double) -> Double { textHeight * 1.5 }
+
+    /// 複数行の文字ブロック高さ(1行なら文字高さそのまま=従来と同じサイズ感)
+    static func blockHeight(lineCount: Int, textHeight: Double) -> Double {
+        lineCount <= 1 ? textHeight : Double(lineCount) * rowPitch(textHeight)
+    }
+
     /// バルーン楕円の半径。
     /// 横サイズ指定あり: 指定直径をそのまま使う(FILDER方式。図面内で大きさが揃う)
-    /// 自動: 縦横比aspect(=ry/rx)を保ったまま文字(幅w×高さh)を包む最小楕円
+    /// 自動: 縦横比aspect(=ry/rx)を保ったまま文字ブロック(最長行幅×行数ぶんの高さ)を包む最小楕円
     public static func balloonRadii(content: String, attrs: LeaderAttributes)
         -> (rx: Double, ry: Double) {
         let aspect = max(attrs.aspectPercent, 10) / 100
@@ -80,9 +99,11 @@ public enum LeaderGeometry {
             return (rx, rx * aspect)
         }
         let h = attrs.textHeight
-        let w = textWidth(content, height: h)
-        // 内接条件: (w/2)²/rx² + (h/2)²/(rx·aspect)² = 1 → rx² = (w/2)² + (h/(2·aspect))²
-        let half = ((w / 2) * (w / 2) + (h / (2 * aspect)) * (h / (2 * aspect))).squareRoot()
+        let lines = splitLines(content)
+        let w = lines.map { textWidth($0, height: h) }.max() ?? h
+        let blockH = blockHeight(lineCount: lines.count, textHeight: h)
+        // 内接条件: (w/2)²/rx² + (H/2)²/(rx·aspect)² = 1 → rx² = (w/2)² + (H/(2·aspect))²
+        let half = ((w / 2) * (w / 2) + (blockH / (2 * aspect)) * (blockH / (2 * aspect))).squareRoot()
         let rx = max(half * 1.1, h * 1.1)   // 余裕10%・最小サイズ確保
         return (rx, rx * aspect)
     }
@@ -95,9 +116,9 @@ public enum LeaderGeometry {
         var segments: [(Vec2, Vec2)] = []
         var arrows: [(Vec2, Vec2)] = []
         var ellipses: [(center: Vec2, rx: Double, ry: Double)] = []
+        var dividers: [(Vec2, Vec2)] = []
+        var texts: [(position: Vec2, content: String)] = []
         let h = attrs.textHeight
-        let w = textWidth(content, height: h)
-        let textPos: Vec2
         /// 矢印の向きの基準点(引出線の折れ点側)
         var arrowRef = elbow
 
@@ -120,17 +141,41 @@ public enum LeaderGeometry {
                 segments.append((tip, edge))
                 arrowRef = edge
             }
-            // 文字はバルーン中央(左下基準へ換算)
-            textPos = Vec2(elbow.x - w / 2, elbow.y - h / 2)
+            // 文字: 「,」区切りで二段・三段(行の間に区切り線=楕円の水平弦)
+            let lines = splitLines(content)
+            if lines.count == 1 {
+                let w = textWidth(lines[0], height: h)
+                texts.append((Vec2(elbow.x - w / 2, elbow.y - h / 2), lines[0]))
+            } else {
+                let pitch = Self.rowPitch(h)
+                let blockH = Self.blockHeight(lineCount: lines.count, textHeight: h)
+                for (i, line) in lines.enumerated() {
+                    // 上からi行目のバンド(bandTop〜bandTop-pitch)。文字はバンド内で上下中央
+                    let bandTop = elbow.y + blockH / 2 - Double(i) * pitch
+                    let w = textWidth(line, height: h)
+                    texts.append((Vec2(elbow.x - w / 2, bandTop - pitch + (pitch - h) / 2), line))
+                    if i > 0 {
+                        // 上の行との区切り線(内側の楕円の弦)
+                        let dyc = bandTop - elbow.y
+                        let ratio = dyc / ry
+                        if abs(ratio) < 1 {
+                            let half = rx * (1 - ratio * ratio).squareRoot()
+                            dividers.append((Vec2(elbow.x - half, bandTop),
+                                             Vec2(elbow.x + half, bandTop)))
+                        }
+                    }
+                }
+            }
         } else {
             // 引出線文字: 指示点→折れ点+文字下の水平線。文字は指示点と反対側へ書く
+            let w = textWidth(content, height: h)
             let dir: Double = elbow.x >= tip.x ? 1 : -1
             let tailEnd = Vec2(elbow.x + dir * w, elbow.y)
             segments.append((tip, elbow))
             if w > 1e-9 {
                 segments.append((elbow, tailEnd))
             }
-            textPos = Vec2(min(elbow.x, tailEnd.x), elbow.y + h * 0.15)
+            texts.append((Vec2(min(elbow.x, tailEnd.x), elbow.y + h * 0.15), content))
         }
 
         if attrs.arrow {
@@ -151,7 +196,7 @@ public enum LeaderGeometry {
         }
 
         return LeaderLayout(segments: segments, arrowStrokes: arrows, ellipses: ellipses,
-                            textPosition: textPos, textContent: content, textHeight: h)
+                            dividers: dividers, texts: texts, textHeight: h)
     }
 
     /// エンティティから直接レイアウトを得るヘルパ

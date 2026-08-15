@@ -160,7 +160,7 @@ extension Entity {
                                 .distance(to: p))
             return best
 
-        case .leader(_, _, let content, let attrs):
+        case .leader(_, _, _, let attrs):
             guard let layout = LeaderGeometry.layout(of: self) else { return .infinity }
             // バルーンの中=ヒット(塊で掴む)
             if let e = layout.ellipses.first {
@@ -180,12 +180,14 @@ extension Entity {
                         p, pts[i], pts[(i + 1) % pts.count]).distance(to: p))
                 }
             }
-            // 文字ボックス(水平)
-            let w = LeaderGeometry.textWidth(content, height: attrs.textHeight)
-            let dx = max(layout.textPosition.x - p.x, 0, p.x - (layout.textPosition.x + w))
-            let dy = max(layout.textPosition.y - p.y, 0,
-                         p.y - (layout.textPosition.y + attrs.textHeight))
-            best = min(best, (dx * dx + dy * dy).squareRoot())
+            // 文字ボックス(水平・行ごと)
+            for t in layout.texts {
+                let w = LeaderGeometry.textWidth(t.content, height: attrs.textHeight)
+                let dx = max(t.position.x - p.x, 0, p.x - (t.position.x + w))
+                let dy = max(t.position.y - p.y, 0,
+                             p.y - (t.position.y + attrs.textHeight))
+                best = min(best, (dx * dx + dy * dy).squareRoot())
+            }
             return best
         }
     }
@@ -282,7 +284,7 @@ extension Entity {
             return HitGeometry.segmentIntersectsRect(layout.textPosition,
                                                      layout.textPosition + ut * w, rect)
 
-        case .leader(_, _, let content, let attrs):
+        case .leader(_, _, _, let attrs):
             guard let layout = LeaderGeometry.layout(of: self) else { return false }
             for seg in layout.segments {
                 if HitGeometry.segmentIntersectsRect(seg.0, seg.1, rect) { return true }
@@ -296,11 +298,14 @@ extension Entity {
                     }
                 }
             }
-            // 文字ボックス(水平)との重なり
-            let w = LeaderGeometry.textWidth(content, height: attrs.textHeight)
-            let tp = layout.textPosition
-            if !(tp.x + w < rect.minX || tp.x > rect.maxX ||
-                 tp.y + attrs.textHeight < rect.minY || tp.y > rect.maxY) { return true }
+            // 文字ボックス(水平・行ごと)との重なり
+            for t in layout.texts {
+                let w = LeaderGeometry.textWidth(t.content, height: attrs.textHeight)
+                if !(t.position.x + w < rect.minX || t.position.x > rect.maxX ||
+                     t.position.y + attrs.textHeight < rect.minY || t.position.y > rect.maxY) {
+                    return true
+                }
+            }
             // 矩形がバルーンの中に完全に入っているケース
             if let e = layout.ellipses.first {
                 let nx = (rect.minX - e.center.x) / e.rx

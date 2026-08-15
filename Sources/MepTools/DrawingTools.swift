@@ -642,7 +642,7 @@ public final class DrawingToolController {
             if leaderTip == nil {
                 return "引出線: 指示点(矢印の先端)をクリック — タイプ・矢印は左上のカード"
             }
-            return "引出線: 文字位置をクリック → その場で文字を入力(⏎確定 / esc中止)"
+            return "引出線: 文字位置をクリック → その場で文字を入力(バルーンは , 区切りで二段・三段 / ⏎確定 / esc中止)"
         }
     }
 }

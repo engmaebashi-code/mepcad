@@ -764,7 +764,7 @@ struct LeaderPropertyCard: View {
             }
 
             Text(uiState.leaderBalloon
-                 ? "横サイズ自動=文字数に合わせて伸縮 / 指定=図面内で大きさが揃う。ダブルクリックで再編集"
+                 ? "「,」区切りで二段・三段に分かれます(例: 排水管,125φ,GL-250)。ダブルクリックで再編集"
                  : "文字は指示点と反対側へ水平に書きます。既存の傍記はダブルクリックで再編集")
                 .font(.system(size: 9.5))
                 .foregroundStyle(.tertiary)

@@ -1611,7 +1611,8 @@ extension CanvasController {
     func beginLeaderEdit(_ entity: Entity) {
         guard case .leader(let tip, let elbow, let content, let attrs) = entity.kind else { return }
         guard let layout = LeaderGeometry.layout(of: entity) else { return }
-        var screen = transform.toScreen(layout.textPosition)
+        // 入力欄は先頭行の位置に出す(内容は「,」区切りのまま編集)
+        var screen = transform.toScreen(layout.texts.first?.position ?? elbow)
         if let size = viewSizeProvider?(), size.width > 320 {
             screen = Vec2(min(max(screen.x, 10), Double(size.width) - 300),
                           min(max(screen.y, 40), Double(size.height) - 20))

@@ -125,10 +125,11 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
                 box.union(point: Vec2(e.center.x - e.rx, e.center.y - e.ry))
                 box.union(point: Vec2(e.center.x + e.rx, e.center.y + e.ry))
             }
-            let w = LeaderGeometry.textWidth(content, height: attrs.textHeight)
-            box.union(point: layout.textPosition)
-            box.union(point: Vec2(layout.textPosition.x + w,
-                                  layout.textPosition.y + attrs.textHeight))
+            for t in layout.texts {
+                let w = LeaderGeometry.textWidth(t.content, height: attrs.textHeight)
+                box.union(point: t.position)
+                box.union(point: Vec2(t.position.x + w, t.position.y + attrs.textHeight))
+            }
         }
         return box
     }
