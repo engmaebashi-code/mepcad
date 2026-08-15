@@ -491,6 +491,7 @@ extension Entity {
                                    angle: angle, attrs: attrs)
         case .leader(let tip, let elbow, let content, var attrs):
             attrs.textHeight *= abs(f)
+            if let bw = attrs.balloonWidth { attrs.balloonWidth = bw * abs(f) }
             copy.kind = .leader(tip: sc(tip), elbow: sc(elbow),
                                 content: content, attrs: attrs)
         }

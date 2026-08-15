@@ -90,6 +90,27 @@ final class LeaderTests: XCTestCase {
         XCTAssertTrue(layout.segments.isEmpty)
     }
 
+    /// 横サイズ指定: 指定直径がそのまま使われる(文字数に依存しない)
+    func testBalloonFixedWidth() {
+        let attrs = LeaderAttributes(balloon: true, arrow: true, textHeight: 175,
+                                     aspectPercent: 80, balloonWidth: 700)
+        let layout = LeaderGeometry.layout(tip: Vec2(0, 0), elbow: Vec2(1000, 1000),
+                                           content: "PAC-1", attrs: attrs)
+        XCTAssertEqual(layout.ellipses[0].rx, 350, accuracy: 1e-9)
+        XCTAssertEqual(layout.ellipses[0].ry, 280, accuracy: 1e-9)
+        // 文字数を変えてもサイズは同じ
+        let layout2 = LeaderGeometry.layout(tip: Vec2(0, 0), elbow: Vec2(1000, 1000),
+                                            content: "P", attrs: attrs)
+        XCTAssertEqual(layout2.ellipses[0].rx, 350, accuracy: 1e-9)
+    }
+
+    /// 文字幅の見積り: 半角0.62・全角0.95(機器番号の半角列が過大にならない)
+    func testTextWidthHalfAndFullWidth() {
+        XCTAssertEqual(LeaderGeometry.textWidth("AB", height: 100), 124, accuracy: 1e-9)
+        XCTAssertEqual(LeaderGeometry.textWidth("あい", height: 100), 190, accuracy: 1e-9)
+        XCTAssertEqual(LeaderGeometry.textWidth("A明", height: 100), 157, accuracy: 1e-9)
+    }
+
     // MARK: - エンティティ(ヒット・変換)
 
     private func makeBalloon() -> Entity {

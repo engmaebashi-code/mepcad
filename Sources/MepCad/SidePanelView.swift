@@ -462,6 +462,13 @@ struct PropertyPanelView: View {
                                 Divider()
                                 Button("一重枠") { controller.applyLeaderFrame(double: false) }
                                 Button("二重枠") { controller.applyLeaderFrame(double: true) }
+                                Divider()
+                                Button("横サイズ 自動") { controller.applyLeaderBalloonWidth(paperMm: nil) }
+                                ForEach([8.0, 10.0, 12.0, 15.0], id: \.self) { mm in
+                                    Button("横サイズ \(Int(mm))mm(紙面)") {
+                                        controller.applyLeaderBalloonWidth(paperMm: mm)
+                                    }
+                                }
                             } label: {
                                 Text("形状").font(.system(size: 11))
                             }

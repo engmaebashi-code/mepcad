@@ -1591,6 +1591,13 @@ extension CanvasController {
         }
     }
 
+    /// バルーン横サイズの一括変更(紙面mm・直径。nil=文字に合わせて自動)
+    func applyLeaderBalloonWidth(paperMm: Double?) {
+        updateSelectedLeaders(name: "バルーンの横サイズを変更") { attrs, scale in
+            attrs.balloonWidth = paperMm.map { max($0, 1) * scale }
+        }
+    }
+
     /// 選択中の引出線(1つ)の文字をインライン再編集
     func editSelectedLeader() {
         guard let e = selectedEntities.first(where: {

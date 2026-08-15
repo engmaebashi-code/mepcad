@@ -19,17 +19,21 @@ public struct LeaderAttributes: Equatable, Codable, Sendable {
     public var textHeight: Double
     /// バルーンの縦横比(%)。80なら楕円(縦=横×0.8)
     public var aspectPercent: Double
+    /// バルーンの横サイズ(実寸mm・直径)。nil=文字に合わせて自動(M5.5.1)
+    public var balloonWidth: Double?
 
     public init(balloon: Bool = false,
                 doubleFrame: Bool = false,
                 arrow: Bool = true,
                 textHeight: Double = 175,
-                aspectPercent: Double = 80) {
+                aspectPercent: Double = 80,
+                balloonWidth: Double? = nil) {
         self.balloon = balloon
         self.doubleFrame = doubleFrame
         self.arrow = arrow
         self.textHeight = textHeight
         self.aspectPercent = aspectPercent
+        self.balloonWidth = balloonWidth
     }
 
     // 派生寸法(文字高さ比例)
@@ -55,18 +59,28 @@ public struct LeaderLayout: Sendable {
 
 public enum LeaderGeometry {
 
-    /// 文字の概算幅(実寸mm。既存の文字ヒットテストと同じ係数)
+    /// 文字の概算幅(実寸mm)。半角(英数)0.62・全角0.95の文字別見積り
+    /// (機器番号のような半角列で幅が過大にならないように。M5.5.1)
     public static func textWidth(_ content: String, height: Double) -> Double {
-        max(height * 0.6, Double(content.count) * height * 0.9)
+        var w = 0.0
+        for ch in content {
+            w += ch.isASCII ? height * 0.62 : height * 0.95
+        }
+        return max(height * 0.6, w)
     }
 
-    /// バルーン楕円の半径(文字ボックスが内接する楕円+余裕)。
-    /// 縦横比aspect(=ry/rx)を保ったまま、文字(幅w×高さh)を包む最小楕円を求める
+    /// バルーン楕円の半径。
+    /// 横サイズ指定あり: 指定直径をそのまま使う(FILDER方式。図面内で大きさが揃う)
+    /// 自動: 縦横比aspect(=ry/rx)を保ったまま文字(幅w×高さh)を包む最小楕円
     public static func balloonRadii(content: String, attrs: LeaderAttributes)
         -> (rx: Double, ry: Double) {
+        let aspect = max(attrs.aspectPercent, 10) / 100
+        if let width = attrs.balloonWidth, width > 0 {
+            let rx = width / 2
+            return (rx, rx * aspect)
+        }
         let h = attrs.textHeight
         let w = textWidth(content, height: h)
-        let aspect = max(attrs.aspectPercent, 10) / 100
         // 内接条件: (w/2)²/rx² + (h/2)²/(rx·aspect)² = 1 → rx² = (w/2)² + (h/(2·aspect))²
         let half = ((w / 2) * (w / 2) + (h / (2 * aspect)) * (h / (2 * aspect))).squareRoot()
         let rx = max(half * 1.1, h * 1.1)   // 余裕10%・最小サイズ確保

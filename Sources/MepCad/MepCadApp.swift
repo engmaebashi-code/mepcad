@@ -73,6 +73,8 @@ final class CanvasUIState: ObservableObject {
     @Published var leaderDoubleFrame = false
     @Published var leaderTextSize: Double = 3.5 // 紙面mm
     @Published var leaderAspect: Double = 80    // バルーン縦横比(%)
+    /// バルーン横サイズ(紙面mm)。-1=文字に合わせて自動
+    @Published var leaderWidth: Double = -1
     @Published var leaderColorIndex: Int? = nil
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
@@ -523,7 +525,9 @@ struct ContentView: View {
                                             doubleFrame: uiState.leaderDoubleFrame,
                                             arrow: uiState.leaderArrow,
                                             textHeight: max(uiState.leaderTextSize, 0.5) * scale,
-                                            aspectPercent: min(max(uiState.leaderAspect, 30), 150)),
+                                            aspectPercent: min(max(uiState.leaderAspect, 30), 150),
+                                            balloonWidth: uiState.leaderWidth > 0
+                                                ? uiState.leaderWidth * scale : nil),
                     colorIndex: uiState.leaderColorIndex)
             }
             controller.onEditOpChanged = { kind in
@@ -670,6 +674,27 @@ struct LeaderPropertyCard: View {
                         .toggleStyle(.checkbox)
                         .font(.system(size: 11))
                         .help("バルーンの枠を二重にする")
+                    Text("横サイズ")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Menu {
+                        Button((uiState.leaderWidth < 0 ? "✓ " : "   ") + "自動(文字に合わせる)") {
+                            uiState.leaderWidth = -1
+                        }
+                        Divider()
+                        ForEach([6.0, 8.0, 10.0, 12.0, 15.0, 20.0], id: \.self) { mm in
+                            Button((uiState.leaderWidth == mm ? "✓ " : "   ") + "\(Int(mm)) mm(紙面)") {
+                                uiState.leaderWidth = mm
+                            }
+                        }
+                    } label: {
+                        Text(uiState.leaderWidth < 0 ? "自動"
+                             : String(format: "%.0fmm", uiState.leaderWidth))
+                            .font(.system(size: 11))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("バルーンの横サイズ(直径・紙面mm)。自動=文字数に合わせる")
                     Text("縦横比")
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
@@ -739,7 +764,7 @@ struct LeaderPropertyCard: View {
             }
 
             Text(uiState.leaderBalloon
-                 ? "枠は文字数に合わせて自動サイズ。既存バルーンはダブルクリックで再編集"
+                 ? "横サイズ自動=文字数に合わせて伸縮 / 指定=図面内で大きさが揃う。ダブルクリックで再編集"
                  : "文字は指示点と反対側へ水平に書きます。既存の傍記はダブルクリックで再編集")
                 .font(.system(size: 9.5))
                 .foregroundStyle(.tertiary)
