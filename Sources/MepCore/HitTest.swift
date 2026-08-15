@@ -197,6 +197,10 @@ extension Entity {
                 best = min(best, HitGeometry.closestPointOnSegment(p, points[i], points[i + 1])
                                     .distance(to: p))
             }
+            // 複線: 管の太さの中はヒット(塊で掴む)、外なら外形線までの距離
+            if attrs.doubleLine {
+                best = max(best - attrs.outerDiameter / 2, 0)
+            }
             // 傍記もヒット対象(ベースライン線分で近似)
             if let note = PipeGeometry.annotation(points: points, attrs: attrs) {
                 let w = PipeGeometry.textWidth(note.content, height: attrs.textHeight)

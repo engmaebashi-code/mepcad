@@ -1485,6 +1485,54 @@ extension CanvasController {
         }
     }
 
+    /// 単線/複線の一括変更(M6.1)
+    func applyPipeDoubleLine(_ on: Bool) {
+        updateSelectedPipes(name: on ? "配管を複線表示に変更" : "配管を単線表示に変更") { attrs, _, _ in
+            attrs.doubleLine = on
+        }
+    }
+
+    /// 継手自動発生の一括変更
+    func applyPipeAutoFittings(_ on: Bool) {
+        updateSelectedPipes(name: on ? "継手を自動発生" : "継手を非表示") { attrs, _, _ in
+            attrs.autoFittings = on
+        }
+    }
+
+    /// 高さの一括変更(mm)。傍記併記も同時に指定
+    func applyPipeLevel(_ level: Double, show: Bool) {
+        updateSelectedPipes(name: String(format: "配管の高さをFL%+.0fに変更", level)) { attrs, _, _ in
+            attrs.level = level
+            attrs.showLevel = show
+        }
+    }
+
+    /// 高さの入力パネル(選択中の配管に適用)
+    func promptPipeLevel() {
+        let current = selectedEntities.compactMap { e -> Double? in
+            if case .pipe(_, let a) = e.kind { return a.level }
+            return nil
+        }.first ?? 0
+        let alert = NSAlert()
+        alert.messageText = "配管の高さ"
+        alert.informativeText = "芯の高さをmmで入力(床基準 FL+)。傍記に併記するかも選べます"
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+        field.stringValue = String(format: "%.0f", current)
+        let check = NSButton(checkboxWithTitle: "傍記に併記(例: 50 FL+2500)", target: nil, action: nil)
+        check.state = .on
+        let stack = NSStackView(views: [field, check])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.frame = NSRect(x: 0, y: 0, width: 260, height: 54)
+        alert.accessoryView = stack
+        alert.addButton(withTitle: "適用")
+        alert.addButton(withTitle: "キャンセル")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let level = Double(field.stringValue.trimmingCharacters(in: .whitespaces)) else { return }
+        applyPipeLevel(level, show: check.state == .on)
+    }
+
     /// 材料集計(選択があれば選択分・なければ図面全体)をパネルで表示
     func showMaterialReport() {
         let hasSelectedPipes = selectedEntities.contains {

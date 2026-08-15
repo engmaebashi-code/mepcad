@@ -83,6 +83,11 @@ final class CanvasUIState: ObservableObject {
     @Published var pipeSize = "20"
     @Published var pipeAnnotate = true
     @Published var pipeTextSize: Double = 2.5   // 紙面mm
+    // M6.1: 高さ・複線・継手
+    @Published var pipeLevel: Double = 0        // mm(FL+)
+    @Published var pipeShowLevel = false
+    @Published var pipeDoubleLine = false
+    @Published var pipeAutoFittings = true
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -576,7 +581,11 @@ struct ContentView: View {
                                           size: size.size, sizeLabel: size.label,
                                           outerDiameter: size.outerDiameter,
                                           annotate: uiState.pipeAnnotate,
-                                          textHeight: max(uiState.pipeTextSize, 0.5) * scale),
+                                          textHeight: max(uiState.pipeTextSize, 0.5) * scale,
+                                          level: uiState.pipeLevel,
+                                          showLevel: uiState.pipeShowLevel,
+                                          doubleLine: uiState.pipeDoubleLine,
+                                          autoFittings: uiState.pipeAutoFittings),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType))
             }
             controller.onEditOpChanged = { kind in
@@ -773,13 +782,45 @@ struct PipePropertyCard: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
 
+            }
+
+            HStack(spacing: 6) {
+                Text("高さ FL+")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                TextField("", value: $uiState.pipeLevel, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 58)
+                    .help("芯の高さ(mm・床基準)。傍記に併記できます")
+                Text("mm")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Toggle("傍記に併記", isOn: $uiState.pipeShowLevel)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+
+                Picker("", selection: $uiState.pipeDoubleLine) {
+                    Text("単線").tag(false)
+                    Text("複線").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 100)
+                .help("複線=外径2本+芯線(一点鎖線)。折れ点にエルボを自動発生")
+
+                Toggle("継手", isOn: $uiState.pipeAutoFittings)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                    .disabled(!uiState.pipeDoubleLine)
+                    .help("折れ点にエルボ(90°/45°)を自動発生。集計にも個数が出ます")
+
                 Toggle("口径傍記", isOn: $uiState.pipeAnnotate)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 11))
                     .help("最長区間の中央に口径を自動記入します")
             }
 
-            Text("集計は歯車メニューの「材料集計」から(用途×管種×口径で延長を拾えます)")
+            Text("集計は歯車メニューの「材料集計」から(用途×管種×口径で延長・エルボ個数を拾えます)")
                 .font(.system(size: 9.5))
                 .foregroundStyle(.tertiary)
         }

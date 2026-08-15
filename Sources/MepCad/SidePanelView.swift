@@ -520,6 +520,18 @@ struct PropertyPanelView: View {
                                 Text("用途").font(.system(size: 11))
                             }
                             .fixedSize()
+                            Menu {
+                                Button("単線") { controller.applyPipeDoubleLine(false) }
+                                Button("複線") { controller.applyPipeDoubleLine(true) }
+                                Divider()
+                                Button("継手を自動発生") { controller.applyPipeAutoFittings(true) }
+                                Button("継手を非表示") { controller.applyPipeAutoFittings(false) }
+                                Divider()
+                                Button("高さ…") { controller.promptPipeLevel() }
+                            } label: {
+                                Text("表現").font(.system(size: 11))
+                            }
+                            .fixedSize()
                         }
                     }
                 }

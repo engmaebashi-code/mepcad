@@ -296,14 +296,49 @@ public struct Renderer {
 
         case .pipe(let points, let attrs):
             guard points.count >= 2 else { break }
-            // 折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)
-            let first = transform.toScreen(points[0])
-            ctx.move(to: CGPoint(x: first.x, y: first.y))
-            for p in points.dropFirst() {
-                let sp = transform.toScreen(p)
-                ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+            if attrs.doubleLine,
+               let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
+                // 複線: 外形線2本+端部(実線)、芯線(一点鎖線・細)、継手(実線)
+                func poly(_ pts: [Vec2], close: Bool = false) {
+                    guard let f = pts.first else { return }
+                    let sf = transform.toScreen(f)
+                    ctx.move(to: CGPoint(x: sf.x, y: sf.y))
+                    for p in pts.dropFirst() {
+                        let sp = transform.toScreen(p)
+                        ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                    }
+                    if close { ctx.closePath() }
+                }
+                ctx.setLineDash(phase: 0, lengths: [])
+                poly(layout.leftOutline)
+                poly(layout.rightOutline)
+                for cap in layout.endCaps {
+                    let sa = transform.toScreen(cap.0)
+                    let sb = transform.toScreen(cap.1)
+                    ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                    ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                }
+                ctx.strokePath()
+                // 継手はやや太く
+                ctx.setLineWidth(max(1, weight * transform.scale * 10) * 1.3)
+                for box in layout.fittingBoxes { poly(box, close: true) }
+                ctx.strokePath()
+                // 芯線: 一点鎖線(細)
+                ctx.setLineWidth(1)
+                ctx.setLineDash(phase: 0, lengths: LineTypeTable.dashPattern(4).map { CGFloat($0) })
+                poly(layout.centerline)
+                ctx.strokePath()
+                ctx.setLineDash(phase: 0, lengths: [])
+            } else {
+                // 単線: 折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)
+                let first = transform.toScreen(points[0])
+                ctx.move(to: CGPoint(x: first.x, y: first.y))
+                for p in points.dropFirst() {
+                    let sp = transform.toScreen(p)
+                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                }
+                ctx.strokePath()
             }
-            ctx.strokePath()
             // 口径傍記
             if let note = PipeGeometry.annotation(points: points, attrs: attrs) {
                 drawText(note.content, at: note.position,
@@ -419,14 +454,23 @@ public struct Renderer {
                     ctx.strokeEllipse(in: CGRect(x: sc.x - rx, y: sc.y - ry,
                                                  width: rx * 2, height: ry * 2))
                 }
-            case .pipe(let points, _):
-                // 輪郭=折れ線
+            case .pipe(let points, let attrs):
+                // 輪郭=折れ線(複線なら外形線)
                 guard points.count >= 2 else { break }
-                let first = transform.toScreen(points[0])
-                ctx.move(to: CGPoint(x: first.x, y: first.y))
-                for p in points.dropFirst() {
-                    let sp = transform.toScreen(p)
-                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                let outlines: [[Vec2]]
+                if attrs.doubleLine,
+                   let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
+                    outlines = [layout.leftOutline, layout.rightOutline]
+                } else {
+                    outlines = [points]
+                }
+                for pts in outlines {
+                    let first = transform.toScreen(pts[0])
+                    ctx.move(to: CGPoint(x: first.x, y: first.y))
+                    for p in pts.dropFirst() {
+                        let sp = transform.toScreen(p)
+                        ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                    }
                 }
                 ctx.strokePath()
             }

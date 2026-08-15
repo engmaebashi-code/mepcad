@@ -81,7 +81,18 @@ final class PipeMasterTests: XCTestCase {
     func testReportText() {
         let text = PipeAggregator.reportText(
             PipeAggregator.aggregate([pipe([Vec2(0, 0), Vec2(2000, 0)])]))
-        XCTAssertTrue(text.contains("用途\t管種\t呼び径\t延長(m)\t本数"))
-        XCTAssertTrue(text.contains("給水\tHIVP\t20\t2.0\t1"))
+        XCTAssertTrue(text.contains("用途\t管種\t呼び径\t延長(m)\t本数\tエルボ90°\tエルボ45°"))
+        XCTAssertTrue(text.contains("給水\tHIVP\t20\t2.0\t1\t0\t0"))
+    }
+
+    /// エルボの個数も集計される(M6.1)
+    func testAggregateCountsElbows() {
+        let totals = PipeAggregator.aggregate([
+            pipe([Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000), Vec2(2000, 2000)]),  // 90°+45°
+            pipe([Vec2(0, 0), Vec2(500, 0), Vec2(500, 500)]),                       // 90°
+        ])
+        XCTAssertEqual(totals.count, 1)
+        XCTAssertEqual(totals[0].elbow90Count, 2)
+        XCTAssertEqual(totals[0].elbow45Count, 1)
     }
 }

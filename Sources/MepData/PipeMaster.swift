@@ -128,13 +128,17 @@ public final class PipeMaster {
 
 // MARK: - 材料集計
 
-/// 集計行: 用途×管種×呼び径ごとの延長
+/// 集計行: 用途×管種×呼び径ごとの延長+継手個数
 public struct PipeTotal: Equatable, Sendable {
     public let usageName: String
     public let materialLabel: String
     public let sizeLabel: String
     public let totalLengthMm: Double
     public let runCount: Int
+    /// エルボ90°の個数(折れ点の自動発生分。M6.1)
+    public let elbow90Count: Int
+    /// エルボ45°の個数
+    public let elbow45Count: Int
 
     /// 表示用: mに換算し0.1m単位へ切り上げ(拾いの慣例)
     public var lengthMeters: Double {
@@ -152,22 +156,30 @@ public enum PipeAggregator {
             let material: String
             let size: String
         }
-        var lengths: [Key: (length: Double, count: Int)] = [:]
+        var lengths: [Key: (length: Double, count: Int, e90: Int, e45: Int)] = [:]
         for e in entities {
             guard case .pipe(let points, let attrs) = e.kind, points.count >= 2 else { continue }
-            var len = 0.0
-            for i in 0..<(points.count - 1) {
-                len += points[i].distance(to: points[i + 1])
+            let len = PipeGeometry.length(of: points)
+            var e90 = 0, e45 = 0
+            if attrs.autoFittings {
+                for f in PipeGeometry.fittings(points: points) {
+                    switch f.kind {
+                    case .elbow90: e90 += 1
+                    case .elbow45: e45 += 1
+                    case .elbowOther: break
+                    }
+                }
             }
             let key = Key(usage: attrs.usageName, material: attrs.materialLabel,
                           size: attrs.sizeLabel)
-            let cur = lengths[key] ?? (0, 0)
-            lengths[key] = (cur.length + len, cur.count + 1)
+            let cur = lengths[key] ?? (0, 0, 0, 0)
+            lengths[key] = (cur.length + len, cur.count + 1, cur.e90 + e90, cur.e45 + e45)
         }
         return lengths.map { key, value in
             PipeTotal(usageName: key.usage, materialLabel: key.material,
                       sizeLabel: key.size, totalLengthMm: value.length,
-                      runCount: value.count)
+                      runCount: value.count,
+                      elbow90Count: value.e90, elbow45Count: value.e45)
         }
         .sorted {
             ($0.usageName, $0.materialLabel, $0.sizeLabel.count, $0.sizeLabel)
@@ -177,10 +189,11 @@ public enum PipeAggregator {
 
     /// 集計結果の表形式テキスト(コピー・保存用。タブ区切り)
     public static func reportText(_ totals: [PipeTotal]) -> String {
-        var lines = ["用途\t管種\t呼び径\t延長(m)\t本数"]
+        var lines = ["用途\t管種\t呼び径\t延長(m)\t本数\tエルボ90°\tエルボ45°"]
         for t in totals {
             lines.append("\(t.usageName)\t\(t.materialLabel)\t\(t.sizeLabel)\t"
-                         + String(format: "%.1f", t.lengthMeters) + "\t\(t.runCount)")
+                         + String(format: "%.1f", t.lengthMeters)
+                         + "\t\(t.runCount)\t\(t.elbow90Count)\t\(t.elbow45Count)")
         }
         return lines.joined(separator: "\n")
     }

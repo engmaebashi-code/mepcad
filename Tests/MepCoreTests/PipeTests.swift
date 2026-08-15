@@ -68,6 +68,80 @@ final class PipeTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(box.maxY, 2000)
     }
 
+    // MARK: - M6.1: 高さ・複線・継手
+
+    func testLevelLabelAndAnnotation() {
+        var attrs = PipeAttributes(sizeLabel: "50", textHeight: 125)
+        XCTAssertEqual(attrs.levelLabel, "FL±0")
+        attrs.level = 2500
+        XCTAssertEqual(attrs.levelLabel, "FL+2500")
+        attrs.level = -300
+        XCTAssertEqual(attrs.levelLabel, "FL-300")
+        XCTAssertEqual(PipeGeometry.annotationText(attrs), "50")
+        attrs.showLevel = true
+        XCTAssertEqual(PipeGeometry.annotationText(attrs), "50 FL-300")
+    }
+
+    /// 折れ点の継手判定: 90°/45°/直進なし
+    func testFittingsDetection() {
+        let pts = [Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000),   // 90°
+                   Vec2(2000, 2000),                             // 45°
+                   Vec2(3000, 3000)]                             // 直進(継手なし)
+        let f = PipeGeometry.fittings(points: pts)
+        XCTAssertEqual(f.count, 2)
+        XCTAssertEqual(f[0].kind, .elbow90)
+        XCTAssertEqual(f[0].position, Vec2(1000, 0))
+        XCTAssertEqual(f[1].kind, .elbow45)
+        XCTAssertEqual(f[1].position, Vec2(1000, 1000))
+        XCTAssertTrue(PipeGeometry.fittings(points: [Vec2(0, 0), Vec2(1000, 0)]).isEmpty)
+    }
+
+    /// 複線: 外形線は芯から±r、直角の折れ点はマイター(角の外側は(r,r)だけ張り出す)
+    func testDoubleLineMiter() {
+        let attrs = PipeAttributes(outerDiameter: 100, doubleLine: true, autoFittings: true)
+        let pts = [Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000)]
+        guard let layout = PipeGeometry.doubleLineLayout(points: pts, attrs: attrs) else {
+            return XCTFail()
+        }
+        XCTAssertEqual(layout.leftOutline.count, 3)
+        XCTAssertEqual(layout.rightOutline.count, 3)
+        // 始点: 左法線(0,1)×50
+        XCTAssertEqual(layout.leftOutline[0], Vec2(0, 50))
+        XCTAssertEqual(layout.rightOutline[0], Vec2(0, -50))
+        // 折れ点のマイター: 進行→+x→+y、左側は内側(950,50)、右側は外側(1050,-50)
+        XCTAssertEqual(layout.leftOutline[1].x, 950, accuracy: 1e-9)
+        XCTAssertEqual(layout.leftOutline[1].y, 50, accuracy: 1e-9)
+        XCTAssertEqual(layout.rightOutline[1].x, 1050, accuracy: 1e-9)
+        XCTAssertEqual(layout.rightOutline[1].y, -50, accuracy: 1e-9)
+        // 終点: 左法線(-1,0)×50
+        XCTAssertEqual(layout.leftOutline[2], Vec2(950, 1000))
+        XCTAssertEqual(layout.rightOutline[2], Vec2(1050, 1000))
+        // 端部閉じ線2本、エルボ1箇所=前後2枚の四角形
+        XCTAssertEqual(layout.endCaps.count, 2)
+        XCTAssertEqual(layout.fittingBoxes.count, 2)
+        XCTAssertTrue(layout.fittingBoxes.allSatisfy { $0.count == 4 })
+    }
+
+    /// 継手Offなら継手四角形は出ない
+    func testDoubleLineNoFittings() {
+        let attrs = PipeAttributes(outerDiameter: 100, doubleLine: true, autoFittings: false)
+        let layout = PipeGeometry.doubleLineLayout(
+            points: [Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000)], attrs: attrs)
+        XCTAssertTrue(layout?.fittingBoxes.isEmpty ?? false)
+    }
+
+    /// 複線の配管は管の太さの中ならどこでもヒット
+    func testDoubleLineHit() {
+        let e = Entity(layer: layer,
+                       kind: .pipe(points: [Vec2(0, 0), Vec2(1000, 0)],
+                                   attrs: PipeAttributes(outerDiameter: 100, annotate: false,
+                                                         doubleLine: true)))
+        XCTAssertEqual(e.hitDistance(to: Vec2(500, 40)), 0, accuracy: 1e-9)   // 太さの中
+        XCTAssertEqual(e.hitDistance(to: Vec2(500, 80)), 30, accuracy: 1e-9)  // 外形から30
+        // boundsも外形まで
+        XCTAssertGreaterThanOrEqual(e.bounds.maxY, 50 - 1e-9)
+    }
+
     /// 変換: 倍率は延長だけ変わり口径(外径・呼び径)は不変
     func testTransforms() {
         let e = makePipe([Vec2(0, 0), Vec2(1000, 0)])

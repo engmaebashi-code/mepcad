@@ -349,6 +349,22 @@ final class CrosshairOverlayView: NSView {
             let sc = controller.transform.toScreen(cursor)
             ctx.addLine(to: CGPoint(x: sc.x, y: sc.y))
             ctx.strokePath()
+            // 複線設定なら外形線もゴースト表示(太さの感覚が掴めるように)
+            let style = controller.toolPipeStyle()
+            if style.attrs.doubleLine,
+               let layout = PipeGeometry.doubleLineLayout(points: points + [cursor], attrs: style.attrs) {
+                ctx.setLineDash(phase: 0, lengths: [3, 3])
+                for pts in [layout.leftOutline, layout.rightOutline] {
+                    let f = controller.transform.toScreen(pts[0])
+                    ctx.move(to: CGPoint(x: f.x, y: f.y))
+                    for p in pts.dropFirst() {
+                        let sp = controller.transform.toScreen(p)
+                        ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                    }
+                }
+                ctx.strokePath()
+                ctx.setLineDash(phase: 0, lengths: [6, 4])
+            }
             // 現区間の長さ表示
             if let last = points.last {
                 let len = last.distance(to: cursor)

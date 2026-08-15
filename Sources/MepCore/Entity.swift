@@ -134,6 +134,10 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             }
         case .pipe(let points, let attrs):
             for p in points { box.union(point: p) }
+            if attrs.doubleLine, let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
+                for p in layout.leftOutline + layout.rightOutline { box.union(point: p) }
+                for b in layout.fittingBoxes { for p in b { box.union(point: p) } }
+            }
             if let note = PipeGeometry.annotation(points: points, attrs: attrs) {
                 let w = PipeGeometry.textWidth(note.content, height: attrs.textHeight)
                 let c = cos(note.angle)
