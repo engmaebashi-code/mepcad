@@ -336,6 +336,31 @@ final class CrosshairOverlayView: NSView {
                 ctx.strokeEllipse(in: CGRect(x: sc.x - rx, y: sc.y - ry,
                                              width: rx * 2, height: ry * 2))
             }
+
+        case .polyline(let points, let cursor):
+            // 配管ルート: 確定済み折れ線+カーソルへのラバーバンド(閉じない)
+            guard let firstPoint = points.first else { break }
+            let first = controller.transform.toScreen(firstPoint)
+            ctx.move(to: CGPoint(x: first.x, y: first.y))
+            for p in points.dropFirst() {
+                let sp = controller.transform.toScreen(p)
+                ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+            }
+            let sc = controller.transform.toScreen(cursor)
+            ctx.addLine(to: CGPoint(x: sc.x, y: sc.y))
+            ctx.strokePath()
+            // 現区間の長さ表示
+            if let last = points.last {
+                let len = last.distance(to: cursor)
+                drawOverlayLabel(String(format: "%.0f", len),
+                                 at: CGPoint(x: sc.x + 8, y: sc.y - 8), in: ctx)
+            }
+            // 頂点マーク
+            ctx.setLineDash(phase: 0, lengths: [])
+            for p in points {
+                let sp = controller.transform.toScreen(p)
+                ctx.stroke(CGRect(x: sp.x - 2.5, y: sp.y - 2.5, width: 5, height: 5))
+            }
         }
         ctx.setLineDash(phase: 0, lengths: [])
 

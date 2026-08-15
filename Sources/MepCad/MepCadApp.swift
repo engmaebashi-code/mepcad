@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import MepCore
+import MepData
 import MepRender
 import MepTools
 
@@ -76,6 +77,12 @@ final class CanvasUIState: ObservableObject {
     /// バルーン横サイズ(紙面mm)。-1=文字に合わせて自動
     @Published var leaderWidth: Double = -1
     @Published var leaderColorIndex: Int? = nil
+    // 配管設定(M6.0: 用途・管種・呼び径・傍記)
+    @Published var pipeUsage = "CW"
+    @Published var pipeMaterial = "HIVP"
+    @Published var pipeSize = "20"
+    @Published var pipeAnnotate = true
+    @Published var pipeTextSize: Double = 2.5   // 紙面mm
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -153,6 +160,7 @@ private func toolIcon(_ kind: ToolKind) -> String {
     case .hatch: return "line.3.horizontal"
     case .dimension: return "ruler"
     case .leader: return "text.bubble"
+    case .pipe: return "point.3.connected.trianglepath.dotted"
     }
 }
 
@@ -198,6 +206,20 @@ struct ContentView: View {
                     VStack {
                         HStack {
                             TextPropertyCard(controller: controller, uiState: uiState)
+                                .onHover { controller.uiHovering = $0 }
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // 配管プロパティカード(用途・管種・口径・傍記)
+                if uiState.tool == .pipe {
+                    VStack {
+                        HStack {
+                            PipePropertyCard(uiState: uiState)
                                 .onHover { controller.uiHovering = $0 }
                             Spacer()
                         }
@@ -420,6 +442,10 @@ struct ContentView: View {
 
                 // 設定(パネル固定・背景色・スナップ種別)
                 Menu {
+                    Button("材料集計…(配管の延長拾い)") {
+                        controller.showMaterialReport()
+                    }
+                    Divider()
                     Toggle("パネルを固定表示", isOn: $uiState.panelPinned)
                     Button(isDark ? "背景をライトに" : "背景をダークに") {
                         controller.toggleTheme()
@@ -529,6 +555,29 @@ struct ContentView: View {
                                             balloonWidth: uiState.leaderWidth > 0
                                                 ? uiState.leaderWidth * scale : nil),
                     colorIndex: uiState.leaderColorIndex)
+            }
+            controller.pipeStyleProvider = { [weak controller, weak uiState] in
+                guard let controller, let uiState else { return PipeToolStyle() }
+                let master = PipeMaster.standard
+                let scale = controller.document.currentScale
+                let usage = master.usage(uiState.pipeUsage)
+                    ?? PipeUsage(id: "CW", name: "給水", colorIndex: 2, lineType: 0,
+                                 defaultMaterial: "HIVP")
+                let material = master.material(uiState.pipeMaterial)
+                    ?? PipeMaterial(id: uiState.pipeMaterial, name: uiState.pipeMaterial,
+                                    shortLabel: uiState.pipeMaterial)
+                let size = master.size(material: material.id, size: uiState.pipeSize)
+                    ?? master.sizes(for: material.id).first
+                    ?? PipeSize(material: material.id, size: "20", label: "20", outerDiameter: 26)
+                return PipeToolStyle(
+                    attrs: PipeAttributes(usage: usage.id, usageName: usage.name,
+                                          material: material.id,
+                                          materialLabel: material.shortLabel,
+                                          size: size.size, sizeLabel: size.label,
+                                          outerDiameter: size.outerDiameter,
+                                          annotate: uiState.pipeAnnotate,
+                                          textHeight: max(uiState.pipeTextSize, 0.5) * scale),
+                    style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType))
             }
             controller.onEditOpChanged = { kind in
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
@@ -640,6 +689,120 @@ struct TextPropertyCard: View {
     private func push() {
         controller.setTextStyle(paperMm: uiState.textPaperSize,
                                 angleDegrees: uiState.textAngle)
+    }
+}
+
+/// 配管ツール中に出るプロパティカード(用途→管種→口径。色・線種は用途に連動)
+struct PipePropertyCard: View {
+    @ObservedObject var uiState: CanvasUIState
+
+    private let master = PipeMaster.standard
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("配管 — ルートを連続クリック、⏎か右クリックで確定")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Text("用途")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(master.usages) { usage in
+                        Button {
+                            uiState.pipeUsage = usage.id
+                            uiState.pipeMaterial = usage.defaultMaterial
+                            ensureSizeValid()
+                        } label: {
+                            Label {
+                                Text(usage.name)
+                            } icon: {
+                                Image(nsImage: uiState.colorSwatch(usage.colorIndex))
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        if let usage = master.usage(uiState.pipeUsage) {
+                            Circle().fill(uiState.paletteColor(usage.colorIndex))
+                                .frame(width: 9, height: 9)
+                            Text(usage.name)
+                        } else {
+                            Text(uiState.pipeUsage)
+                        }
+                    }
+                    .font(.system(size: 11))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("系統。色・線種はマスタの既定が自動で付きます")
+
+                Text("管種")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(master.materials) { material in
+                        Button("\(material.shortLabel)  \(material.name)") {
+                            uiState.pipeMaterial = material.id
+                            ensureSizeValid()
+                        }
+                    }
+                } label: {
+                    Text(master.material(uiState.pipeMaterial)?.shortLabel ?? uiState.pipeMaterial)
+                        .font(.system(size: 11))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                Text("口径")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(master.sizes(for: uiState.pipeMaterial)) { size in
+                        Button((uiState.pipeSize == size.size ? "✓ " : "   ") + size.label) {
+                            uiState.pipeSize = size.size
+                        }
+                    }
+                } label: {
+                    Text(master.size(material: uiState.pipeMaterial, size: uiState.pipeSize)?.label
+                         ?? uiState.pipeSize)
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                Toggle("口径傍記", isOn: $uiState.pipeAnnotate)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                    .help("最長区間の中央に口径を自動記入します")
+            }
+
+            Text("集計は歯車メニューの「材料集計」から(用途×管種×口径で延長を拾えます)")
+                .font(.system(size: 9.5))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
+    }
+
+    /// 管種を変えたとき、同じ呼び径が無ければ近いもの(無ければ先頭)へ寄せる
+    private func ensureSizeValid() {
+        let sizes = master.sizes(for: uiState.pipeMaterial)
+        guard !sizes.isEmpty else { return }
+        if sizes.contains(where: { $0.size == uiState.pipeSize }) { return }
+        let current = Double(uiState.pipeSize) ?? 0
+        let nearest = sizes.min {
+            abs((Double($0.size) ?? 0) - current) < abs((Double($1.size) ?? 0) - current)
+        }
+        uiState.pipeSize = (nearest ?? sizes[0]).size
     }
 }
 

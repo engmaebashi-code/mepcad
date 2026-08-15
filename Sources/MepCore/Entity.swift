@@ -45,6 +45,8 @@ public enum EntityKind: Equatable, Codable, Sendable {
     case dimension(a: Vec2, b: Vec2, linePoint: Vec2, angle: Double, attrs: DimAttributes)
     /// 引出線文字・バルーン(M5.5)。tip=指示点(矢印先端)、elbow=文字位置/バルーン中心
     case leader(tip: Vec2, elbow: Vec2, content: String, attrs: LeaderAttributes)
+    /// 配管(M6.0)。単線折れ線+口径傍記。色・線種は用途からStyleに焼き込み
+    case pipe(points: [Vec2], attrs: PipeAttributes)
 }
 
 public struct Entity: Identifiable, Equatable, Codable, Sendable {
@@ -130,6 +132,17 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
                 box.union(point: t.position)
                 box.union(point: Vec2(t.position.x + w, t.position.y + attrs.textHeight))
             }
+        case .pipe(let points, let attrs):
+            for p in points { box.union(point: p) }
+            if let note = PipeGeometry.annotation(points: points, attrs: attrs) {
+                let w = PipeGeometry.textWidth(note.content, height: attrs.textHeight)
+                let c = cos(note.angle)
+                let s = sin(note.angle)
+                for corner in [Vec2(0, 0), Vec2(w, 0), Vec2(w, attrs.textHeight), Vec2(0, attrs.textHeight)] {
+                    box.union(point: Vec2(note.position.x + corner.x * c - corner.y * s,
+                                          note.position.y + corner.x * s + corner.y * c))
+                }
+            }
         }
         return box
     }
@@ -160,6 +173,16 @@ public struct Entity: Identifiable, Equatable, Codable, Sendable {
             return [a, b, layout.dimLine.0, layout.dimLine.1]
         case .leader(let tip, let elbow, _, _):
             return [tip, elbow]
+        case .pipe(let points, _):
+            // 頂点+セグメント中点(分岐の取り出しに使う)
+            var pts = points
+            if points.count >= 2 {
+                for i in 0..<(points.count - 1) {
+                    pts.append(Vec2((points[i].x + points[i + 1].x) / 2,
+                                    (points[i].y + points[i + 1].y) / 2))
+                }
+            }
+            return pts
         }
     }
 }

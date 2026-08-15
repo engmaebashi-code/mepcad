@@ -14,6 +14,10 @@ let package = Package(
         .target(name: "MepCore"),
         // JWW/DXF/ネイティブ形式(M2でJwwReaderを実装)
         .target(name: "MepFormats", dependencies: ["MepCore"]),
+        // 設備マスタ(配管の用途・管種・呼び径)と材料集計。マスタの源泉はCSV(M6.0)
+        .target(name: "MepData",
+                dependencies: ["MepCore"],
+                resources: [.copy("Resources")]),
         // ビューポート・表示リスト・Core Graphics描画
         .target(name: "MepRender", dependencies: ["MepCore"]),
         // 入力ツール・スナップエンジン
@@ -21,7 +25,7 @@ let package = Package(
         // アプリ本体(SwiftUI + AppKitキャンバス)
         .executableTarget(
             name: "MepCad",
-            dependencies: ["MepCore", "MepFormats", "MepRender", "MepTools"]
+            dependencies: ["MepCore", "MepFormats", "MepData", "MepRender", "MepTools"]
         ),
         .testTarget(name: "MepCoreTests", dependencies: ["MepCore"]),
         .testTarget(
@@ -29,6 +33,7 @@ let package = Package(
             dependencies: ["MepFormats", "MepCore"],
             resources: [.copy("Fixtures")]
         ),
+        .testTarget(name: "MepDataTests", dependencies: ["MepData", "MepCore"]),
         .testTarget(name: "MepToolsTests", dependencies: ["MepTools", "MepCore"]),
     ]
 )

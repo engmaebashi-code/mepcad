@@ -293,6 +293,23 @@ public struct Renderer {
                          height: layout.textHeight, angle: 0,
                          colorIndex: colorIndex, transform: transform, in: ctx)
             }
+
+        case .pipe(let points, let attrs):
+            guard points.count >= 2 else { break }
+            // 折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)
+            let first = transform.toScreen(points[0])
+            ctx.move(to: CGPoint(x: first.x, y: first.y))
+            for p in points.dropFirst() {
+                let sp = transform.toScreen(p)
+                ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+            }
+            ctx.strokePath()
+            // 口径傍記
+            if let note = PipeGeometry.annotation(points: points, attrs: attrs) {
+                drawText(note.content, at: note.position,
+                         height: attrs.textHeight, angle: note.angle,
+                         colorIndex: colorIndex, transform: transform, in: ctx)
+            }
         }
     }
 
@@ -402,6 +419,16 @@ public struct Renderer {
                     ctx.strokeEllipse(in: CGRect(x: sc.x - rx, y: sc.y - ry,
                                                  width: rx * 2, height: ry * 2))
                 }
+            case .pipe(let points, _):
+                // 輪郭=折れ線
+                guard points.count >= 2 else { break }
+                let first = transform.toScreen(points[0])
+                ctx.move(to: CGPoint(x: first.x, y: first.y))
+                for p in points.dropFirst() {
+                    let sp = transform.toScreen(p)
+                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                }
+                ctx.strokePath()
             }
         }
         ctx.restoreGState()

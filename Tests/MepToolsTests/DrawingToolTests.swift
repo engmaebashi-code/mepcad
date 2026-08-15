@@ -26,6 +26,8 @@ final class DrawingToolTests: XCTestCase {
         func toolDimensionStyle() -> DimensionToolStyle { dimStyle }
         var leaderStyle = LeaderToolStyle()
         func toolLeaderStyle() -> LeaderToolStyle { leaderStyle }
+        var pipeStyle = PipeToolStyle()
+        func toolPipeStyle() -> PipeToolStyle { pipeStyle }
     }
 
     func makeTool() -> (DrawingToolController, Capture) {
@@ -475,6 +477,67 @@ final class DrawingToolTests: XCTestCase {
         XCTAssertNil(tool.leaderTip)
         XCTAssertTrue(cap.produced.isEmpty)
         XCTAssertEqual(tool.kind, .leader)
+    }
+
+    // MARK: - 配管(M6.0)
+
+    func testPipeRouteClicksAndEnterCommit() {
+        let (tool, cap) = makeTool()
+        cap.pipeStyle = PipeToolStyle(
+            attrs: PipeAttributes(usage: "CW", usageName: "給水",
+                                  material: "HIVP", materialLabel: "HIVP",
+                                  size: "20", sizeLabel: "20", outerDiameter: 26,
+                                  annotate: true, textHeight: 125),
+            style: Style(colorIndex: 2, lineType: 0))
+        tool.select(.pipe)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(2000, 0), shiftDown: false)
+        tool.click(at: Vec2(2000, 1500), shiftDown: false)
+        XCTAssertTrue(cap.produced.isEmpty)              // ⏎までは確定しない
+        XCTAssertTrue(tool.keyInput("\r"))
+        XCTAssertEqual(cap.produced.count, 1)
+        guard case .pipe(let points, let attrs) = cap.produced[0].kind else {
+            return XCTFail("配管でない")
+        }
+        XCTAssertEqual(points, [Vec2(0, 0), Vec2(2000, 0), Vec2(2000, 1500)])
+        XCTAssertEqual(attrs.usageName, "給水")
+        XCTAssertEqual(cap.produced[0].style.colorIndex, 2)
+        // 確定後は次のルートの待機状態(連続作図)
+        XCTAssertTrue(tool.pipePoints.isEmpty)
+        XCTAssertEqual(tool.kind, .pipe)
+    }
+
+    func testPipeEscCommitsPartialRoute() {
+        let (tool, cap) = makeTool()
+        tool.select(.pipe)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 0), shiftDown: false)
+        tool.cancel()                                    // 途中キャンセル=そこまで確定
+        XCTAssertEqual(cap.produced.count, 1)
+        XCTAssertTrue(tool.pipePoints.isEmpty)
+        XCTAssertEqual(tool.kind, .pipe)
+    }
+
+    func testPipeSinglePointCancelProducesNothing() {
+        let (tool, cap) = makeTool()
+        tool.select(.pipe)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.cancel()                                    // 1点だけなら何も作らない
+        XCTAssertTrue(cap.produced.isEmpty)
+    }
+
+    func testPipeNumericInputAddsVertex() {
+        let (tool, cap) = makeTool()
+        tool.select(.pipe)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        _ = tool.preview(cursor: Vec2(500, 0), shiftDown: false)   // カーソルは右方向
+        for ch in "3000" { XCTAssertTrue(tool.keyInput(ch)) }
+        XCTAssertTrue(tool.keyInput("\r"))
+        XCTAssertEqual(tool.pipePoints.count, 2)
+        XCTAssertEqual(tool.pipePoints[1].x, 3000, accuracy: 1e-9)
+        XCTAssertTrue(cap.produced.isEmpty)              // 頂点追加であって確定ではない
+        XCTAssertTrue(tool.keyInput("\r"))              // 空⏎で確定
+        XCTAssertEqual(cap.produced.count, 1)
     }
 
     func testEscEndsChainThenReturnsToSelect() {

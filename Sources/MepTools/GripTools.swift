@@ -25,6 +25,7 @@ public struct Grip: Equatable, Sendable {
         case dimExtension                  // 寸法: 補助線の端(2本同時に伸縮)
         case leaderTip                     // 引出線: 指示点(矢印先端)
         case leaderElbow                   // 引出線: 文字位置/バルーン中心
+        case pipeVertex(index: Int)        // 配管: 折れ点(頂点ごと)
     }
 
     public let entityID: EntityID
@@ -85,6 +86,10 @@ public enum GripEngine {
         case .leader(let tip, let elbow, _, _):
             return [Grip(entityID: entity.id, kind: .leaderTip, point: tip),
                     Grip(entityID: entity.id, kind: .leaderElbow, point: elbow)]
+        case .pipe(let points, _):
+            return points.enumerated().map { i, p in
+                Grip(entityID: entity.id, kind: .pipeVertex(index: i), point: p)
+            }
         }
     }
 
@@ -147,6 +152,11 @@ public enum GripEngine {
         case (.leaderElbow, .leader(let tip, _, let content, let attrs)):
             guard p.distance(to: tip) > 1e-9 else { return entity }
             copy.kind = .leader(tip: tip, elbow: p, content: content, attrs: attrs)
+        case (.pipeVertex(let index), .pipe(let points, let attrs)):
+            guard points.indices.contains(index) else { return entity }
+            var moved = points
+            moved[index] = p
+            copy.kind = .pipe(points: moved, attrs: attrs)
         default:
             return entity
         }

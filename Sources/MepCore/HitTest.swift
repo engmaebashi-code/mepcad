@@ -189,6 +189,22 @@ extension Entity {
                 best = min(best, (dx * dx + dy * dy).squareRoot())
             }
             return best
+
+        case .pipe(let points, let attrs):
+            guard points.count >= 2 else { return .infinity }
+            var best = Double.infinity
+            for i in 0..<(points.count - 1) {
+                best = min(best, HitGeometry.closestPointOnSegment(p, points[i], points[i + 1])
+                                    .distance(to: p))
+            }
+            // 傍記もヒット対象(ベースライン線分で近似)
+            if let note = PipeGeometry.annotation(points: points, attrs: attrs) {
+                let w = PipeGeometry.textWidth(note.content, height: attrs.textHeight)
+                let ut = Vec2(cos(note.angle), sin(note.angle))
+                best = min(best, HitGeometry.closestPointOnSegment(
+                    p, note.position, note.position + ut * w).distance(to: p))
+            }
+            return best
         }
     }
 
@@ -213,7 +229,7 @@ extension Entity {
                 && rect.contains(Vec2(cached.maxX, cached.maxY))
         case .hatch(let boundary, _):
             return !boundary.isEmpty && boundary.allSatisfy { rect.contains($0) }
-        case .dimension, .leader:
+        case .dimension, .leader, .pipe:
             // 導出ジオメトリ全体(bounds)が入っていれば内包
             let box = bounds
             return !box.isEmpty && rect.contains(Vec2(box.minX, box.minY))
@@ -313,6 +329,15 @@ extension Entity {
                 if nx * nx + ny * ny <= 1 { return true }
             }
             return false
+
+        case .pipe(let points, _):
+            guard points.count >= 2 else { return false }
+            for i in 0..<(points.count - 1) {
+                if HitGeometry.segmentIntersectsRect(points[i], points[i + 1], rect) {
+                    return true
+                }
+            }
+            return false
         }
     }
 
@@ -346,6 +371,8 @@ extension Entity {
         case .leader(let tip, let elbow, let content, let attrs):
             copy.kind = .leader(tip: tip + delta, elbow: elbow + delta,
                                 content: content, attrs: attrs)
+        case .pipe(let points, let attrs):
+            copy.kind = .pipe(points: points.map { $0 + delta }, attrs: attrs)
         }
         return copy
     }
@@ -385,6 +412,8 @@ extension Entity {
             // 位置だけ回す(文字・バルーンは常に水平=CADの慣例)
             copy.kind = .leader(tip: rot(tip), elbow: rot(elbow),
                                 content: content, attrs: attrs)
+        case .pipe(let points, let attrs):
+            copy.kind = .pipe(points: points.map(rot), attrs: attrs)
         }
         return copy
     }
@@ -458,6 +487,9 @@ extension Entity {
             // 位置だけ鏡映(文字・バルーンは裏返さない)
             copy.kind = .leader(tip: reflect(tip), elbow: reflect(elbow),
                                 content: content, attrs: attrs)
+        case .pipe(let points, let attrs):
+            // 傍記の向きは配置計算が読み下し方向へ正規化するので属性は不変で良い
+            copy.kind = .pipe(points: points.map(reflect), attrs: attrs)
         }
         return copy
     }
@@ -499,6 +531,10 @@ extension Entity {
             if let bw = attrs.balloonWidth { attrs.balloonWidth = bw * abs(f) }
             copy.kind = .leader(tip: sc(tip), elbow: sc(elbow),
                                 content: content, attrs: attrs)
+        case .pipe(let points, var attrs):
+            // 外径・呼び径は実物の寸法なので倍率では変えない(延長だけ変わる)
+            attrs.textHeight *= abs(f)
+            copy.kind = .pipe(points: points.map(sc), attrs: attrs)
         }
         return copy
     }

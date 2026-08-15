@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import MepCore
+import MepData
 import MepTools
 
 // MARK: - ガラス調自動格納サイドパネル(M4.1)
@@ -484,6 +485,45 @@ struct PropertyPanelView: View {
                     }
                 }
 
+                // 配管セクション(配管を選択中のみ。M6.0)
+                if sel.pipeCount > 0 {
+                    propertyRow("配管") {
+                        HStack(spacing: 6) {
+                            Menu {
+                                ForEach(PipeMaster.standard.materials) { material in
+                                    Menu(material.shortLabel) {
+                                        ForEach(PipeMaster.standard.sizes(for: material.id)) { size in
+                                            Button(size.label) { controller.applyPipeSize(size) }
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Text("口径").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                            Menu {
+                                ForEach(PipeMaster.standard.usages) { usage in
+                                    Button {
+                                        controller.applyPipeUsage(usage)
+                                    } label: {
+                                        Label {
+                                            Text(usage.name)
+                                        } icon: {
+                                            Image(nsImage: uiState.colorSwatch(usage.colorIndex))
+                                        }
+                                    }
+                                }
+                                Divider()
+                                Button("傍記を表示") { controller.applyPipeAnnotate(true) }
+                                Button("傍記を非表示") { controller.applyPipeAnnotate(false) }
+                            } label: {
+                                Text("用途").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                        }
+                    }
+                }
+
                 if let blockName = sel.commonBlockName {
                     propertyRow("ブロック") {
                         Text(sel.blockCount > 1 ? "\(blockName) ×\(sel.blockCount)" : blockName)
@@ -579,6 +619,7 @@ struct PropertyPanelView: View {
         if sel.hatchCount > 0 { parts.append("塗\(sel.hatchCount)") }
         if sel.dimCount > 0 { parts.append("寸法\(sel.dimCount)") }
         if sel.leaderCount > 0 { parts.append("引出\(sel.leaderCount)") }
+        if sel.pipeCount > 0 { parts.append("配管\(sel.pipeCount)") }
         return "\(sel.count)個選択中(\(parts.joined(separator: " ")))"
     }
 

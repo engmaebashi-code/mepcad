@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import UniformTypeIdentifiers
 import MepCore
+import MepData
 import MepFormats
 import MepRender
 import MepTools
@@ -18,6 +19,7 @@ struct SelectionSummary: Equatable {
     var hatchCount: Int
     var dimCount: Int
     var leaderCount: Int
+    var pipeCount: Int
     /// 選択中のブロックが全て同じ定義ならその名前
     var commonBlockName: String?
     /// 全選択で共通ならその値(内側nil=byLayer)、混在なら外側nil
@@ -127,6 +129,8 @@ final class CanvasController: NSObject {
     var dimensionStyleProvider: (() -> DimensionToolStyle)?
     /// 引出線設定の提供(プロパティカードの値。紙面mm→実寸mm換算込み)
     var leaderStyleProvider: (() -> LeaderToolStyle)?
+    /// 配管設定の提供(プロパティカードの値。用途の色・線種込み)
+    var pipeStyleProvider: (() -> PipeToolStyle)?
     /// インライン文字入力の依頼(スクリーン座標・初期文字列・画面上のフォントpx。
     /// CanvasViewがクリック位置にテキスト欄を出し、確定文字列(キャンセルはnil)を返す)
     var onTextInputRequested: ((_ screen: Vec2, _ initial: String, _ fontPx: Double,
@@ -296,7 +300,7 @@ final class CanvasController: NSObject {
     private func selectionSummary() -> SelectionSummary? {
         guard !selectedEntities.isEmpty else { return nil }
         var lines = 0, circles = 0, arcs = 0, texts = 0, points = 0, blocks = 0, hatches = 0
-        var dims = 0, leaders = 0
+        var dims = 0, leaders = 0, pipes = 0
         var blockDefIDs = Set<UUID>()
         for e in selectedEntities {
             switch e.kind {
@@ -311,6 +315,7 @@ final class CanvasController: NSObject {
             case .hatch: hatches += 1
             case .dimension: dims += 1
             case .leader: leaders += 1
+            case .pipe: pipes += 1
             }
         }
         var blockName: String?
@@ -325,7 +330,7 @@ final class CanvasController: NSObject {
             count: selectedEntities.count,
             lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
             pointCount: points, blockCount: blocks, hatchCount: hatches, dimCount: dims,
-            leaderCount: leaders,
+            leaderCount: leaders, pipeCount: pipes,
             commonBlockName: blockName,
             commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
             commonLineType: common(selectedEntities.map(\.style.lineType)),
@@ -683,6 +688,8 @@ final class CanvasController: NSObject {
             return "引出線: 指示点(矢印の先端)を動かす — スナップ有効 / \(commit) / esc中止"
         case .leaderElbow:
             return "引出線: 文字位置を動かす(引出線が追随)/ \(commit) / esc中止"
+        case .pipeVertex:
+            return "配管: 折れ点を動かす(傍記が追随)— スナップ有効 / \(commit) / esc中止"
         }
     }
 
@@ -1419,6 +1426,98 @@ extension CanvasController: DrawingToolDelegate {
         leaderStyleProvider?()
             ?? LeaderToolStyle(attrs: LeaderAttributes(textHeight: 3.5 * document.currentScale),
                                colorIndex: nil)
+    }
+
+    func toolPipeStyle() -> PipeToolStyle {
+        pipeStyleProvider?()
+            ?? PipeToolStyle(attrs: PipeAttributes(textHeight: 2.5 * document.currentScale),
+                             style: Style(colorIndex: 2, lineType: 0))
+    }
+}
+
+// MARK: - 配管プロパティ・材料集計(M6.0)
+
+extension CanvasController {
+
+    /// 選択中の配管の属性を一括変更する共通処理(styleも変更できる)
+    private func updateSelectedPipes(name: String,
+                                     change: (inout PipeAttributes, inout Style, Double) -> Void) {
+        let doc = document
+        let changed = updateSelection(name: name) { entity in
+            guard case .pipe(let points, var attrs) = entity.kind else { return }
+            let scale = doc.groups[entity.layer.group].scale
+            var style = entity.style
+            change(&attrs, &style, scale)
+            entity.style = style
+            entity.kind = .pipe(points: points, attrs: attrs)
+        }
+        if changed {
+            onInfo?("\(name)しました(⌘Zで取り消し)")
+        }
+    }
+
+    /// 口径(管種+呼び径)の一括変更
+    func applyPipeSize(_ size: PipeSize) {
+        let materialLabel = PipeMaster.standard.material(size.material)?.shortLabel ?? size.material
+        updateSelectedPipes(name: "配管を\(materialLabel)\(size.label)に変更") { attrs, _, _ in
+            attrs.material = size.material
+            attrs.materialLabel = materialLabel
+            attrs.size = size.size
+            attrs.sizeLabel = size.label
+            attrs.outerDiameter = size.outerDiameter
+        }
+    }
+
+    /// 用途の一括変更(色・線種も用途の既定に合わせる)
+    func applyPipeUsage(_ usage: PipeUsage) {
+        updateSelectedPipes(name: "配管を\(usage.name)に変更") { attrs, style, _ in
+            attrs.usage = usage.id
+            attrs.usageName = usage.name
+            style.colorIndex = usage.colorIndex
+            style.lineType = usage.lineType
+        }
+    }
+
+    /// 口径傍記の表示/非表示の一括変更
+    func applyPipeAnnotate(_ on: Bool) {
+        updateSelectedPipes(name: on ? "口径傍記を表示" : "口径傍記を非表示") { attrs, _, _ in
+            attrs.annotate = on
+        }
+    }
+
+    /// 材料集計(選択があれば選択分・なければ図面全体)をパネルで表示
+    func showMaterialReport() {
+        let hasSelectedPipes = selectedEntities.contains {
+            if case .pipe = $0.kind { return true }
+            return false
+        }
+        let targets = hasSelectedPipes ? selectedEntities : document.entities
+        let totals = PipeAggregator.aggregate(targets)
+        let scopeName = hasSelectedPipes ? "選択中の配管" : "図面全体"
+        guard !totals.isEmpty else {
+            onInfo?("配管がありません(配管ツールで作図したものが集計対象です)")
+            return
+        }
+        let text = PipeAggregator.reportText(totals)
+
+        let alert = NSAlert()
+        alert.messageText = "材料集計 — \(scopeName)"
+        alert.informativeText = "配管の延長を用途×管種×呼び径で集計しました(0.1m単位切り上げ)"
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 260))
+        let textView = NSTextView(frame: scroll.bounds)
+        textView.isEditable = false
+        textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.string = text.replacingOccurrences(of: "\t", with: "    ")
+        scroll.documentView = textView
+        scroll.hasVerticalScroller = true
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: "コピーして閉じる")
+        alert.addButton(withTitle: "閉じる")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            onInfo?("集計をコピーしました(タブ区切り: Excel等へ貼り付け可)")
+        }
     }
 }
 
