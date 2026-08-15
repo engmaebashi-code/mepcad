@@ -87,9 +87,13 @@ public enum GripEngine {
             return [Grip(entityID: entity.id, kind: .leaderTip, point: tip),
                     Grip(entityID: entity.id, kind: .leaderElbow, point: elbow)]
         case .pipe(let points, _):
-            return points.enumerated().map { i, p in
-                Grip(entityID: entity.id, kind: .pipeVertex(index: i), point: p)
+            // 平面上で同じ位置の頂点(立管の上下端)は1つのグリップにまとめる
+            var grips: [Grip] = []
+            for (i, p) in points.enumerated() {
+                if i > 0, points[i - 1].xy.distance(to: p.xy) <= PipeGeometry.planEpsilon { continue }
+                grips.append(Grip(entityID: entity.id, kind: .pipeVertex(index: i), point: p.xy))
             }
+            return grips
         }
     }
 
@@ -155,7 +159,13 @@ public enum GripEngine {
         case (.pipeVertex(let index), .pipe(let points, let attrs)):
             guard points.indices.contains(index) else { return entity }
             var moved = points
-            moved[index] = p
+            // 立管の上下端(平面上同一点の連続頂点)は一緒に動かす。高さは維持
+            let anchor = points[index].xy
+            var j = index
+            while j < points.count, points[j].xy.distance(to: anchor) <= PipeGeometry.planEpsilon {
+                moved[j] = Vec3(p, z: points[j].z)
+                j += 1
+            }
             copy.kind = .pipe(points: moved, attrs: attrs)
         default:
             return entity

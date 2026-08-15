@@ -1430,8 +1430,15 @@ extension CanvasController: DrawingToolDelegate {
 
     func toolPipeStyle() -> PipeToolStyle {
         pipeStyleProvider?()
-            ?? PipeToolStyle(attrs: PipeAttributes(textHeight: 2.5 * document.currentScale),
-                             style: Style(colorIndex: 2, lineType: 0))
+            ?? PipeToolStyle(attrs: PipeAttributes(textHeight: 2.5 * document.currentScale,
+                                                   datum: document.levelDatum),
+                             style: Style(colorIndex: 2, lineType: 0), z: 0)
+    }
+
+    /// 高さの基準面(1FL/2FL/GL…)を設定(図面設定)
+    func setLevelDatum(_ datum: String) {
+        document.setLevelDatum(datum)
+        onInfo?("高さの基準面を\(document.levelDatum)にしました(新しい配管の傍記に使われます)")
     }
 }
 
@@ -1499,23 +1506,37 @@ extension CanvasController {
         }
     }
 
-    /// 高さの一括変更(mm)。傍記併記も同時に指定
+    /// 高さの一括変更(mm)。全頂点を同じ高さにする(立管は消える)。傍記併記も同時に指定
     func applyPipeLevel(_ level: Double, show: Bool) {
-        updateSelectedPipes(name: String(format: "配管の高さをFL%+.0fに変更", level)) { attrs, _, _ in
-            attrs.level = level
+        let doc = document
+        let changed = updateSelection(name: String(format: "配管の高さを%@%+.0fに変更",
+                                                   doc.levelDatum, level)) { entity in
+            guard case .pipe(let points, var attrs) = entity.kind else { return }
             attrs.showLevel = show
+            attrs.datum = doc.levelDatum
+            // 同じ高さにするので立管(平面同一点の連続頂点)は畳む
+            var flat: [Vec3] = []
+            for p in points {
+                let v = Vec3(p.xy, z: level)
+                if let last = flat.last, last.xy.distance(to: v.xy) <= PipeGeometry.planEpsilon { continue }
+                flat.append(v)
+            }
+            entity.kind = .pipe(points: flat, attrs: attrs)
+        }
+        if changed {
+            onInfo?("配管の高さを変更しました(⌘Zで取り消し)")
         }
     }
 
     /// 高さの入力パネル(選択中の配管に適用)
     func promptPipeLevel() {
         let current = selectedEntities.compactMap { e -> Double? in
-            if case .pipe(_, let a) = e.kind { return a.level }
+            if case .pipe(let pts, _) = e.kind { return pts.first?.z }
             return nil
         }.first ?? 0
         let alert = NSAlert()
         alert.messageText = "配管の高さ"
-        alert.informativeText = "芯の高さをmmで入力(床基準 FL+)。傍記に併記するかも選べます"
+        alert.informativeText = "芯の高さをmmで入力(基準面 \(document.levelDatum))。全頂点が同じ高さになります。傍記に併記するかも選べます"
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
         field.stringValue = String(format: "%.0f", current)
         let check = NSButton(checkboxWithTitle: "傍記に併記(例: 50 FL+2500)", target: nil, action: nil)

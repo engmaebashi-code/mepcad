@@ -296,22 +296,25 @@ public struct Renderer {
 
         case .pipe(let points, let attrs):
             guard points.count >= 2 else { break }
+            func poly(_ pts: [Vec2], close: Bool = false) {
+                guard let f = pts.first else { return }
+                let sf = transform.toScreen(f)
+                ctx.move(to: CGPoint(x: sf.x, y: sf.y))
+                for p in pts.dropFirst() {
+                    let sp = transform.toScreen(p)
+                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                }
+                if close { ctx.closePath() }
+            }
+            let baseWidth = max(1, weight * transform.scale * 10)
             if attrs.doubleLine,
                let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
-                // 複線: 外形線2本+端部(実線)、芯線(一点鎖線・細)、継手(実線)
-                func poly(_ pts: [Vec2], close: Bool = false) {
-                    guard let f = pts.first else { return }
-                    let sf = transform.toScreen(f)
-                    ctx.move(to: CGPoint(x: sf.x, y: sf.y))
-                    for p in pts.dropFirst() {
-                        let sp = transform.toScreen(p)
-                        ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
-                    }
-                    if close { ctx.closePath() }
-                }
+                // 複線: ランごとに外形線2本+端部(実線)、芯線(一点鎖線・細)、継手(実線)
                 ctx.setLineDash(phase: 0, lengths: [])
-                poly(layout.leftOutline)
-                poly(layout.rightOutline)
+                for run in layout.runs {
+                    poly(run.left)
+                    poly(run.right)
+                }
                 for cap in layout.endCaps {
                     let sa = transform.toScreen(cap.0)
                     let sb = transform.toScreen(cap.1)
@@ -320,24 +323,48 @@ public struct Renderer {
                 }
                 ctx.strokePath()
                 // 継手はやや太く
-                ctx.setLineWidth(max(1, weight * transform.scale * 10) * 1.3)
+                ctx.setLineWidth(baseWidth * 1.3)
                 for box in layout.fittingBoxes { poly(box, close: true) }
                 ctx.strokePath()
                 // 芯線: 一点鎖線(細)
                 ctx.setLineWidth(1)
                 ctx.setLineDash(phase: 0, lengths: LineTypeTable.dashPattern(4).map { CGFloat($0) })
-                poly(layout.centerline)
+                for run in layout.runs { poly(run.center) }
                 ctx.strokePath()
                 ctx.setLineDash(phase: 0, lengths: [])
+                ctx.setLineWidth(baseWidth)
             } else {
-                // 単線: 折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)
-                let first = transform.toScreen(points[0])
-                ctx.move(to: CGPoint(x: first.x, y: first.y))
-                for p in points.dropFirst() {
-                    let sp = transform.toScreen(p)
-                    ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                // 単線: 水平区間ごとの折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)
+                for run in PipeGeometry.planRuns(points: points) {
+                    poly(run.map(\.xy))
                 }
                 ctx.strokePath()
+            }
+            // 立上り(○+●)/立下り(○+×)記号
+            let risers = PipeGeometry.risers(points: points)
+            if !risers.isEmpty {
+                ctx.setLineDash(phase: 0, lengths: [])
+                let rs = PipeGeometry.riserSymbolRadius(attrs) * transform.scale
+                let r = max(rs, 4)
+                for riser in risers {
+                    let c = transform.toScreen(riser.position)
+                    // 記号の下地(背景色で塗って線を隠す)
+                    ctx.setFillColor(theme.background)
+                    ctx.fillEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+                    ctx.strokeEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+                    if riser.isUp {
+                        ctx.setFillColor(theme.color(forIndex: colorIndex))
+                        let d = r * 0.4
+                        ctx.fillEllipse(in: CGRect(x: c.x - d, y: c.y - d, width: d * 2, height: d * 2))
+                    } else {
+                        let d = r * 0.6
+                        ctx.move(to: CGPoint(x: c.x - d, y: c.y - d))
+                        ctx.addLine(to: CGPoint(x: c.x + d, y: c.y + d))
+                        ctx.move(to: CGPoint(x: c.x - d, y: c.y + d))
+                        ctx.addLine(to: CGPoint(x: c.x + d, y: c.y - d))
+                        ctx.strokePath()
+                    }
+                }
             }
             // 口径傍記
             if let note = PipeGeometry.annotation(points: points, attrs: attrs) {
@@ -457,14 +484,14 @@ public struct Renderer {
             case .pipe(let points, let attrs):
                 // 輪郭=折れ線(複線なら外形線)
                 guard points.count >= 2 else { break }
-                let outlines: [[Vec2]]
+                var outlines: [[Vec2]] = []
                 if attrs.doubleLine,
                    let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
-                    outlines = [layout.leftOutline, layout.rightOutline]
+                    for run in layout.runs { outlines.append(run.left); outlines.append(run.right) }
                 } else {
-                    outlines = [points]
+                    outlines = PipeGeometry.planRuns(points: points).map { $0.map(\.xy) }
                 }
-                for pts in outlines {
+                for pts in outlines where pts.count >= 2 {
                     let first = transform.toScreen(pts[0])
                     ctx.move(to: CGPoint(x: first.x, y: first.y))
                     for p in pts.dropFirst() {

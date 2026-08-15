@@ -499,7 +499,7 @@ final class DrawingToolTests: XCTestCase {
         guard case .pipe(let points, let attrs) = cap.produced[0].kind else {
             return XCTFail("配管でない")
         }
-        XCTAssertEqual(points, [Vec2(0, 0), Vec2(2000, 0), Vec2(2000, 1500)])
+        XCTAssertEqual(points, [Vec3(0, 0, 0), Vec3(2000, 0, 0), Vec3(2000, 1500, 0)])
         XCTAssertEqual(attrs.usageName, "給水")
         XCTAssertEqual(cap.produced[0].style.colorIndex, 2)
         // 確定後は次のルートの待機状態(連続作図)
@@ -538,6 +538,22 @@ final class DrawingToolTests: XCTestCase {
         XCTAssertTrue(cap.produced.isEmpty)              // 頂点追加であって確定ではない
         XCTAssertTrue(tool.keyInput("\r"))              // 空⏎で確定
         XCTAssertEqual(cap.produced.count, 1)
+    }
+
+    /// 作図中に高さを変えると、その位置で立管(平面同一点・z違い)が挟まる(M6.2)
+    func testPipeHeightChangeInsertsRiser() {
+        let (tool, cap) = makeTool()
+        cap.pipeStyle.z = 0
+        tool.select(.pipe)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(2000, 0), shiftDown: false)
+        cap.pipeStyle.z = 3000                           // カードで高さを変更
+        tool.click(at: Vec2(2000, 1500), shiftDown: false)
+        XCTAssertTrue(tool.keyInput("\r"))
+        guard case .pipe(let points, _) = cap.produced[0].kind else { return XCTFail() }
+        XCTAssertEqual(points, [Vec3(0, 0, 0), Vec3(2000, 0, 0),
+                                Vec3(2000, 0, 3000), Vec3(2000, 1500, 3000)])
+        XCTAssertEqual(PipeGeometry.risers(points: points).count, 1)
     }
 
     func testEscEndsChainThenReturnsToSelect() {

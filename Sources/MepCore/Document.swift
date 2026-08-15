@@ -14,6 +14,8 @@ public final class Document {
     public private(set) var blockDefinitions: [BlockDefinition] = []
     /// 用紙サイズ(横置き基準。用紙枠表示とJWW互換用)
     public private(set) var paperSize: PaperSize = .a3
+    /// 高さの基準面ラベル(1FL/2FL/GL…。配管の高さ傍記「50 2FL+2500」に使う)。M6.2
+    public private(set) var levelDatum: String = "1FL"
 
     /// 変更通知(再描画トリガ用)。UIが差し替える。
     public var onChange: (() -> Void)?
@@ -63,6 +65,14 @@ public final class Document {
     public func setPaperSize(_ size: PaperSize) {
         guard size != paperSize else { return }
         paperSize = size
+        onChange?()
+    }
+
+    /// 高さの基準面(1FL/2FL/GL…)を設定
+    public func setLevelDatum(_ datum: String) {
+        let d = datum.trimmingCharacters(in: .whitespaces)
+        guard !d.isEmpty, d != levelDatum else { return }
+        levelDatum = d
         onChange?()
     }
 

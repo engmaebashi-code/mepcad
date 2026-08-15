@@ -83,9 +83,10 @@ final class CanvasUIState: ObservableObject {
     @Published var pipeSize = "20"
     @Published var pipeAnnotate = true
     @Published var pipeTextSize: Double = 2.5   // 紙面mm
-    // M6.1: 高さ・複線・継手
-    @Published var pipeLevel: Double = 0        // mm(FL+)
+    // M6.1/M6.2: 高さ・複線・継手・基準面
+    @Published var pipeLevel: Double = 0        // mm(基準面から)
     @Published var pipeShowLevel = false
+    @Published var levelDatum = "1FL"           // 図面の高さ基準面(Documentと同期)
     @Published var pipeDoubleLine = false
     @Published var pipeAutoFittings = true
 
@@ -224,7 +225,7 @@ struct ContentView: View {
                 if uiState.tool == .pipe {
                     VStack {
                         HStack {
-                            PipePropertyCard(uiState: uiState)
+                            PipePropertyCard(controller: controller, uiState: uiState)
                                 .onHover { controller.uiHovering = $0 }
                             Spacer()
                         }
@@ -582,11 +583,12 @@ struct ContentView: View {
                                           outerDiameter: size.outerDiameter,
                                           annotate: uiState.pipeAnnotate,
                                           textHeight: max(uiState.pipeTextSize, 0.5) * scale,
-                                          level: uiState.pipeLevel,
+                                          datum: controller.document.levelDatum,
                                           showLevel: uiState.pipeShowLevel,
                                           doubleLine: uiState.pipeDoubleLine,
                                           autoFittings: uiState.pipeAutoFittings),
-                    style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType))
+                    style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
+                    z: uiState.pipeLevel)
             }
             controller.onEditOpChanged = { kind in
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
@@ -703,6 +705,7 @@ struct TextPropertyCard: View {
 
 /// 配管ツール中に出るプロパティカード(用途→管種→口径。色・線種は用途に連動)
 struct PipePropertyCard: View {
+    let controller: CanvasController
     @ObservedObject var uiState: CanvasUIState
 
     private let master = PipeMaster.standard
@@ -785,14 +788,28 @@ struct PipePropertyCard: View {
             }
 
             HStack(spacing: 6) {
-                Text("高さ FL+")
+                Text("高さ")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(["GL", "B1FL", "1FL", "2FL", "3FL", "4FL", "5FL", "RFL"], id: \.self) { d in
+                        Button((uiState.levelDatum == d ? "✓ " : "   ") + d) {
+                            uiState.levelDatum = d
+                            controller.setLevelDatum(d)
+                        }
+                    }
+                } label: {
+                    Text(uiState.levelDatum)
+                        .font(.system(size: 11))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("高さの基準面(図面設定)。屋内は各階FL、外構はGL")
                 TextField("", value: $uiState.pipeLevel, format: .number)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
                     .frame(width: 58)
-                    .help("芯の高さ(mm・床基準)。傍記に併記できます")
+                    .help("芯の高さ(mm)。作図中に変えると次の頂点で立管(立上り/立下り記号)が発生します")
                 Text("mm")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
@@ -820,7 +837,7 @@ struct PipePropertyCard: View {
                     .help("最長区間の中央に口径を自動記入します")
             }
 
-            Text("集計は歯車メニューの「材料集計」から(用途×管種×口径で延長・エルボ個数を拾えます)")
+            Text("高さを変えて次点を打つと立管(○●=立上り / ○×=立下り)が入り、延長は立管込みで集計されます")
                 .font(.system(size: 9.5))
                 .foregroundStyle(.tertiary)
         }

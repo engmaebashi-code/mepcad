@@ -48,7 +48,7 @@ final class PipeMasterTests: XCTestCase {
     private func pipe(_ points: [Vec2], usage: String = "給水",
                       material: String = "HIVP", size: String = "20") -> Entity {
         Entity(layer: LayerAddress(0, 0),
-               kind: .pipe(points: points,
+               kind: .pipe(points: points.map { Vec3($0, z: 0) },
                            attrs: PipeAttributes(usage: usage, usageName: usage,
                                                  material: material, materialLabel: material,
                                                  size: size, sizeLabel: size,
@@ -83,6 +83,18 @@ final class PipeMasterTests: XCTestCase {
             PipeAggregator.aggregate([pipe([Vec2(0, 0), Vec2(2000, 0)])]))
         XCTAssertTrue(text.contains("用途\t管種\t呼び径\t延長(m)\t本数\tエルボ90°\tエルボ45°"))
         XCTAssertTrue(text.contains("給水\tHIVP\t20\t2.0\t1\t0\t0"))
+    }
+
+    /// 立管の延長も集計に含まれる(M6.2)
+    func testAggregateIncludesRiserLength() {
+        let e = Entity(layer: LayerAddress(0, 0),
+                       kind: .pipe(points: [Vec3(0, 0, 0), Vec3(2000, 0, 0),
+                                            Vec3(2000, 0, 3000), Vec3(2000, 1000, 3000)],
+                                   attrs: PipeAttributes(usageName: "給水", materialLabel: "HIVP",
+                                                         sizeLabel: "20")))
+        let totals = PipeAggregator.aggregate([e])
+        XCTAssertEqual(totals[0].totalLengthMm, 6000, accuracy: 1e-9)   // 2000+3000+1000
+        XCTAssertEqual(totals[0].elbow90Count, 2)                       // 立上り根元+天端
     }
 
     /// エルボの個数も集計される(M6.1)

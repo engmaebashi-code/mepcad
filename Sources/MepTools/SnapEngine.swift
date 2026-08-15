@@ -147,13 +147,10 @@ public final class SnapEngine {
                 addSegment(tip, elbow)
             case .pipe(let points, _):
                 guard points.count >= 2 else { break }
-                for (i, p) in points.enumerated() {
-                    addPoint(p, .endpoint)
-                    if i < points.count - 1 {
-                        addPoint(Vec2((p.x + points[i + 1].x) / 2,
-                                      (p.y + points[i + 1].y) / 2), .midpoint)
-                        addSegment(p, points[i + 1])
-                    }
+                for p in points { addPoint(p.xy, .endpoint) }
+                for seg in PipeGeometry.planSegments(points: points) {
+                    addPoint(Vec2((seg.0.x + seg.1.x) / 2, (seg.0.y + seg.1.y) / 2), .midpoint)
+                    addSegment(seg.0, seg.1)
                 }
             }
     }

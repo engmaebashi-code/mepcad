@@ -193,13 +193,17 @@ extension Entity {
         case .pipe(let points, let attrs):
             guard points.count >= 2 else { return .infinity }
             var best = Double.infinity
-            for i in 0..<(points.count - 1) {
-                best = min(best, HitGeometry.closestPointOnSegment(p, points[i], points[i + 1])
-                                    .distance(to: p))
+            for seg in PipeGeometry.planSegments(points: points) {
+                best = min(best, HitGeometry.closestPointOnSegment(p, seg.0, seg.1).distance(to: p))
             }
             // 複線: 管の太さの中はヒット(塊で掴む)、外なら外形線までの距離
             if attrs.doubleLine {
                 best = max(best - attrs.outerDiameter / 2, 0)
+            }
+            // 立上り/立下り記号(円の中はヒット)
+            let rs = PipeGeometry.riserSymbolRadius(attrs)
+            for riser in PipeGeometry.risers(points: points) {
+                best = min(best, max(riser.position.distance(to: p) - rs, 0))
             }
             // 傍記もヒット対象(ベースライン線分で近似)
             if let note = PipeGeometry.annotation(points: points, attrs: attrs) {
@@ -334,12 +338,17 @@ extension Entity {
             }
             return false
 
-        case .pipe(let points, _):
+        case .pipe(let points, let attrs):
             guard points.count >= 2 else { return false }
-            for i in 0..<(points.count - 1) {
-                if HitGeometry.segmentIntersectsRect(points[i], points[i + 1], rect) {
-                    return true
-                }
+            for seg in PipeGeometry.planSegments(points: points) {
+                if HitGeometry.segmentIntersectsRect(seg.0, seg.1, rect) { return true }
+            }
+            // 立上り/立下り記号(円)と矩形の重なり
+            let rs = PipeGeometry.riserSymbolRadius(attrs)
+            for riser in PipeGeometry.risers(points: points) {
+                let nx = min(max(riser.position.x, rect.minX), rect.maxX)
+                let ny = min(max(riser.position.y, rect.minY), rect.maxY)
+                if Vec2(nx, ny).distance(to: riser.position) <= rs { return true }
             }
             return false
         }
@@ -376,7 +385,7 @@ extension Entity {
             copy.kind = .leader(tip: tip + delta, elbow: elbow + delta,
                                 content: content, attrs: attrs)
         case .pipe(let points, let attrs):
-            copy.kind = .pipe(points: points.map { $0 + delta }, attrs: attrs)
+            copy.kind = .pipe(points: points.map { $0.mappingXY { $0 + delta } }, attrs: attrs)
         }
         return copy
     }
@@ -417,7 +426,7 @@ extension Entity {
             copy.kind = .leader(tip: rot(tip), elbow: rot(elbow),
                                 content: content, attrs: attrs)
         case .pipe(let points, let attrs):
-            copy.kind = .pipe(points: points.map(rot), attrs: attrs)
+            copy.kind = .pipe(points: points.map { $0.mappingXY(rot) }, attrs: attrs)
         }
         return copy
     }
@@ -493,7 +502,7 @@ extension Entity {
                                 content: content, attrs: attrs)
         case .pipe(let points, let attrs):
             // 傍記の向きは配置計算が読み下し方向へ正規化するので属性は不変で良い
-            copy.kind = .pipe(points: points.map(reflect), attrs: attrs)
+            copy.kind = .pipe(points: points.map { $0.mappingXY(reflect) }, attrs: attrs)
         }
         return copy
     }
@@ -536,9 +545,9 @@ extension Entity {
             copy.kind = .leader(tip: sc(tip), elbow: sc(elbow),
                                 content: content, attrs: attrs)
         case .pipe(let points, var attrs):
-            // 外径・呼び径は実物の寸法なので倍率では変えない(延長だけ変わる)
+            // 外径・呼び径は実物の寸法なので倍率では変えない(平面の延長だけ変わる。高さは維持)
             attrs.textHeight *= abs(f)
-            copy.kind = .pipe(points: points.map(sc), attrs: attrs)
+            copy.kind = .pipe(points: points.map { $0.mappingXY(sc) }, attrs: attrs)
         }
         return copy
     }

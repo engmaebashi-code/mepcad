@@ -351,19 +351,23 @@ final class CrosshairOverlayView: NSView {
             ctx.strokePath()
             // 複線設定なら外形線もゴースト表示(太さの感覚が掴めるように)
             let style = controller.toolPipeStyle()
-            if style.attrs.doubleLine,
-               let layout = PipeGeometry.doubleLineLayout(points: points + [cursor], attrs: style.attrs) {
-                ctx.setLineDash(phase: 0, lengths: [3, 3])
-                for pts in [layout.leftOutline, layout.rightOutline] {
-                    let f = controller.transform.toScreen(pts[0])
-                    ctx.move(to: CGPoint(x: f.x, y: f.y))
-                    for p in pts.dropFirst() {
-                        let sp = controller.transform.toScreen(p)
-                        ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+            if style.attrs.doubleLine {
+                let pts3 = (points + [cursor]).map { Vec3($0, z: style.z) }
+                if let layout = PipeGeometry.doubleLineLayout(points: pts3, attrs: style.attrs) {
+                    ctx.setLineDash(phase: 0, lengths: [3, 3])
+                    for run in layout.runs {
+                        for pts in [run.left, run.right] where pts.count >= 2 {
+                            let f = controller.transform.toScreen(pts[0])
+                            ctx.move(to: CGPoint(x: f.x, y: f.y))
+                            for p in pts.dropFirst() {
+                                let sp = controller.transform.toScreen(p)
+                                ctx.addLine(to: CGPoint(x: sp.x, y: sp.y))
+                            }
+                        }
                     }
+                    ctx.strokePath()
+                    ctx.setLineDash(phase: 0, lengths: [6, 4])
                 }
-                ctx.strokePath()
-                ctx.setLineDash(phase: 0, lengths: [6, 4])
             }
             // 現区間の長さ表示
             if let last = points.last {

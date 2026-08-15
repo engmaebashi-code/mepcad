@@ -23,10 +23,13 @@ public struct PipeToolStyle: Sendable {
     public var attrs: PipeAttributes
     /// 用途の色・線種(エンティティのStyleへ焼き込む)
     public var style: Style
+    /// 現在の高さ(mm・基準面から)。作図中に変えると次の頂点で立管が発生する。M6.2
+    public var z: Double
 
-    public init(attrs: PipeAttributes = PipeAttributes(), style: Style = .byLayer) {
+    public init(attrs: PipeAttributes = PipeAttributes(), style: Style = .byLayer, z: Double = 0) {
         self.attrs = attrs
         self.style = style
+        self.z = z
     }
 }
 
@@ -179,8 +182,8 @@ public final class DrawingToolController {
     public private(set) var dimB: Vec2?
     /// 引出線: 指示点(2クリック目=文字位置→インライン文字入力で確定)
     public private(set) var leaderTip: Vec2?
-    /// 配管ルートの確定済み頂点(⏎/ダブルクリックで確定)
-    public private(set) var pipePoints: [Vec2] = []
+    /// 配管ルートの確定済み頂点(3D。⏎/ダブルクリックで確定)
+    public private(set) var pipePoints: [Vec3] = []
     /// 始点クリックで閉じる判定の許容距離(ワールドmm。呼び出し側がピックボックス幅を設定)
     public var closeTolerance: Double = 0
 
@@ -275,7 +278,8 @@ public final class DrawingToolController {
             return .leader(tip, cursor, style.attrs)
         case .pipe:
             guard let last = pipePoints.last else { return .none }
-            return .polyline(pipePoints, constrained(from: last, to: cursor, active: shiftDown))
+            return .polyline(pipePoints.map(\.xy),
+                             constrained(from: last.xy, to: cursor, active: shiftDown))
         default:
             return .none
         }
@@ -367,14 +371,16 @@ public final class DrawingToolController {
             }
 
         case .pipe:
-            // 連続クリックでルートを引き、⏎か右クリック(esc)で1本の配管として確定
+            // 連続クリックでルートを引き、⏎か右クリック(esc)で1本の配管として確定。
+            // 高さ(カード)が前の頂点と違えば、その位置で立管を挟んでから進む
+            let z = delegate?.toolPipeStyle().z ?? 0
             if let last = pipePoints.last {
-                let next = constrained(from: last, to: p, active: shiftDown)
-                if last.distance(to: next) > 0.01 {
-                    pipePoints.append(next)
+                let next = constrained(from: last.xy, to: p, active: shiftDown)
+                if last.xy.distance(to: next) > 0.01 {
+                    appendPipeVertex(Vec3(next, z: z))
                 }
             } else {
-                pipePoints.append(p)
+                pipePoints.append(Vec3(p, z: z))
             }
 
         case .leader:
@@ -412,6 +418,14 @@ public final class DrawingToolController {
                    style: Style(colorIndex: style.colorIndex),
                    kind: .dimension(a: a, b: b, linePoint: linePoint,
                                     angle: angle, attrs: style.attrs)))
+    }
+
+    /// 配管の頂点追加。直前の頂点と高さが違えば立管(平面同一点・z違い)を挟む
+    private func appendPipeVertex(_ v: Vec3) {
+        if let last = pipePoints.last, abs(last.z - v.z) > 0.5 {
+            pipePoints.append(Vec3(last.xy, z: v.z))
+        }
+        pipePoints.append(v)
     }
 
     /// 配管の確定(2点以上あればエンティティ化。確定後は次のルートへ)
@@ -537,8 +551,8 @@ public final class DrawingToolController {
 
         case .pipe:
             guard let last = pipePoints.last,
-                  let next = numericTarget(from: last, comps: comps) else { return }
-            pipePoints.append(next)
+                  let next = numericTarget(from: last.xy, comps: comps) else { return }
+            appendPipeVertex(Vec3(next, z: delegate?.toolPipeStyle().z ?? last.z))
 
         case .circle:
             guard let c = anchor, comps.count == 1,
@@ -710,7 +724,7 @@ public final class DrawingToolController {
             if pipePoints.isEmpty {
                 return "配管: ルートの始点を指示 — 用途・口径は左上のカード" + constraint
             }
-            return "配管: 次点を指示(\(pipePoints.count)点)— 数値=距離 / x,y=相対 / ⏎で確定" + constraint + num
+            return "配管: 次点を指示(\(pipePoints.count)点)— 数値=距離 / x,y=相対 / 高さを変えると立管 / ⏎で確定" + constraint + num
         }
     }
 }
