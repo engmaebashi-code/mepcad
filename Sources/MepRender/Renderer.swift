@@ -348,6 +348,30 @@ public struct Renderer {
                     poly(run.map(\.xy))
                 }
                 ctx.strokePath()
+                // 単線の継手シンボル(排水=受口ティック+丸み、給水=×、キャップ○×、レデューサ>)
+                let symbols = PipeSymbols.elements(points: points, attrs: attrs, junctions: junctions)
+                if !symbols.isEmpty {
+                    ctx.setLineDash(phase: 0, lengths: [])
+                    for el in symbols {
+                        switch el {
+                        case .segment(let a, let b):
+                            let sa = transform.toScreen(a)
+                            let sb = transform.toScreen(b)
+                            ctx.move(to: CGPoint(x: sa.x, y: sa.y))
+                            ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
+                        case .arc(let c, let r, let s, let e):
+                            let sc = transform.toScreen(c)
+                            ctx.addArc(center: CGPoint(x: sc.x, y: sc.y), radius: r * transform.scale,
+                                       startAngle: -s, endAngle: -e, clockwise: true)
+                        case .circle(let c, let r):
+                            let sc = transform.toScreen(c)
+                            let sr = r * transform.scale
+                            ctx.strokeEllipse(in: CGRect(x: sc.x - sr, y: sc.y - sr,
+                                                         width: sr * 2, height: sr * 2))
+                        }
+                        ctx.strokePath()
+                    }
+                }
             }
             // 立上り(○+●)/立下り(○+×)記号
             let risers = PipeGeometry.risers(points: points)
