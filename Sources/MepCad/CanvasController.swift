@@ -1463,7 +1463,7 @@ extension CanvasController {
         }
     }
 
-    /// 口径(管種+呼び径)の一括変更
+    /// 口径(管種+呼び径)の一括変更(継手の規格・寸法も引き直す)
     func applyPipeSize(_ size: PipeSize) {
         let materialLabel = PipeMaster.standard.material(size.material)?.shortLabel ?? size.material
         updateSelectedPipes(name: "配管を\(materialLabel)\(size.label)に変更") { attrs, _, _ in
@@ -1472,16 +1472,27 @@ extension CanvasController {
             attrs.size = size.size
             attrs.sizeLabel = size.label
             attrs.outerDiameter = size.outerDiameter
+            attrs.fittingSeries = FittingMaster.series(material: attrs.material, usage: attrs.usage)
+            attrs.fittingDims = FittingMaster.standard.dims(series: attrs.fittingSeries, size: attrs.size)
         }
     }
 
-    /// 用途の一括変更(色・線種も用途の既定に合わせる)
+    /// 用途の一括変更(色・線種も用途の既定に合わせる。継手規格も引き直す)
     func applyPipeUsage(_ usage: PipeUsage) {
         updateSelectedPipes(name: "配管を\(usage.name)に変更") { attrs, style, _ in
             attrs.usage = usage.id
             attrs.usageName = usage.name
             style.colorIndex = usage.colorIndex
             style.lineType = usage.lineType
+            attrs.fittingSeries = FittingMaster.series(material: attrs.material, usage: attrs.usage)
+            attrs.fittingDims = FittingMaster.standard.dims(series: attrs.fittingSeries, size: attrs.size)
+        }
+    }
+
+    /// 端部キャップの一括変更(M6.3)
+    func applyPipeCapEnds(_ on: Bool) {
+        updateSelectedPipes(name: on ? "端部にキャップを付ける" : "端部のキャップを外す") { attrs, _, _ in
+            attrs.capEnds = on
         }
     }
 

@@ -139,6 +139,10 @@ public struct PipeTotal: Equatable, Sendable {
     public let elbow90Count: Int
     /// エルボ45°の個数
     public let elbow45Count: Int
+    /// ティーズ(本管側で数える)・キャップ・レデューサの個数(M6.3)
+    public let teeCount: Int
+    public let capCount: Int
+    public let reducerCount: Int
 
     /// 表示用: mに換算し0.1m単位へ切り上げ(拾いの慣例)
     public var lengthMeters: Double {
@@ -156,30 +160,41 @@ public enum PipeAggregator {
             let material: String
             let size: String
         }
-        var lengths: [Key: (length: Double, count: Int, e90: Int, e45: Int)] = [:]
+        var lengths: [Key: (length: Double, count: Int, e90: Int, e45: Int,
+                            tee: Int, cap: Int, red: Int)] = [:]
+        let junctions = PipeNetwork.junctions(in: entities)
         for e in entities {
             guard case .pipe(let points, let attrs) = e.kind, points.count >= 2 else { continue }
             let len = PipeGeometry.length(of: points)
-            var e90 = 0, e45 = 0
+            var e90 = 0, e45 = 0, tee = 0, cap = 0, red = 0
             if attrs.autoFittings {
                 for f in PipeGeometry.fittings(points: points) {
                     switch f.kind {
                     case .elbow90: e90 += 1
                     case .elbow45: e45 += 1
-                    case .elbowOther: break
+                    default: break
+                    }
+                }
+                for j in junctions[e.id] ?? [] {
+                    switch j.kind {
+                    case .tee: tee += 1
+                    case .cap: cap += 1
+                    case .reducer: red += 1
                     }
                 }
             }
             let key = Key(usage: attrs.usageName, material: attrs.materialLabel,
                           size: attrs.sizeLabel)
-            let cur = lengths[key] ?? (0, 0, 0, 0)
-            lengths[key] = (cur.length + len, cur.count + 1, cur.e90 + e90, cur.e45 + e45)
+            let cur = lengths[key] ?? (0, 0, 0, 0, 0, 0, 0)
+            lengths[key] = (cur.length + len, cur.count + 1, cur.e90 + e90, cur.e45 + e45,
+                            cur.tee + tee, cur.cap + cap, cur.red + red)
         }
         return lengths.map { key, value in
             PipeTotal(usageName: key.usage, materialLabel: key.material,
                       sizeLabel: key.size, totalLengthMm: value.length,
                       runCount: value.count,
-                      elbow90Count: value.e90, elbow45Count: value.e45)
+                      elbow90Count: value.e90, elbow45Count: value.e45,
+                      teeCount: value.tee, capCount: value.cap, reducerCount: value.red)
         }
         .sorted {
             ($0.usageName, $0.materialLabel, $0.sizeLabel.count, $0.sizeLabel)
@@ -189,12 +204,105 @@ public enum PipeAggregator {
 
     /// 集計結果の表形式テキスト(コピー・保存用。タブ区切り)
     public static func reportText(_ totals: [PipeTotal]) -> String {
-        var lines = ["用途\t管種\t呼び径\t延長(m)\t本数\tエルボ90°\tエルボ45°"]
+        var lines = ["用途\t管種\t呼び径\t延長(m)\t本数\tエルボ90°\tエルボ45°\tティーズ\tキャップ\tレデューサ"]
         for t in totals {
             lines.append("\(t.usageName)\t\(t.materialLabel)\t\(t.sizeLabel)\t"
                          + String(format: "%.1f", t.lengthMeters)
-                         + "\t\(t.runCount)\t\(t.elbow90Count)\t\(t.elbow45Count)")
+                         + "\t\(t.runCount)\t\(t.elbow90Count)\t\(t.elbow45Count)"
+                         + "\t\(t.teeCount)\t\(t.capCount)\t\(t.reducerCount)")
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - 継手マスタ(M6.3)
+
+/// 継手寸法マスタ(fittings.csv)。規格シリーズ×継手種別×呼び径→A寸法・受口深さ・受口外径。
+/// 継手は図面に置かず、配管の折れ点・分岐点・端部から「その都度」この表を引いて導出する
+public final class FittingMaster {
+
+    public struct Row: Equatable, Sendable {
+        public let series: String   // "DV" "TS" "HI" "HT" "SGP"
+        public let kind: String     // "elbow90" "elbow45" "tee" "cap" "socket" "reducer"
+        public let size: String
+        public let a: Double
+        public let socketDepth: Double
+        public let socketOD: Double
+    }
+
+    public let rows: [Row]
+    private let index: [String: Row]   // "series|kind|size"
+
+    public static let standard: FittingMaster = {
+        guard let url = Bundle.module.url(forResource: "fittings.csv", withExtension: nil,
+                                          subdirectory: "Resources")
+                ?? Bundle.module.url(forResource: "fittings.csv", withExtension: nil),
+              let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return FittingMaster(csv: "")
+        }
+        return FittingMaster(csv: text)
+    }()
+
+    public init(csv: String) {
+        rows = csv.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
+            .map(String.init)
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+            .compactMap { line -> Row? in
+                let f = line.split(separator: ",", omittingEmptySubsequences: false)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                guard f.count >= 6, let a = Double(f[3]), let d = Double(f[4]), let od = Double(f[5]) else {
+                    return nil
+                }
+                return Row(series: f[0], kind: f[1], size: f[2], a: a, socketDepth: d, socketOD: od)
+            }
+        index = Dictionary(rows.map { ("\($0.series)|\($0.kind)|\($0.size)", $0) },
+                           uniquingKeysWith: { first, _ in first })
+    }
+
+    public var seriesList: [String] {
+        var seen: [String] = []
+        for r in rows where !seen.contains(r.series) { seen.append(r.series) }
+        return seen
+    }
+
+    public func row(series: String, kind: String, size: String) -> Row? {
+        index["\(series)|\(kind)|\(size)"]
+    }
+
+    /// 管種+用途から継手の規格シリーズを決める(標準ルール。会社ルールで上書き可)
+    /// - 排水系(汚水/雑排水/雨水/通気)のVP/VU → DV
+    /// - 給水・給湯系のHIVP → HI、VP → TS、HTVP → HT
+    /// - 鋼管(SGP-W/SGP-VB) → SGP(ねじ込み)
+    /// - 銅管/SUS はマスタ未整備 → ""(外径概算にフォールバック)
+    public static func series(material: String, usage: String) -> String {
+        let drain: Set<String> = ["S", "W", "RW", "VT"]
+        switch material {
+        case "VP", "VU":
+            return drain.contains(usage) ? "DV" : "TS"
+        case "HIVP":
+            return "HI"
+        case "HTVP":
+            return "HT"
+        case "SGP-W", "SGP-VB":
+            return "SGP"
+        default:
+            return ""
+        }
+    }
+
+    /// 規格シリーズ×呼び径の寸法一式(マスタに無い項目は0=呼び出し側で概算にフォールバック)
+    public func dims(series: String, size: String) -> PipeFittingDims {
+        guard !series.isEmpty else { return PipeFittingDims() }
+        let e90 = row(series: series, kind: "elbow90", size: size)
+        let e45 = row(series: series, kind: "elbow45", size: size)
+        let tee = row(series: series, kind: "tee", size: size)
+        let cap = row(series: series, kind: "cap", size: size)
+        guard let e90 else { return PipeFittingDims() }
+        return PipeFittingDims(elbow90A: e90.a,
+                               elbow45A: e45?.a ?? e90.a * 0.6,
+                               teeA: tee?.a ?? e90.a,
+                               socketDepth: e90.socketDepth,
+                               socketOD: e90.socketOD,
+                               capLength: cap?.a ?? e90.socketDepth + 8)
     }
 }

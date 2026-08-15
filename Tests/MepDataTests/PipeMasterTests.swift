@@ -97,6 +97,56 @@ final class PipeMasterTests: XCTestCase {
         XCTAssertEqual(totals[0].elbow90Count, 2)                       // 立上り根元+天端
     }
 
+    // MARK: - 継手マスタ(M6.3)
+
+    func testFittingMasterLoads() {
+        let m = FittingMaster.standard
+        XCTAssertGreaterThanOrEqual(m.rows.count, 300)
+        XCTAssertTrue(m.seriesList.contains("DV"))
+        XCTAssertTrue(m.seriesList.contains("SGP"))
+        // DV 100: エルボA=90・受口深さ50・受口外径130
+        let dv100 = m.dims(series: "DV", size: "100")
+        XCTAssertEqual(dv100.elbow90A, 90, accuracy: 1e-9)
+        XCTAssertEqual(dv100.socketDepth, 50, accuracy: 1e-9)
+        XCTAssertEqual(dv100.socketOD, 130, accuracy: 1e-9)
+        XCTAssertFalse(dv100.isEmpty)
+        // 未整備(銅管)は空 → 呼び出し側で外径概算
+        XCTAssertTrue(m.dims(series: "", size: "20").isEmpty)
+        XCTAssertTrue(m.dims(series: "DV", size: "13").isEmpty)   // DVに13は無い
+    }
+
+    /// 管種+用途→規格シリーズの標準ルール
+    func testFittingSeriesRule() {
+        XCTAssertEqual(FittingMaster.series(material: "VP", usage: "S"), "DV")
+        XCTAssertEqual(FittingMaster.series(material: "VU", usage: "RW"), "DV")
+        XCTAssertEqual(FittingMaster.series(material: "VP", usage: "CW"), "TS")
+        XCTAssertEqual(FittingMaster.series(material: "HIVP", usage: "CW"), "HI")
+        XCTAssertEqual(FittingMaster.series(material: "HTVP", usage: "HW"), "HT")
+        XCTAssertEqual(FittingMaster.series(material: "SGP-W", usage: "FI"), "SGP")
+        XCTAssertEqual(FittingMaster.series(material: "CUP", usage: "HW"), "")
+    }
+
+    /// 集計にティーズ・キャップ・レデューサの個数が出る
+    func testAggregateCountsJunctions() {
+        func p(_ pts: [Vec3], od: Double, size: String, caps: Bool = false) -> Entity {
+            Entity(layer: LayerAddress(0, 0),
+                   kind: .pipe(points: pts,
+                               attrs: PipeAttributes(usageName: "給水", materialLabel: "HIVP",
+                                                     size: size, sizeLabel: size,
+                                                     outerDiameter: od, capEnds: caps)))
+        }
+        let main = p([Vec3(0, 0, 0), Vec3(4000, 0, 0)], od: 76, size: "65", caps: true)
+        let branch = p([Vec3(2000, 0, 0), Vec3(2000, 1500, 0)], od: 60, size: "50")
+        let tail = p([Vec3(4000, 0, 0), Vec3(6000, 0, 0)], od: 60, size: "50")
+        let totals = PipeAggregator.aggregate([main, branch, tail])
+        let t65 = totals.first { $0.sizeLabel == "65" }
+        XCTAssertEqual(t65?.teeCount, 1)
+        XCTAssertEqual(t65?.reducerCount, 1)   // 65→50の突き合わせ(大きい側)
+        XCTAssertEqual(t65?.capCount, 1)       // 始点だけ自由端
+        let text = PipeAggregator.reportText(totals)
+        XCTAssertTrue(text.contains("ティーズ\tキャップ\tレデューサ"))
+    }
+
     /// エルボの個数も集計される(M6.1)
     func testAggregateCountsElbows() {
         let totals = PipeAggregator.aggregate([

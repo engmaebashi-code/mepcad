@@ -89,6 +89,7 @@ final class CanvasUIState: ObservableObject {
     @Published var levelDatum = "1FL"           // 図面の高さ基準面(Documentと同期)
     @Published var pipeDoubleLine = false
     @Published var pipeAutoFittings = true
+    @Published var pipeCapEnds = false          // 接続されていない端部にキャップ(M6.3)
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -575,6 +576,9 @@ struct ContentView: View {
                 let size = master.size(material: material.id, size: uiState.pipeSize)
                     ?? master.sizes(for: material.id).first
                     ?? PipeSize(material: material.id, size: "20", label: "20", outerDiameter: 26)
+                // 継手の規格シリーズと寸法(fittings.csv)。無ければ外径概算にフォールバック
+                let series = FittingMaster.series(material: material.id, usage: usage.id)
+                let dims = FittingMaster.standard.dims(series: series, size: size.size)
                 return PipeToolStyle(
                     attrs: PipeAttributes(usage: usage.id, usageName: usage.name,
                                           material: material.id,
@@ -586,7 +590,9 @@ struct ContentView: View {
                                           datum: controller.document.levelDatum,
                                           showLevel: uiState.pipeShowLevel,
                                           doubleLine: uiState.pipeDoubleLine,
-                                          autoFittings: uiState.pipeAutoFittings),
+                                          autoFittings: uiState.pipeAutoFittings,
+                                          fittingSeries: series, fittingDims: dims,
+                                          capEnds: uiState.pipeCapEnds),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
                     z: uiState.pipeLevel)
             }
@@ -829,7 +835,11 @@ struct PipePropertyCard: View {
                     .toggleStyle(.checkbox)
                     .font(.system(size: 11))
                     .disabled(!uiState.pipeDoubleLine)
-                    .help("折れ点にエルボ(90°/45°)を自動発生。集計にも個数が出ます")
+                    .help("折れ点にエルボ、分岐にティーズ、口径違いにレデューサを自動発生(規格: \(seriesLabel))。集計にも個数が出ます")
+                Toggle("端部キャップ", isOn: $uiState.pipeCapEnds)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                    .help("接続されていない端部にキャップを付ける(FILDERの端部品)")
 
                 Toggle("口径傍記", isOn: $uiState.pipeAnnotate)
                     .toggleStyle(.checkbox)
@@ -837,7 +847,7 @@ struct PipePropertyCard: View {
                     .help("最長区間の中央に口径を自動記入します")
             }
 
-            Text("高さを変えて次点を打つと立管(○●=立上り / ○×=立下り)が入り、延長は立管込みで集計されます")
+            Text("継手規格: \(seriesLabel)(管種と用途から自動)。高さを変えて次点を打つと立管が入ります")
                 .font(.system(size: 9.5))
                 .foregroundStyle(.tertiary)
         }
@@ -849,6 +859,12 @@ struct PipePropertyCard: View {
                 .strokeBorder(.white.opacity(0.18), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
+    }
+
+    /// 継手の規格シリーズ表示("DV" / "HI" / …。マスタ未整備なら"概算")
+    private var seriesLabel: String {
+        let s = FittingMaster.series(material: uiState.pipeMaterial, usage: uiState.pipeUsage)
+        return s.isEmpty ? "概算" : s
     }
 
     /// 管種を変えたとき、同じ呼び径が無ければ近いもの(無ければ先頭)へ寄せる

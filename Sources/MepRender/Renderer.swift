@@ -96,13 +96,16 @@ public struct Renderer {
         drawPaperFrame(paperFrame, transform: transform, in: ctx)
 
         let defs = Dictionary(uniqueKeysWithValues: blockDefinitions.map { ($0.id, $0) })
+        // 配管の分岐・接続・端部継手(図面全体から毎回導出。M6.3)
+        let junctions = PipeNetwork.junctions(in: entities)
         for entity in entities {
             let g = groups[entity.layer.group]
             guard g.isVisible else { continue }
             let layer = g.layers[entity.layer.layer]
             guard layer.isVisible else { continue }
             if !showAuxiliary, entity.isAuxiliary { continue }
-            drawEntity(entity, layer: layer, transform: transform, definitions: defs, in: ctx)
+            drawEntity(entity, layer: layer, transform: transform, definitions: defs,
+                       junctions: junctions[entity.id] ?? [], in: ctx)
         }
     }
 
@@ -164,7 +167,8 @@ public struct Renderer {
     // MARK: - エンティティ
 
     private func drawEntity(_ entity: Entity, layer: Layer, transform: ViewTransform,
-                            definitions: [UUID: BlockDefinition] = [:], in ctx: CGContext) {
+                            definitions: [UUID: BlockDefinition] = [:],
+                            junctions: [PipeJunction] = [], in ctx: CGContext) {
         let colorIndex = entity.style.colorIndex ?? layer.defaultColorIndex
         let weight = entity.style.lineWeight ?? layer.defaultLineWeight
         let lineType = entity.style.lineType ?? layer.defaultLineType
@@ -322,9 +326,14 @@ public struct Renderer {
                     ctx.addLine(to: CGPoint(x: sb.x, y: sb.y))
                 }
                 ctx.strokePath()
-                // 継手はやや太く
+                // 継手はやや太く(折れ点のエルボ+分岐ティーズ・端部キャップ・レデューサ)
                 ctx.setLineWidth(baseWidth * 1.3)
                 for box in layout.fittingBoxes { poly(box, close: true) }
+                if attrs.autoFittings {
+                    for j in junctions {
+                        for box in PipeNetwork.junctionBoxes(j, attrs: attrs) { poly(box, close: true) }
+                    }
+                }
                 ctx.strokePath()
                 // 芯線: 一点鎖線(細)
                 ctx.setLineWidth(1)

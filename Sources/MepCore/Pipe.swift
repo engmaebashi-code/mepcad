@@ -38,6 +38,12 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     public var doubleLine: Bool
     /// 折れ点に継手(エルボ)を自動発生させるか(複線時のみ描画)
     public var autoFittings: Bool
+    /// 継手の規格シリーズ("DV"=排水用塩ビ / "TS"・"HI"=給水用塩ビ / "HT" / "SGP"=ねじ込み)。M6.3
+    public var fittingSeries: String
+    /// 継手の寸法(規格シリーズ×呼び径でマスタから引いた値を保持。0なら外径から概算)
+    public var fittingDims: PipeFittingDims
+    /// 接続されていない端部にキャップを付ける(FILDERの端部品相当)
+    public var capEnds: Bool
 
     public init(usage: String = "CW", usageName: String = "給水",
                 material: String = "HIVP", materialLabel: String = "HIVP",
@@ -45,7 +51,9 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
                 outerDiameter: Double = 26,
                 annotate: Bool = true, textHeight: Double = 125,
                 datum: String = "1FL", showLevel: Bool = false,
-                doubleLine: Bool = false, autoFittings: Bool = true) {
+                doubleLine: Bool = false, autoFittings: Bool = true,
+                fittingSeries: String = "", fittingDims: PipeFittingDims = PipeFittingDims(),
+                capEnds: Bool = false) {
         self.usage = usage
         self.usageName = usageName
         self.material = material
@@ -59,6 +67,14 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         self.showLevel = showLevel
         self.doubleLine = doubleLine
         self.autoFittings = autoFittings
+        self.fittingSeries = fittingSeries
+        self.fittingDims = fittingDims
+        self.capEnds = capEnds
+    }
+
+    /// 継手の実効寸法(マスタ値があればそれ、無ければ外径からの概算)
+    public var effectiveFittingDims: PipeFittingDims {
+        fittingDims.isEmpty ? PipeFittingDims.estimated(outerDiameter: outerDiameter) : fittingDims
     }
 
     /// 高さの表記("1FL+2500" / "1FL±0" / "GL-250")
@@ -68,17 +84,56 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     }
 }
 
-/// 折れ点に発生する継手
+/// 継手の寸法(実寸mm)。規格シリーズ×呼び径ごとにマスタ(fittings.csv)から引く。M6.3
+public struct PipeFittingDims: Equatable, Codable, Sendable {
+    /// エルボ90°の中心〜端面(A寸法)
+    public var elbow90A: Double
+    /// エルボ45°の中心〜端面
+    public var elbow45A: Double
+    /// ティーズの中心〜端面
+    public var teeA: Double
+    /// 受口深さ(差込み長さ)
+    public var socketDepth: Double
+    /// 受口外径(継手本体の太さ)
+    public var socketOD: Double
+    /// キャップの長さ
+    public var capLength: Double
+
+    public init(elbow90A: Double = 0, elbow45A: Double = 0, teeA: Double = 0,
+                socketDepth: Double = 0, socketOD: Double = 0, capLength: Double = 0) {
+        self.elbow90A = elbow90A
+        self.elbow45A = elbow45A
+        self.teeA = teeA
+        self.socketDepth = socketDepth
+        self.socketOD = socketOD
+        self.capLength = capLength
+    }
+
+    public var isEmpty: Bool { socketOD <= 0 || elbow90A <= 0 }
+
+    /// マスタが無いときの概算(外径比例。M6.1までの見た目と同じ)
+    public static func estimated(outerDiameter od: Double) -> PipeFittingDims {
+        let reach = max(od * 0.9, 20)
+        return PipeFittingDims(elbow90A: reach, elbow45A: reach * 0.6, teeA: reach,
+                               socketDepth: reach * 0.7, socketOD: od * 1.15,
+                               capLength: reach * 0.8)
+    }
+}
+
+/// 折れ点・分岐点・端部に発生する継手
 public struct PipeFitting: Equatable, Sendable {
-    public enum Kind: String, Equatable, Sendable {
+    public enum Kind: String, Equatable, Sendable, CaseIterable {
         case elbow90 = "エルボ90°"
         case elbow45 = "エルボ45°"
         case elbowOther = "エルボ(その他)"
+        case tee = "ティーズ"
+        case cap = "キャップ"
+        case reducer = "レデューサ"
     }
     public let kind: Kind
-    /// 折れ点(平面)
+    /// 位置(平面)
     public let position: Vec2
-    /// 折れ角(rad。0=直進)
+    /// 折れ角(rad。0=直進)。ティーズ・キャップ・レデューサは0
     public let turnAngle: Double
 }
 
@@ -237,7 +292,7 @@ public enum PipeGeometry {
         return result
     }
 
-    /// エルボ(ソケット部)の外形長さ: 芯からの張り出し(外径比例。VP継手の受口深さ相当)
+    /// エルボ(ソケット部)の外形長さ: 芯からの張り出し(外径比例。マスタ無し時の概算)
     public static func fittingReach(outerDiameter: Double) -> Double {
         max(outerDiameter * 0.9, 20)
     }
@@ -251,8 +306,9 @@ public enum PipeGeometry {
         -> PipeDoubleLineLayout? {
         guard points.count >= 2, attrs.outerDiameter > 1e-9 else { return nil }
         let r = attrs.outerDiameter / 2
-        let rf = r * 1.15
-        let reach = fittingReach(outerDiameter: attrs.outerDiameter)
+        let dims = attrs.effectiveFittingDims
+        let rf = max(dims.socketOD / 2, r * 1.05)
+        let reach = dims.elbow90A
         var runsOut: [(left: [Vec2], right: [Vec2], center: [Vec2])] = []
         var boxes: [[Vec2]] = []
         var caps: [(Vec2, Vec2)] = []

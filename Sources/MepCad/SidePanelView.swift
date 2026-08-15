@@ -526,6 +526,8 @@ struct PropertyPanelView: View {
                                 Divider()
                                 Button("継手を自動発生") { controller.applyPipeAutoFittings(true) }
                                 Button("継手を非表示") { controller.applyPipeAutoFittings(false) }
+                                Button("端部キャップあり") { controller.applyPipeCapEnds(true) }
+                                Button("端部キャップなし") { controller.applyPipeCapEnds(false) }
                                 Divider()
                                 Button("高さ…") { controller.promptPipeLevel() }
                             } label: {
