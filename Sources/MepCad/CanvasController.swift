@@ -1496,6 +1496,20 @@ extension CanvasController {
         }
     }
 
+    /// 90°曲り部品(エルボ/大曲)の一括変更。M6.6
+    func applyPipeLongRadius(_ on: Bool) {
+        updateSelectedPipes(name: on ? "90°曲りを大曲に変更" : "90°曲りをエルボに変更") { attrs, _, _ in
+            attrs.longRadius = on
+        }
+    }
+
+    /// 傍記の管種表示の一括変更。M6.6
+    func applyPipeAnnotateMaterial(_ on: Bool) {
+        updateSelectedPipes(name: on ? "傍記に管種を表示" : "傍記の管種を非表示") { attrs, _, _ in
+            attrs.annotateMaterial = on
+        }
+    }
+
     /// 単線記号の基準寸法(紙面mm)の一括変更。M6.5
     func applyPipeSymbolSize(_ paperMM: Double) {
         updateSelectedPipes(name: String(format: "単線記号サイズを%.1fmmに変更", paperMM)) { attrs, _, scale in

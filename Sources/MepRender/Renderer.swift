@@ -355,9 +355,10 @@ public struct Renderer {
                     ctx.setLineDash(phase: 0, lengths: [])
                     ctx.setLineWidth(baseWidth)
                 } else {
-                    // 単線: 水平区間ごとの折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)
-                    for run in PipeGeometry.planRuns(points: points) {
-                        poly(run.map(\.xy))
+                    // 単線: 水平区間ごとの折れ線(色・線種はStyleに焼き込み済み=通常の属性描画)。
+                    // 排水系(継手あり)は折れ点を丸みの接点で切って角を落とす
+                    for run in PipeSymbols.singleLineRuns(points: points, attrs: attrs, junctions: junctions) {
+                        poly(run)
                     }
                     ctx.strokePath()
                 }
@@ -369,7 +370,7 @@ public struct Renderer {
             if let layout {
                 // 複線の継手: 実形状(受口+本体)を背景色で塗ってから線(やや太く)
                 if attrs.autoFittings {
-                    ctx.setLineWidth(baseWidth * 1.3)
+                    ctx.setLineWidth(baseWidth * 1.15)
                     var shapes = layout.fittings
                     for j in junctions { shapes += PipeNetwork.junctionShapes(j, attrs: attrs) }
                     for shape in shapes {
@@ -386,6 +387,9 @@ public struct Renderer {
                                 ctx.setFillColor(theme.background)
                                 ctx.fillEllipse(in: rect)
                                 ctx.strokeEllipse(in: rect)
+                            case .polyline(let pts):
+                                poly(pts)
+                                ctx.strokePath()
                             }
                         }
                     }
@@ -414,42 +418,40 @@ public struct Renderer {
                     ctx.strokePath()
                 }
             }
-            // 立上り/立下り記号。複線=継手の円(受口外径)+●/×、単線=直径uの円(上り=閉・●なし、下り=管側が開いたC形)
+            // 立上り/立下り記号(FILDER流): 立上り=閉じた円、立下り=管側が開いたC形。
+            // 複線=受口外径の円(開きは管の太さぶん)、単線=直径uの円(開き60°)
             let risers = PipeGeometry.risers(points: points)
             if !risers.isEmpty {
                 let rs = PipeGeometry.riserSymbolRadius(attrs) * transform.scale
                 let r = max(rs, 3)
-                if attrs.doubleLine { ctx.setLineWidth(baseWidth * 1.3) }
+                if attrs.doubleLine { ctx.setLineWidth(baseWidth * 1.15) }
+                // 立てチーズで本管に取り付く枝の立管は、本管側の継手(円)が記号を兼ねる
+                let suppressed: [Vec2] = junctions.compactMap {
+                    if case .teeBranch(_, _, let v) = $0.kind, v { return $0.position }
+                    return nil
+                }
                 for (idx, riser) in risers.enumerated() {
+                    if suppressed.contains(where: { $0.distance(to: riser.position) <= PipeNetwork.joinTolerance }) {
+                        continue
+                    }
                     let c = transform.toScreen(riser.position)
                     let rect = CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
                     ctx.setFillColor(theme.background)
                     ctx.fillEllipse(in: rect)
-                    if attrs.doubleLine || !attrs.autoFittings {
-                        ctx.strokeEllipse(in: rect)
-                        if riser.isUp {
-                            ctx.setFillColor(theme.color(forIndex: colorIndex))
-                            let d = r * 0.4
-                            ctx.fillEllipse(in: CGRect(x: c.x - d, y: c.y - d, width: d * 2, height: d * 2))
-                        } else {
-                            let d = r * 0.6
-                            ctx.move(to: CGPoint(x: c.x - d, y: c.y - d))
-                            ctx.addLine(to: CGPoint(x: c.x + d, y: c.y + d))
-                            ctx.move(to: CGPoint(x: c.x - d, y: c.y + d))
-                            ctx.addLine(to: CGPoint(x: c.x + d, y: c.y - d))
-                            ctx.strokePath()
-                        }
-                    } else if riser.isUp {
-                        // 立上り: 閉じた円
+                    if riser.isUp {
                         ctx.strokeEllipse(in: rect)
                     } else {
-                        // 立下り: 管側60°が開いたC形。開き方向=水平脚の方向
                         let lead = PipeSymbols.riserLead(points: points, riserIndex: idx)
                         let toward = lead?.toward ?? Vec2(-1, 0)
                         let a0 = atan2(toward.y, toward.x)
-                        // ワールド角a0±30°を開ける → 画面はy反転なので角度符号反転
+                        var halfOpen = Double.pi / 6
+                        if attrs.doubleLine {
+                            let rr = PipeGeometry.riserSymbolRadius(attrs)
+                            halfOpen = asin(min(max(attrs.outerDiameter / 2 / max(rr, 1e-9), 0.3), 0.95))
+                        }
+                        // ワールド角a0±halfOpenを開ける → 画面はy反転なので角度符号反転
                         ctx.addArc(center: CGPoint(x: c.x, y: c.y), radius: r,
-                                   startAngle: -(a0 + .pi / 6), endAngle: -(a0 - .pi / 6),
+                                   startAngle: -(a0 + halfOpen), endAngle: -(a0 - halfOpen),
                                    clockwise: true)
                         ctx.strokePath()
                     }

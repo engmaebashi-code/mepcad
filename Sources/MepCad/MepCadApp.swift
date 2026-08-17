@@ -92,6 +92,8 @@ final class CanvasUIState: ObservableObject {
     @Published var pipeCapEnds = false          // 接続されていない端部にキャップ(M6.3)
     @Published var pipeSymbolDrain: Double = 2.5   // 単線記号サイズ 排水(紙面mm)M6.5
     @Published var pipeSymbolSupply: Double = 2.0  // 単線記号サイズ 給水ほか(紙面mm)M6.5
+    @Published var pipeLongRadius = false        // 90°曲り部品を大曲(LL)に(排水)M6.6
+    @Published var pipeAnnotateMaterial = true   // 傍記に管種略号を含める M6.6
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -597,7 +599,9 @@ struct ContentView: View {
                                           doubleLine: uiState.pipeDoubleLine,
                                           autoFittings: uiState.pipeAutoFittings,
                                           fittingSeries: series, fittingDims: dims,
-                                          capEnds: uiState.pipeCapEnds, symbolSize: symbol),
+                                          capEnds: uiState.pipeCapEnds, symbolSize: symbol,
+                                          longRadius: drainStyle && uiState.pipeLongRadius,
+                                          annotateMaterial: uiState.pipeAnnotateMaterial),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
                     z: uiState.pipeLevel)
             }
@@ -680,6 +684,7 @@ struct TextPropertyCard: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                 TextField("", value: $uiState.textAngle, format: .number)
+                    .selectAllOnFocus()
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
                     .frame(width: 42)
@@ -820,6 +825,7 @@ struct PipePropertyCard: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
                     .frame(width: 58)
+                    .selectAllOnFocus()
                     .help("芯の高さ(mm)。作図中に変えると次の頂点で立管(立上り/立下り記号)が発生します")
                 Text("mm")
                     .font(.system(size: 10.5))
@@ -840,6 +846,15 @@ struct PipePropertyCard: View {
                     .toggleStyle(.checkbox)
                     .font(.system(size: 11))
                     .help("折れ点にエルボ、分岐にティーズ、口径違いにレデューサを自動発生(規格: \(seriesLabel))。複線は実形状、単線は記号。集計にも個数が出ます")
+                if isDrainStyleNow {
+                    Picker("", selection: $uiState.pipeLongRadius) {
+                        Text("エルボ").tag(false)
+                        Text("大曲").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 100)
+                    .help("90°曲り部品。大曲=LL(FILDERの90°大曲エルボ)。単線の丸みも大きくなります")
+                }
                 if !uiState.pipeDoubleLine {
                     Text("記号")
                         .font(.system(size: 11))
@@ -848,6 +863,7 @@ struct PipePropertyCard: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11))
                         .frame(width: 44)
+                        .selectAllOnFocus()
                         .help("単線記号の基準寸法(紙面mm)。管サイズに依らず一定。排水\(isDrainStyleNow ? "(この配管)" : "")2.5 / 給水2.0が既定。縮尺で詰まるときは小さく")
                     Text("mm")
                         .font(.system(size: 10.5))
@@ -862,6 +878,11 @@ struct PipePropertyCard: View {
                     .toggleStyle(.checkbox)
                     .font(.system(size: 11))
                     .help("最長区間の中央に口径を自動記入します")
+                Toggle("管種も", isOn: $uiState.pipeAnnotateMaterial)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                    .disabled(!uiState.pipeAnnotate)
+                    .help("傍記に管種略号を付ける(例: HI 20 / VP 75)")
             }
 
             Text("継手規格: \(seriesLabel)(管種と用途から自動)。高さを変えて次点を打つと立管が入ります")
@@ -971,6 +992,7 @@ struct LeaderPropertyCard: View {
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                     TextField("", value: $uiState.leaderAspect, format: .number)
+                        .selectAllOnFocus()
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11))
                         .frame(width: 42)
@@ -1215,6 +1237,7 @@ struct HatchPropertyCard: View {
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                     TextField("", value: $uiState.hatchA, format: .number)
+                        .selectAllOnFocus()
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11))
                         .frame(width: 50)
@@ -1223,6 +1246,7 @@ struct HatchPropertyCard: View {
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
                         TextField("", value: $uiState.hatchB, format: .number)
+                            .selectAllOnFocus()
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 11))
                             .frame(width: 50)
@@ -1231,6 +1255,7 @@ struct HatchPropertyCard: View {
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                     TextField("", value: $uiState.hatchAngle, format: .number)
+                        .selectAllOnFocus()
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11))
                         .frame(width: 46)
@@ -1360,4 +1385,28 @@ struct MepCadApp: App {
             }
         }
     }
+}
+
+
+// MARK: - 数値欄はクリックで全選択(M6.6)
+
+/// フォーカスが入ったら内容を全選択する(数値欄で「0の後ろにカーソル」にならないように)
+private struct SelectAllOnFocus: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focused($focused)
+            .onChange(of: focused) { _, isFocused in
+                guard isFocused else { return }
+                DispatchQueue.main.async {
+                    NSApp.sendAction(#selector(NSResponder.selectAll(_:)), to: nil, from: nil)
+                }
+            }
+    }
+}
+
+extension View {
+    /// 数値入力欄: フォーカス時に全選択
+    func selectAllOnFocus() -> some View { modifier(SelectAllOnFocus()) }
 }

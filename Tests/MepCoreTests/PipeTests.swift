@@ -16,7 +16,8 @@ final class PipeTests: XCTestCase {
                                                  material: "HIVP", materialLabel: "HIVP",
                                                  size: "50", sizeLabel: "50",
                                                  outerDiameter: 60,
-                                                 annotate: annotate, textHeight: 125)))
+                                                 annotate: annotate, textHeight: 125,
+                                                 annotateMaterial: false)))
     }
 
     /// 傍記は最長セグメントの中央・線の上側・読み下し方向
@@ -73,7 +74,7 @@ final class PipeTests: XCTestCase {
     // MARK: - M6.1: 高さ・複線・継手
 
     func testLevelLabelAndAnnotation() {
-        var attrs = PipeAttributes(sizeLabel: "50", textHeight: 125, datum: "2FL")
+        var attrs = PipeAttributes(sizeLabel: "50", textHeight: 125, datum: "2FL", annotateMaterial: false)
         XCTAssertEqual(attrs.levelLabel(0), "2FL±0")
         XCTAssertEqual(attrs.levelLabel(2500), "2FL+2500")
         attrs.datum = "GL"
@@ -197,6 +198,32 @@ final class PipeTests: XCTestCase {
         XCTAssertEqual(l45.fittings.count, 1)
         guard case .polygon(let p45) = l45.fittings[0].parts[0] else { return XCTFail() }
         XCTAssertEqual(p45[0].x, 920, accuracy: 1e-9)
+    }
+
+    /// 大曲(LL): 受口端はLLのA(178)、受口底は128 → 本体の外Rは128+57
+    func testDoubleLineLongRadiusElbow() {
+        let dims = PipeFittingDims(elbow90A: 112, elbow45A: 80, teeA: 113,
+                                   socketDepth: 50, socketOD: 124, capLength: 58, elbow90LLA: 178)
+        let attrs = PipeAttributes(outerDiameter: 114, annotate: false, doubleLine: true,
+                                   autoFittings: true, fittingDims: dims, longRadius: true)
+        let pts = v3([Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000)])
+        guard let layout = PipeGeometry.doubleLineLayout(points: pts, attrs: attrs),
+              case .polygon(let poly) = layout.fittings.first?.parts.first else { return XCTFail() }
+        XCTAssertEqual(poly[0].x, 1000 - 178, accuracy: 1e-9)
+        XCTAssertEqual(layout.runs[0].left.last!.x, 1000 - 128, accuracy: 1e-9)
+        XCTAssertTrue(poly.contains { abs($0.distance(to: Vec2(872, 128)) - 185) < 1e-6 })
+        // マスタにLLが無ければDL×1.6
+        XCTAssertEqual(PipeFittingDims(elbow90A: 100).effectiveElbow90LLA, 160, accuracy: 1e-9)
+    }
+
+    /// 傍記: 管種+口径(+高さ)。管種なし指定なら口径だけ
+    func testAnnotationText() {
+        var a = PipeAttributes(materialLabel: "HI", sizeLabel: "20")
+        XCTAssertEqual(PipeGeometry.annotationText(a, z: 0), "HI 20")
+        a.showLevel = true
+        XCTAssertEqual(PipeGeometry.annotationText(a, z: 2500), "HI 20 1FL+2500")
+        a.annotateMaterial = false
+        XCTAssertEqual(PipeGeometry.annotationText(a, z: 0), "20 1FL±0")
     }
 
     /// 継手Offなら継手四角形は出ない

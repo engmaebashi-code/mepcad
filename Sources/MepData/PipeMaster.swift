@@ -180,6 +180,7 @@ public enum PipeAggregator {
                     case .tee: tee += 1
                     case .cap: cap += 1
                     case .reducer: red += 1
+                    case .teeBranch: break
                     }
                 }
             }
@@ -297,12 +298,16 @@ public final class FittingMaster {
         let e45 = row(series: series, kind: "elbow45", size: size)
         let tee = row(series: series, kind: "tee", size: size)
         let cap = row(series: series, kind: "cap", size: size)
+        let ll = row(series: series, kind: "elbow90LL", size: size)
+        let y45 = row(series: series, kind: "y45", size: size)
         guard let e90 else { return PipeFittingDims() }
         return PipeFittingDims(elbow90A: e90.a,
                                elbow45A: e45?.a ?? e90.a * 0.6,
                                teeA: tee?.a ?? e90.a,
                                socketDepth: e90.socketDepth,
                                socketOD: e90.socketOD,
-                               capLength: cap?.a ?? e90.socketDepth + 8)
+                               capLength: cap?.a ?? e90.socketDepth + 8,
+                               elbow90LLA: ll?.a ?? 0,
+                               y45A: y45?.a ?? 0)
     }
 }

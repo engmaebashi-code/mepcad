@@ -88,7 +88,8 @@ final class PipeSymbolsTests: XCTestCase {
 
         let tee = PipeJunction(pipeID: id, position: Vec2(500, 0), z: 0,
                                kind: .tee(branchDirection: Vec2(0, 1), branchOD: 48, branchSizeLabel: "40",
-                                          branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0)))
+                                          branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0),
+                                          verticalBranch: false))
         XCTAssertEqual(PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)],
                                             attrs: attrs(series: "DV", usage: "S"), junctions: [tee]).count, 3)
         XCTAssertEqual(PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)],
@@ -96,7 +97,8 @@ final class PipeSymbolsTests: XCTestCase {
         // 45°枝(排水): 主管上流-0.75u/下流+1.25u、枝1.25u
         let y = PipeJunction(pipeID: id, position: Vec2(500, 0), z: 0,
                              kind: .tee(branchDirection: Vec2(0.7071, 0.7071), branchOD: 48, branchSizeLabel: "40",
-                                        branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0)))
+                                        branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0),
+                                        verticalBranch: false))
         let ye = PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)],
                                       attrs: attrs(series: "DV", usage: "S"), junctions: [y])
         XCTAssertEqual(ye.count, 3)
@@ -105,11 +107,90 @@ final class PipeSymbolsTests: XCTestCase {
         XCTAssertEqual(yb.x, 500 + 1.25 * 125, accuracy: 1e-6)
     }
 
+    /// 立てチーズ: 主管±u・枝uのティック+直径uの円。大曲Y(LT): 主管-1.25u/+0.75u+45°スイープ+枝u
+    func testVerticalTeeAndLTSymbols() {
+        let id = EntityID()
+        let vt = PipeJunction(pipeID: id, position: Vec2(500, 0), z: 0,
+                              kind: .tee(branchDirection: Vec2(0, 1), branchOD: 60, branchSizeLabel: "50",
+                                         branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0),
+                                         verticalBranch: true))
+        let els = PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)],
+                                       attrs: attrs(series: "DV", usage: "S"), junctions: [vt])
+        XCTAssertEqual(els.count, 4)
+        XCTAssertTrue(els.contains { if case .circle(let c, let r) = $0 { return c == Vec2(500, 0) && abs(r - 62.5) < 1e-9 }; return false })
+        var a = attrs(series: "DV", usage: "S")
+        a.longRadius = true
+        let lt = PipeJunction(pipeID: id, position: Vec2(500, 0), z: 0,
+                              kind: .tee(branchDirection: Vec2(0, 1), branchOD: 60, branchSizeLabel: "50",
+                                         branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0),
+                                         verticalBranch: false))
+        let le = PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)], attrs: a, junctions: [lt])
+        XCTAssertEqual(le.count, 4)
+        guard case .segment(let t1, _) = le[0], case .segment(let t2, _) = le[1],
+              case .segment(let s0, let s1) = le[2] else { return XCTFail() }
+        XCTAssertEqual(t1.x, 500 - 1.25 * 125, accuracy: 1e-6)
+        XCTAssertEqual(t2.x, 500 + 0.75 * 125, accuracy: 1e-6)
+        XCTAssertEqual(s0, Vec2(500 - 62.5, 0))
+        XCTAssertEqual(s1, Vec2(500, 62.5))
+        // 枝側: LT本管への枝端は単線の管体を0.5u手前で切る
+        let br = PipeJunction(pipeID: id, position: Vec2(1000, 0), z: 0,
+                              kind: .teeBranch(hostDirection: Vec2(0, 1), hostLongRadius: true, vertical: false))
+        let runs = PipeSymbols.singleLineRuns(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)], attrs: a, junctions: [br])
+        XCTAssertEqual(runs[0].last!.x, 1000 - 62.5, accuracy: 1e-9)
+    }
+
+    /// 45°立ち下がり: 平面直進で片脚が勾配 → 水平脚にティック+「))」2本(作図方向へ)。
+    /// 立管(段差)は両側の水平脚にティック
+    func testTiltMarksAndRiserTicks() {
+        // 水平(0..1000, z300) → 勾配(1000..1300, z300→0) → 水平(1300..2000, z0)
+        let pts = [Vec3(0, 0, 300), Vec3(1000, 0, 300), Vec3(1300, 0, 0), Vec3(2000, 0, 0)]
+        let els = PipeSymbols.elements(points: pts, attrs: attrs(series: "DV", usage: "S"), junctions: [])
+        let arcs = els.filter { if case .arc = $0 { return true }; return false }
+        let segs = els.filter { if case .segment = $0 { return true }; return false }
+        XCTAssertEqual(arcs.count, 4)      // 2箇所×2本
+        XCTAssertEqual(segs.count, 2)      // 水平脚のティック×2
+        guard case .segment(let a, _) = segs[0] else { return XCTFail() }
+        XCTAssertEqual(a.x, 1000 - 125, accuracy: 1e-9)
+        // 段差(立管の両側に水平脚): ティック2本
+        let step = [Vec3(0, 0, 0), Vec3(1000, 0, 0), Vec3(1000, 0, 300), Vec3(2000, 0, 300)]
+        let se = PipeSymbols.elements(points: step, attrs: attrs(series: "DV", usage: "S"), junctions: [])
+        XCTAssertEqual(se.count, 2)
+        XCTAssertEqual(PipeSymbols.riserLeads(points: step, riserIndex: 0).count, 2)
+    }
+
     /// 基準寸法未設定なら文字高さ(排水)・0.8倍(給水)にフォールバック
     func testSymbolSizeFallback() {
         XCTAssertEqual(PipeAttributes(usage: "S", textHeight: 125).effectiveSymbolSize, 125, accuracy: 1e-9)
         XCTAssertEqual(PipeAttributes(usage: "CW", textHeight: 125).effectiveSymbolSize, 100, accuracy: 1e-9)
         XCTAssertEqual(PipeAttributes(usage: "CW", textHeight: 125, symbolSize: 90).effectiveSymbolSize, 90, accuracy: 1e-9)
+    }
+
+    /// 大曲(LL): 丸みR=4u、接点=4u(90°)、ティックは接点のu先。管体は接点で切れる
+    func testLongRadiusCornerAndTrimmedRuns() {
+        let g = PipeSymbols.cornerGeometry(unit: 125, turn: .pi / 2, longRadius: true, len1: 2000, len2: 2000)
+        XCTAssertEqual(g.radius, 500, accuracy: 1e-9)
+        XCTAssertEqual(g.tangent, 500, accuracy: 1e-6)
+        XCTAssertEqual(g.tick, 625, accuracy: 1e-6)
+        // 脚が短ければ縮む(接点は脚の半分×0.8まで)
+        let g2 = PipeSymbols.cornerGeometry(unit: 125, turn: .pi / 2, longRadius: true, len1: 400, len2: 2000)
+        XCTAssertEqual(g2.tangent, 160, accuracy: 1e-6)
+        XCTAssertEqual(g2.tick, 200, accuracy: 1e-6)   // 接点+u だが脚の半分(200)で頭打ち
+        // 排水(DL): 管体は折れ点からuの接点で2本に分かれる
+        var a = attrs(series: "DV", usage: "S")
+        let pts = [Vec3(0, 0, 0), Vec3(1000, 0, 0), Vec3(1000, 1000, 0)]
+        let runs = PipeSymbols.singleLineRuns(points: pts, attrs: a)
+        XCTAssertEqual(runs.count, 2)
+        XCTAssertEqual(runs[0].last!.x, 875, accuracy: 1e-9)
+        XCTAssertEqual(runs[1].first!.y, 125, accuracy: 1e-9)
+        // 給水は角のまま1本
+        XCTAssertEqual(PipeSymbols.singleLineRuns(points: pts, attrs: attrs(series: "HI")).count, 1)
+        // 大曲なら丸みR=4u、ティックは5u
+        a.longRadius = true
+        let els = PipeSymbols.elements(points: pts, attrs: a, junctions: [])
+        guard case .arc(_, let r, _, _)? = els.first(where: { if case .arc = $0 { return true }; return false }),
+              case .segment(let t0, _) = els[0] else { return XCTFail() }
+        XCTAssertEqual(r, 500, accuracy: 1e-6)
+        XCTAssertEqual(t0.x, 1000 - 625, accuracy: 1e-6)
     }
 
     /// 規格未設定でも用途で排水/給水スタイルを判定

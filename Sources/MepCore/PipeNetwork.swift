@@ -13,9 +13,14 @@ public struct PipeJunction: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         /// 分岐(本管側)。branchDirection=枝管の方向(単位ベクトル・平面)、branchOD=枝管外径、
         /// branchDims=枝管側の継手寸法(径違いティーズの寸法補間用)
-        /// mainDirection=本管の区間方向(単位・平面)
+        /// mainDirection=本管の区間方向(単位・平面。作図方向=流れ方向として下流側の判定に使う)、
+        /// verticalBranch=枝管が立管で本管に取り付く(立てチーズ: 枝の受口は上/下向き→平面では円)
         case tee(branchDirection: Vec2, branchOD: Double, branchSizeLabel: String,
-                 branchDims: PipeFittingDims, mainDirection: Vec2)
+                 branchDims: PipeFittingDims, mainDirection: Vec2, verticalBranch: Bool)
+        /// 枝管側の印(枝管の端が本管に取り付いている)。hostDirection=本管方向、
+        /// hostLongRadius=本管が大曲(LT)指定、vertical=立てチーズ(枝の端が立管)。
+        /// 単線の枝端の切り詰め・立管記号の抑制に使う(形状・集計には出ない)
+        case teeBranch(hostDirection: Vec2, hostLongRadius: Bool, vertical: Bool)
         /// 口径変更(大きい方の側)。direction=接続相手へ向かう方向、otherOD=相手の外径、
         /// otherDims=相手側の継手寸法(小径側受口)
         case reducer(direction: Vec2, otherOD: Double, otherSizeLabel: String,
@@ -52,13 +57,17 @@ public enum PipeNetwork {
 
         // 端点(始点・終点)ごとに接続先を探す
         for p in pipes {
-            var ends: [(point: Vec3, dirIn: Vec2)] = []
-            // 始点: 内側→端へ向かう方向 = points[1]→points[0](平面)。立管ならその先の水平区間を使う
+            var ends: [(point: Vec3, dirIn: Vec2, vertical: Bool)] = []
+            // 始点: 内側→端へ向かう方向 = points[1]→points[0](平面)。立管ならその先の水平区間を使う。
+            // vertical=端の区間が立管(平面同一点)
             if let d0 = outwardDirection(points: p.points, atStart: true) {
-                ends.append((p.points[0], d0))
+                let v = p.points[1].xy.distance(to: p.points[0].xy) <= PipeGeometry.planEpsilon
+                ends.append((p.points[0], d0, v))
             }
             if let d1 = outwardDirection(points: p.points, atStart: false) {
-                ends.append((p.points[p.points.count - 1], d1))
+                let n = p.points.count
+                let v = p.points[n - 2].xy.distance(to: p.points[n - 1].xy) <= PipeGeometry.planEpsilon
+                ends.append((p.points[n - 1], d1, v))
             }
             for end in ends {
                 var connected = false
@@ -95,6 +104,12 @@ public enum PipeNetwork {
                         let branchDir = Vec2(-end.dirIn.x, -end.dirIn.y)
                         let mainVec = b.xy - a.xy
                         let mainDir = mainVec * (1 / mainVec.length)
+                        // 枝管側にも印(単線の枝端の切り詰め・立管記号の抑制用)
+                        result[p.id, default: []].append(
+                            PipeJunction(pipeID: p.id, position: foot, z: a.z,
+                                         kind: .teeBranch(hostDirection: mainDir,
+                                                          hostLongRadius: other.attrs.longRadius,
+                                                          vertical: end.vertical)))
                         // 同じ点に両側から枝管が来る場合(=クロス)は1つのティーズにまとめる
                         if (result[other.id] ?? []).contains(where: {
                             if case .tee = $0.kind, $0.position.distance(to: foot) <= tol { return true }
@@ -106,7 +121,8 @@ public enum PipeNetwork {
                                                     branchOD: p.attrs.outerDiameter,
                                                     branchSizeLabel: p.attrs.sizeLabel,
                                                     branchDims: p.attrs.effectiveFittingDims,
-                                                    mainDirection: mainDir)))
+                                                    mainDirection: mainDir,
+                                                    verticalBranch: end.vertical)))
                         break
                     }
                     if connected { break }
@@ -148,7 +164,7 @@ public enum PipeNetwork {
         let s = max(dims.socketOD / 2, r * 1.05)
         let d = dims.socketDepth
         switch j.kind {
-        case .tee(let bdir, let bod, _, let bdims, let mainDir):
+        case .tee(let bdir, let bod, _, let bdims, let mainDir, let vertical):
             // 本管方向。枝が斜め(45°Y)でも本体は本管に沿わせ、枝受口は枝方向へ
             let along = mainDir
             let side = along.x * bdir.y - along.y * bdir.x   // 枝がどちら側か(左折正)
@@ -165,22 +181,56 @@ public enum PipeNetwork {
             func w(_ x: Double, _ y: Double) -> Vec2 { j.position + along * x + ny * y }
             let bn = Vec2(-bdir.y, bdir.x)      // 枝の法線
             func bw(_ t: Double, _ o: Double) -> Vec2 { j.position + bdir * t + bn * o }
+            // 本管部だけの多角形(受口2つ+本体。x範囲 -aUp〜+aDown)
+            func hostPart(aUp: Double, aDown: Double, downSocket: Bool = true) -> [Vec2] {
+                let a2u = max(aUp - d, r + 1)
+                if !downSocket {
+                    // 下流側は受口なし(別部品=大曲の受口が被さる)。本体はaDownまで
+                    return [w(-aUp, -s), w(-a2u, -s), w(-a2u, -r), w(aDown, -r),
+                            w(aDown, r), w(-a2u, r), w(-a2u, s), w(-aUp, s)]
+                }
+                let a2d = max(aDown - d, r + 1)
+                return [w(-aUp, -s), w(-a2u, -s), w(-a2u, -r), w(a2d, -r), w(a2d, -s), w(aDown, -s),
+                        w(aDown, s), w(a2d, s), w(a2d, r), w(-a2u, r), w(-a2u, s), w(-aUp, s)]
+            }
+            let cosb = bdir.x * along.x + bdir.y * along.y
+            // 立てチーズ: 枝の受口は上/下向き → 本管部+枝受口外径の円
+            if vertical {
+                return [PipeFittingShape(parts: [.polygon(hostPart(aUp: aRun, aDown: aRun)),
+                                                 .circle(center: j.position, radius: sb)])]
+            }
             // 枝の付け根: 枝の外形線(オフセットo=±rb)が本管外形線(y=r)と交わる枝方向距離
             let sinb = max(bdir.x * ny.x + bdir.y * ny.y, 0.2)
             let bnY = bn.x * ny.x + bn.y * ny.y
             func tRoot(_ o: Double) -> Double { max((r - bnY * o) / sinb, 0) }
-            let cosb = abs(bdir.x * along.x + bdir.y * along.y)
-            if cosb > 0.3 {
-                // 斜め分岐(45°Yなど): 本体(本管部)と枝を別部品で(枝を後から重ねる)。
-                // 枝の中心〜端は同径ティーズの1.6倍(DV Y: 194/113)で概算
-                var aBrY = aBr * 1.6
-                let a2bY = max(aBrY - db, r + 1, tRoot(-rb) + 1, tRoot(rb) + 1)
-                aBrY = max(aBrY, a2bY + db * 0.5)
-                let body: [Vec2] = [w(-aRun, -s), w(-a2r, -s), w(-a2r, -r), w(a2r, -r), w(a2r, -s), w(aRun, -s),
-                                    w(aRun, s), w(a2r, s), w(a2r, r), w(-a2r, r), w(-a2r, s), w(-aRun, s)]
+            if abs(cosb) > 0.3 {
+                // 斜め分岐(45°Y): 主管は枝が傾く側(下流)が短い。DV Y(2157)の比: 上流L1≈0.95L3、
+                // 下流L2≈0.42L3、枝L3(=y45A、無ければDT×1.72)。本体(本管部)+枝を別部品で(枝を後から重ねる)
+                let l3 = dims.y45A > 0 ? (sameSize ? dims.y45A : (dims.y45A + (bdims.y45A > 0 ? bdims.y45A : dims.y45A)) / 2)
+                                       : aRun * 1.72
+                let l1 = l3 * 0.95, l2 = l3 * 0.42
+                let downstream = cosb > 0    // 枝が+along側へ傾く=下流は+along
+                let aUp = downstream ? l1 : l2
+                let aDown = downstream ? l2 : l1
+                let a2bY = max(l3 - db, r + 1, tRoot(-rb) + 1, tRoot(rb) + 1)
+                let aBrY = max(l3, a2bY + db * 0.5)
                 let branch: [Vec2] = [bw(tRoot(-rb), -rb), bw(a2bY, -rb), bw(a2bY, -sb), bw(aBrY, -sb),
                                       bw(aBrY, sb), bw(a2bY, sb), bw(a2bY, rb), bw(tRoot(rb), rb)]
-                return [PipeFittingShape(parts: [.polygon(body), .polygon(branch)])]
+                return [PipeFittingShape(parts: [.polygon(hostPart(aUp: aUp, aDown: aDown)), .polygon(branch)])]
+            }
+            if attrs.longRadius, dims.effectiveElbow90LLA > 0 {
+                // 大曲Y(LT): 枝→下流(=本管の作図方向)を大曲エルボ(LL)で結び、上流側は短い受口。
+                // DV LT(2155): 上流L1≈0.53×A_LL(95/178)、下流・枝=A_LL
+                let all = dims.effectiveElbow90LLA
+                let aUp = all * 0.53
+                let hostPoly = hostPart(aUp: aUp, aDown: max(all - d, r + 1), downSocket: false)
+                var parts: [PipeFittingShape.Part] = [.polygon(hostPoly)]
+                if let sweep = PipeGeometry.elbowShape(corner: j.position, u1: bdir, u2: along,
+                                                       len1: all * 2, len2: all * 2,
+                                                       dims: dims, pipeRadius: r, longRadius: true) {
+                    parts += sweep.parts
+                }
+                return [PipeFittingShape(parts: parts)]
             }
             let poly: [Vec2] = [
                 w(-aRun, -s), w(-a2r, -s), w(-a2r, -r), w(a2r, -r), w(a2r, -s), w(aRun, -s),
@@ -200,6 +250,8 @@ public enum PipeNetwork {
                 w(-d, s), w(0, s), w(taper, s2), w(taper + d2, s2),
                 w(taper + d2, -s2), w(taper, -s2), w(0, -s), w(-d, -s)]
             return [PipeFittingShape(parts: [.polygon(poly)])]
+        case .teeBranch:
+            return []
         case .cap(let dir):
             let len = max(dims.capLength, d + 5)
             let n = Vec2(-dir.y, dir.x)

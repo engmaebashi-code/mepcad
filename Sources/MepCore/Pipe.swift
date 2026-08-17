@@ -47,6 +47,10 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     /// 単線シンボルの基準寸法(実寸mm=紙面mm×縮尺。0なら文字高さから既定)。M6.5
     /// 管サイズに依らず紙面上で一定(FILDER: 排水2.5mm・給水は一回り小さく)
     public var symbolSize: Double
+    /// 90°曲り部品を大曲エルボ(LL)にする(排水系。FILDERの「90°曲り部品」)。M6.6
+    public var longRadius: Bool
+    /// 傍記に管種略号を含める("HI 20" のように)。M6.6
+    public var annotateMaterial: Bool
 
     public init(usage: String = "CW", usageName: String = "給水",
                 material: String = "HIVP", materialLabel: String = "HIVP",
@@ -56,7 +60,8 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
                 datum: String = "1FL", showLevel: Bool = false,
                 doubleLine: Bool = false, autoFittings: Bool = true,
                 fittingSeries: String = "", fittingDims: PipeFittingDims = PipeFittingDims(),
-                capEnds: Bool = false, symbolSize: Double = 0) {
+                capEnds: Bool = false, symbolSize: Double = 0,
+                longRadius: Bool = false, annotateMaterial: Bool = true) {
         self.usage = usage
         self.usageName = usageName
         self.material = material
@@ -74,6 +79,8 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         self.fittingDims = fittingDims
         self.capEnds = capEnds
         self.symbolSize = symbolSize
+        self.longRadius = longRadius
+        self.annotateMaterial = annotateMaterial
     }
 
     /// 単線シンボルの実効基準寸法(実寸mm)。未設定なら文字高さ(排水)・その0.8倍(給水)
@@ -110,16 +117,26 @@ public struct PipeFittingDims: Equatable, Codable, Sendable {
     public var socketOD: Double
     /// キャップの長さ
     public var capLength: Double
+    /// 90°大曲エルボ(LL)の中心〜端面(0=マスタに無い→DLの1.6倍で概算)。M6.6
+    public var elbow90LLA: Double
+    /// 45°Y(排水)の中心〜枝端面(0=マスタに無い→DTの1.72倍で概算)。M6.7
+    public var y45A: Double
 
     public init(elbow90A: Double = 0, elbow45A: Double = 0, teeA: Double = 0,
-                socketDepth: Double = 0, socketOD: Double = 0, capLength: Double = 0) {
+                socketDepth: Double = 0, socketOD: Double = 0, capLength: Double = 0,
+                elbow90LLA: Double = 0, y45A: Double = 0) {
         self.elbow90A = elbow90A
         self.elbow45A = elbow45A
         self.teeA = teeA
         self.socketDepth = socketDepth
         self.socketOD = socketOD
         self.capLength = capLength
+        self.elbow90LLA = elbow90LLA
+        self.y45A = y45A
     }
+
+    /// 大曲エルボの実効A(マスタ値、無ければDL×1.6。DV100: 178/112)
+    public var effectiveElbow90LLA: Double { elbow90LLA > 0 ? elbow90LLA : elbow90A * 1.6 }
 
     public var isEmpty: Bool { socketOD <= 0 || elbow90A <= 0 }
 
@@ -162,6 +179,8 @@ public struct PipeFittingShape: Equatable, Sendable {
     public enum Part: Equatable, Sendable {
         case polygon([Vec2])
         case circle(center: Vec2, radius: Double)
+        /// 開いた折れ線(線のみ・塗らない。傾いた受口の縁=楕円弧など)
+        case polyline([Vec2])
     }
     public var parts: [Part]
     public init(parts: [Part]) { self.parts = parts }
@@ -172,6 +191,7 @@ public struct PipeFittingShape: Equatable, Sendable {
             case .polygon(let pts): return pts
             case .circle(let c, let r):
                 return [Vec2(c.x - r, c.y - r), Vec2(c.x + r, c.y + r)]
+            case .polyline(let pts): return pts
             }
         }
     }
@@ -240,7 +260,10 @@ public enum PipeGeometry {
 
     /// 傍記の内容("50" / "50 1FL+2500")。高さは指定区間のz
     public static func annotationText(_ attrs: PipeAttributes, z: Double) -> String {
-        attrs.showLevel ? "\(attrs.sizeLabel) \(attrs.levelLabel(z))" : attrs.sizeLabel
+        var s = attrs.annotateMaterial && !attrs.materialLabel.isEmpty
+            ? "\(attrs.materialLabel) \(attrs.sizeLabel)" : attrs.sizeLabel
+        if attrs.showLevel { s += " " + attrs.levelLabel(z) }
+        return s
     }
 
     /// 口径傍記の配置(平面上で最長の区間の中点・線の左側・読み下し方向)。
@@ -337,14 +360,16 @@ public enum PipeGeometry {
 
     // MARK: - 複線表現
 
-    /// エルボの外形寸法(実効。角度で90°/45°を選ぶ)
-    static func elbowA(_ dims: PipeFittingDims, turnDeg: Double) -> Double {
-        turnDeg > 67.5 ? dims.elbow90A : dims.elbow45A
+    /// エルボの外形寸法(実効。角度で90°/45°、90°は大曲(LL)指定ならLLのA)
+    static func elbowA(_ dims: PipeFittingDims, turnDeg: Double, longRadius: Bool = false) -> Double {
+        if turnDeg > 67.5 { return longRadius ? dims.effectiveElbow90LLA : dims.elbow90A }
+        return dims.elbow45A
     }
 
     /// エルボの受口底までの距離a2(脚の長さで頭打ち。外形線の切り詰め量と共通)
-    static func elbowSocketBottom(dims: PipeFittingDims, turnDeg: Double, len1: Double, len2: Double) -> Double {
-        let a = elbowA(dims, turnDeg: turnDeg)
+    static func elbowSocketBottom(dims: PipeFittingDims, turnDeg: Double, len1: Double, len2: Double,
+                                  longRadius: Bool = false) -> Double {
+        let a = elbowA(dims, turnDeg: turnDeg, longRadius: longRadius)
         let a1 = min(a, len1)
         let a2Leg = min(a, len2)
         return min(max(a - dims.socketDepth, 0), max(a1 - 1, 0), max(a2Leg - 1, 0))
@@ -353,20 +378,24 @@ public enum PipeGeometry {
     /// 平面エルボの実形状(受口2つ+曲がり本体)。メーカー図面どおり、本体は
     /// 「受口底の面同士の交点C」を中心とする環状扇形(外径=t+r、内径=t−r)。
     /// - u1: 折れ点→手前の頂点方向、u2: 折れ点→次の頂点方向(単位)。len1/len2: 各脚の長さ
+    /// - slopedLeg: 1/2ならその脚が勾配(45°立ち下がり等の「ひねり」)。受口矩形の代わりに
+    ///   傾いた受口の縁(楕円弧2本)を描く(FILDER部品DVDL1005の見え方)。0=両脚とも水平
     public static func elbowShape(corner p: Vec2, u1: Vec2, u2: Vec2, len1: Double, len2: Double,
-                                  dims: PipeFittingDims, pipeRadius r: Double) -> PipeFittingShape? {
+                                  dims: PipeFittingDims, pipeRadius r: Double,
+                                  longRadius: Bool = false, slopedLeg: Int = 0) -> PipeFittingShape? {
         let dot = max(-1, min(1, u1.x * u2.x + u1.y * u2.y))
         let phi = acos(dot)                       // 脚と脚のなす角(π=直進)
         let turn = Double.pi - phi                // 折れ角
         let turnDeg = turn * 180 / .pi
         guard turnDeg > 2, phi > 0.05 else { return nil }
-        let a = elbowA(dims, turnDeg: turnDeg)
+        let a = elbowA(dims, turnDeg: turnDeg, longRadius: longRadius)
         let s = dims.socketOD / 2
         guard a > 0, s > 0 else { return nil }
         // 各脚の受口端(A)は脚の長さで頭打ち。受口底(a2)は共通(短い方に合わせる)
         let a1 = min(a, len1)
         let a2Leg = min(a, len2)
-        let a2 = elbowSocketBottom(dims: dims, turnDeg: turnDeg, len1: len1, len2: len2)
+        let a2 = elbowSocketBottom(dims: dims, turnDeg: turnDeg, len1: len1, len2: len2,
+                                   longRadius: longRadius)
         // 内側二等分線方向と受口底面の交点C
         let bis = u1 + u2
         let bl = bis.length
@@ -393,16 +422,28 @@ public enum PipeGeometry {
         while sweep < -.pi { sweep += 2 * .pi }
         let segs = max(4, Int((abs(sweep) * 180 / .pi / 10).rounded(.up)))
         var poly: [Vec2] = []
-        poly.append(p + u1 * a1 + n1 * s)
-        poly.append(p + u1 * a2 + n1 * s)
+        var extra: [PipeFittingShape.Part] = []
+        if slopedLeg == 1 {
+            // 脚1が勾配: 受口矩形なし。受口底で閉じ、傾いた受口の縁(楕円弧)を添える
+            poly.append(p + u1 * a2 + n1 * r)
+            extra += tiltedSocketRims(at: p + u1 * a2, dir: u1, halfWidth: s, depth: dims.socketDepth)
+        } else {
+            poly.append(p + u1 * a1 + n1 * s)
+            poly.append(p + u1 * a2 + n1 * s)
+        }
         for k in 0...segs {
             let ang = ang1 + sweep * Double(k) / Double(segs)
             poly.append(c + Vec2(cos(ang), sin(ang)) * ro)
         }
-        poly.append(p + u2 * a2 + n2 * s)
-        poly.append(p + u2 * a2Leg + n2 * s)
-        poly.append(p + u2 * a2Leg - n2 * s)
-        poly.append(p + u2 * a2 - n2 * s)
+        if slopedLeg == 2 {
+            poly.append(p + u2 * a2 - n2 * r)
+            extra += tiltedSocketRims(at: p + u2 * a2, dir: u2, halfWidth: s, depth: dims.socketDepth)
+        } else {
+            poly.append(p + u2 * a2 + n2 * s)
+            poly.append(p + u2 * a2Leg + n2 * s)
+            poly.append(p + u2 * a2Leg - n2 * s)
+            poly.append(p + u2 * a2 - n2 * s)
+        }
         if ri > 1e-9 {
             for k in 0...segs {
                 let ang = ang2 - sweep * Double(k) / Double(segs)
@@ -411,9 +452,41 @@ public enum PipeGeometry {
         } else {
             poly.append(c)
         }
-        poly.append(p + u1 * a2 - n1 * s)
-        poly.append(p + u1 * a1 - n1 * s)
-        return PipeFittingShape(parts: [.polygon(poly)])
+        if slopedLeg == 1 {
+            poly.append(p + u1 * a2 - n1 * r)
+        } else {
+            poly.append(p + u1 * a2 - n1 * s)
+            poly.append(p + u1 * a1 - n1 * s)
+        }
+        return PipeFittingShape(parts: [.polygon(poly)] + extra)
+    }
+
+    /// 傾いた(45°勾配の)受口を真上から見た縁: 半楕円弧2本(受口端と受口底。奥行きは受口深さ×cos45°)。
+    /// 楕円は脚方向に半径halfWidth×sin45°、直交方向にhalfWidth。dir方向へ膨らむ
+    /// - dir: 勾配脚の方向(2本目の弧はこの方向へ受口深さ×cos45°ずらす)
+    /// - bulge: 弧の膨らむ方向(省略時=dir。45°立ち下がりでは作図方向)
+    static func tiltedSocketRims(at origin: Vec2, dir: Vec2, halfWidth s: Double, depth: Double,
+                                 bulge: Vec2? = nil) -> [PipeFittingShape.Part] {
+        let b = bulge ?? dir
+        let n = Vec2(-b.y, b.x)
+        let along = s * 0.7071
+        var parts: [PipeFittingShape.Part] = []
+        for offset in [0.0, depth * 0.7071] {
+            let c = origin + dir * offset
+            var pts: [Vec2] = []
+            for k in 0...12 {
+                let th = -Double.pi / 2 + Double.pi * Double(k) / 12
+                pts.append(c + b * (along * cos(th)) + n * (s * sin(th)))
+            }
+            parts.append(.polyline(pts))
+        }
+        return parts
+    }
+
+    /// 傾き(勾配)の判定: 平面長さに対する高低差の比(tan20°以上で勾配脚とみなす)
+    static func isSloped(_ a: Vec3, _ b: Vec3) -> Bool {
+        let plan = a.xy.distance(to: b.xy)
+        return plan > planEpsilon && abs(b.z - a.z) / plan > 0.36
     }
 
     /// 受口1個の四角形(始点aから方向uへ、a2〜aの区間、幅=受口外径)
@@ -473,14 +546,43 @@ public enum PipeGeometry {
                     for i in 1..<(n - 1) {
                         let u1 = Vec2(-dirs[i - 1].x, -dirs[i - 1].y)
                         let u2 = dirs[i]
+                        let sloped1 = isSloped(run[i - 1], run[i])
+                        let sloped2 = isSloped(run[i], run[i + 1])
+                        let dot = max(-1, min(1, u1.x * u2.x + u1.y * u2.y))
+                        let turnDeg = (Double.pi - acos(dot)) * 180 / .pi
+                        if turnDeg <= 2 {
+                            // 平面では直進。片脚だけ勾配なら「45°立ち下がり/上がり」の45°エルボ:
+                            // 水平脚に受口、勾配脚側は傾いた受口の縁(楕円弧×2。膨らみは作図方向)
+                            guard sloped1 != sloped2 else { continue }
+                            let a = dims.elbow45A
+                            guard a > 0 else { continue }
+                            let a2 = max(a - dims.socketDepth, 0)
+                            if sloped2 {
+                                let aa = min(a, lens[i - 1]), aa2 = max(min(a2, aa - 1, lens[i - 1] * 0.5), 0)
+                                shapes.append(PipeFittingShape(parts: [
+                                    .polygon(socketRect(from: pts[i], dir: u1, a2: aa2, a: aa, halfWidth: s))]
+                                    + tiltedSocketRims(at: pts[i], dir: u2, halfWidth: s, depth: dims.socketDepth)))
+                                trimEnd[i - 1] = aa2
+                            } else {
+                                let aa = min(a, lens[i]), aa2 = max(min(a2, aa - 1, lens[i] * 0.5), 0)
+                                shapes.append(PipeFittingShape(parts: [
+                                    .polygon(socketRect(from: pts[i], dir: u2, a2: aa2, a: aa, halfWidth: s))]
+                                    + tiltedSocketRims(at: pts[i], dir: u1, halfWidth: s, depth: dims.socketDepth,
+                                                       bulge: u2)))
+                                trimStart[i] = aa2
+                            }
+                            continue
+                        }
+                        // 折れ点のエルボ。片脚が勾配なら「ひねり」(その脚は傾いた受口の縁)
+                        let slopedLeg = sloped1 && !sloped2 ? 1 : (!sloped1 && sloped2 ? 2 : 0)
                         if let shape = elbowShape(corner: pts[i], u1: u1, u2: u2,
                                                   len1: lens[i - 1], len2: lens[i],
-                                                  dims: dims, pipeRadius: r) {
+                                                  dims: dims, pipeRadius: r,
+                                                  longRadius: attrs.longRadius, slopedLeg: slopedLeg) {
                             shapes.append(shape)
-                            let dot = max(-1, min(1, u1.x * u2.x + u1.y * u2.y))
-                            let turnDeg = (Double.pi - acos(dot)) * 180 / .pi
                             let a2 = elbowSocketBottom(dims: dims, turnDeg: turnDeg,
-                                                       len1: lens[i - 1], len2: lens[i])
+                                                       len1: lens[i - 1], len2: lens[i],
+                                                       longRadius: attrs.longRadius)
                             trimEnd[i - 1] = min(a2, lens[i - 1] * 0.5)
                             trimStart[i] = min(a2, lens[i] * 0.5)
                         }

@@ -516,6 +516,8 @@ struct PropertyPanelView: View {
                                 Divider()
                                 Button("傍記を表示") { controller.applyPipeAnnotate(true) }
                                 Button("傍記を非表示") { controller.applyPipeAnnotate(false) }
+                                Button("傍記に管種を表示") { controller.applyPipeAnnotateMaterial(true) }
+                                Button("傍記の管種を非表示") { controller.applyPipeAnnotateMaterial(false) }
                             } label: {
                                 Text("用途").font(.system(size: 11))
                             }
@@ -528,6 +530,8 @@ struct PropertyPanelView: View {
                                 Button("継手を非表示") { controller.applyPipeAutoFittings(false) }
                                 Button("端部キャップあり") { controller.applyPipeCapEnds(true) }
                                 Button("端部キャップなし") { controller.applyPipeCapEnds(false) }
+                                Button("90°曲り: エルボ") { controller.applyPipeLongRadius(false) }
+                                Button("90°曲り: 大曲") { controller.applyPipeLongRadius(true) }
                                 Divider()
                                 Menu("単線記号サイズ") {
                                     ForEach([1.5, 2.0, 2.5, 3.0, 3.5], id: \.self) { mm in
