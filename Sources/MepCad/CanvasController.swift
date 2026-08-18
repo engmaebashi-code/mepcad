@@ -1496,6 +1496,13 @@ extension CanvasController {
         }
     }
 
+    /// 分岐部品(DT/LT/Y)の一括変更(枝管側の属性)。M6.8
+    func applyPipeBranchKind(_ kind: String) {
+        updateSelectedPipes(name: "分岐部品を\(kind)に変更") { attrs, _, _ in
+            attrs.branchKind = kind
+        }
+    }
+
     /// 90°曲り部品(エルボ/大曲)の一括変更。M6.6
     func applyPipeLongRadius(_ on: Bool) {
         updateSelectedPipes(name: on ? "90°曲りを大曲に変更" : "90°曲りをエルボに変更") { attrs, _, _ in

@@ -530,8 +530,13 @@ struct PropertyPanelView: View {
                                 Button("継手を非表示") { controller.applyPipeAutoFittings(false) }
                                 Button("端部キャップあり") { controller.applyPipeCapEnds(true) }
                                 Button("端部キャップなし") { controller.applyPipeCapEnds(false) }
-                                Button("90°曲り: エルボ") { controller.applyPipeLongRadius(false) }
-                                Button("90°曲り: 大曲") { controller.applyPipeLongRadius(true) }
+                                Button("90°曲り: DL(エルボ)") { controller.applyPipeLongRadius(false) }
+                                Button("90°曲り: LL(大曲)") { controller.applyPipeLongRadius(true) }
+                                Menu("分岐部品(枝管側)") {
+                                    Button("DT(90°Y)") { controller.applyPipeBranchKind("DT") }
+                                    Button("LT(90°大曲Y)") { controller.applyPipeBranchKind("LT") }
+                                    Button("Y(45°Y)") { controller.applyPipeBranchKind("Y") }
+                                }
                                 Divider()
                                 Menu("単線記号サイズ") {
                                     ForEach([1.5, 2.0, 2.5, 3.0, 3.5], id: \.self) { mm in

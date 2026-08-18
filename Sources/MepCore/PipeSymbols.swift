@@ -248,7 +248,7 @@ public enum PipeSymbols {
         // ネットワーク由来(ティーズ・キャップ・レデューサ)
         for j in junctions {
             switch j.kind {
-            case .tee(let bdir, _, _, _, let along, let vertical):
+            case .tee(let bdir, _, _, _, let along, let vertical, let branchKind):
                 // 枝の傾き(主管軸方向成分)。|cos|>0.5なら45°Y
                 let c = bdir.x * along.x + bdir.y * along.y
                 if vertical {
@@ -257,7 +257,7 @@ public enum PipeSymbols {
                     tick(at: j.position + along * u, along: along)
                     out.append(.circle(j.position, u / 2))
                     tick(at: j.position + bdir * u, along: bdir)
-                } else if abs(c) <= 0.5 && drain && attrs.longRadius {
+                } else if abs(c) <= 0.5 && drain && branchKind == "LT" {
                     // 大曲Y(LT): 主管ティック 上流-1.25u/下流+0.75u(下流=本管の作図方向)、
                     // 枝は主管上-0.5uから45°で枝軸上+0.5uへ、そのまま枝軸上uにティック
                     tick(at: j.position - along * (1.25 * u), along: along)
@@ -266,10 +266,10 @@ public enum PipeSymbols {
                     let knee = j.position + bdir * (0.5 * u)
                     out.append(.segment(start, knee))
                     tick(at: j.position + bdir * u, along: bdir)
-                } else if abs(c) > 0.5 && drain {
-                    // 45°Y: 主管ティック 上流側-0.75u/下流側+1.25u(下流=枝が傾く側)、
+                } else if abs(c) > 0.5 && drain && branchKind == "Y" {
+                    // 45°Y: 主管ティック 上流側-0.75u/下流側+1.25u(枝は上流側へ傾いて付く→下流はその反対)、
                     // 枝は1.25u先に長さ0.8uのティック
-                    let down = along * (c > 0 ? 1 : -1)
+                    let down = along * (c > 0 ? -1 : 1)
                     tick(at: j.position - down * (0.75 * u), along: along)
                     tick(at: j.position + down * (1.25 * u), along: along)
                     tick(at: j.position + bdir * (1.25 * u), along: bdir, half: 0.4 * u)

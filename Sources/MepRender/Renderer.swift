@@ -107,16 +107,20 @@ public struct Renderer {
             drawEntity(entity, layer: layer, transform: transform, definitions: defs,
                        junctions: junctions[entity.id] ?? [], in: ctx)
         }
-        // 配管の継手・記号・傍記は全配管の管体の後に描く(継手の下地塗りで枝管の外形線を隠すため)M6.5
-        for entity in entities {
-            guard case .pipe = entity.kind else { continue }
-            let g = groups[entity.layer.group]
-            guard g.isVisible else { continue }
-            let layer = g.layers[entity.layer.layer]
-            guard layer.isVisible else { continue }
-            if !showAuxiliary, entity.isAuxiliary { continue }
-            drawEntity(entity, layer: layer, transform: transform, definitions: defs,
-                       junctions: junctions[entity.id] ?? [], pipeFittingsPass: true, in: ctx)
+        // 配管の継手・記号・傍記は全配管の管体の後に描く(継手の下地塗りで枝管の外形線を隠すため)。
+        // パス1=継手の多角形、パス2=継手の円(立てチーズ等)・立管記号・単線記号・傍記
+        // (円は他の配管の受口矩形に隠されないよう最後に)M6.5/M6.8
+        for pass in 1...2 {
+            for entity in entities {
+                guard case .pipe = entity.kind else { continue }
+                let g = groups[entity.layer.group]
+                guard g.isVisible else { continue }
+                let layer = g.layers[entity.layer.layer]
+                guard layer.isVisible else { continue }
+                if !showAuxiliary, entity.isAuxiliary { continue }
+                drawEntity(entity, layer: layer, transform: transform, definitions: defs,
+                           junctions: junctions[entity.id] ?? [], pipePass: pass, in: ctx)
+            }
         }
     }
 
@@ -180,7 +184,7 @@ public struct Renderer {
     private func drawEntity(_ entity: Entity, layer: Layer, transform: ViewTransform,
                             definitions: [UUID: BlockDefinition] = [:],
                             junctions: [PipeJunction] = [],
-                            pipeFittingsPass: Bool = false, in ctx: CGContext) {
+                            pipePass: Int = 0, in ctx: CGContext) {
         let colorIndex = entity.style.colorIndex ?? layer.defaultColorIndex
         let weight = entity.style.lineWeight ?? layer.defaultLineWeight
         let lineType = entity.style.lineType ?? layer.defaultLineType
@@ -236,10 +240,12 @@ public struct Renderer {
             for sub in subs {
                 drawEntity(sub, layer: layer, transform: transform, in: ctx)
             }
-            // ブロック内の配管は継手・記号・傍記もここで(2パス目は最上位の配管のみ回るため)
-            for sub in subs {
-                guard case .pipe = sub.kind else { continue }
-                drawEntity(sub, layer: layer, transform: transform, pipeFittingsPass: true, in: ctx)
+            // ブロック内の配管は継手・記号・傍記もここで(後続パスは最上位の配管のみ回るため)
+            for pass in 1...2 {
+                for sub in subs {
+                    guard case .pipe = sub.kind else { continue }
+                    drawEntity(sub, layer: layer, transform: transform, pipePass: pass, in: ctx)
+                }
             }
 
         case .hatch(let boundary, let pattern):
@@ -332,8 +338,8 @@ public struct Renderer {
             let layout = attrs.doubleLine
                 ? PipeGeometry.doubleLineLayout(points: points, attrs: attrs) : nil
 
-            if !pipeFittingsPass {
-                // ---- 第1パス: 管体 ----
+            if pipePass == 0 {
+                // ---- パス0: 管体 ----
                 if let layout {
                     // 複線: 外形線2本+端部(実線)、芯線(一点鎖線・細)
                     ctx.setLineDash(phase: 0, lengths: [])
@@ -365,7 +371,7 @@ public struct Renderer {
                 break
             }
 
-            // ---- 第2パス: 継手・記号・立管・傍記 ----
+            // ---- パス1: 継手の多角形 / パス2: 継手の円・記号・立管・傍記 ----
             ctx.setLineDash(phase: 0, lengths: [])
             if let layout {
                 // 複線の継手: 実形状(受口+本体)を背景色で塗ってから線(やや太く)
@@ -377,10 +383,12 @@ public struct Renderer {
                         for part in shape.parts {
                             switch part {
                             case .polygon(let pts):
+                                guard pipePass == 1 else { continue }
                                 poly(pts, close: true)
                                 ctx.setFillColor(theme.background)
                                 ctx.drawPath(using: .fillStroke)
                             case .circle(let c, let r):
+                                guard pipePass == 2 else { continue }
                                 let sc = transform.toScreen(c)
                                 let sr = r * transform.scale
                                 let rect = CGRect(x: sc.x - sr, y: sc.y - sr, width: sr * 2, height: sr * 2)
@@ -388,6 +396,7 @@ public struct Renderer {
                                 ctx.fillEllipse(in: rect)
                                 ctx.strokeEllipse(in: rect)
                             case .polyline(let pts):
+                                guard pipePass == 1 else { continue }
                                 poly(pts)
                                 ctx.strokePath()
                             }
@@ -395,7 +404,9 @@ public struct Renderer {
                     }
                     ctx.setLineWidth(baseWidth)
                 }
+                if pipePass == 1 { break }
             } else {
+                if pipePass == 1 { break }
                 // 単線の継手シンボル(紙面mm基準。排水=ティック+丸み、給水=ティック、Y、▷、○×)
                 let symbols = PipeSymbols.elements(points: points, attrs: attrs, junctions: junctions)
                 for el in symbols {

@@ -89,7 +89,7 @@ final class PipeSymbolsTests: XCTestCase {
         let tee = PipeJunction(pipeID: id, position: Vec2(500, 0), z: 0,
                                kind: .tee(branchDirection: Vec2(0, 1), branchOD: 48, branchSizeLabel: "40",
                                           branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0),
-                                          verticalBranch: false))
+                                          verticalBranch: false, branchKind: "DT"))
         XCTAssertEqual(PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)],
                                             attrs: attrs(series: "DV", usage: "S"), junctions: [tee]).count, 3)
         XCTAssertEqual(PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)],
@@ -98,13 +98,14 @@ final class PipeSymbolsTests: XCTestCase {
         let y = PipeJunction(pipeID: id, position: Vec2(500, 0), z: 0,
                              kind: .tee(branchDirection: Vec2(0.7071, 0.7071), branchOD: 48, branchSizeLabel: "40",
                                         branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0),
-                                        verticalBranch: false))
+                                        verticalBranch: false, branchKind: "Y"))
         let ye = PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)],
                                       attrs: attrs(series: "DV", usage: "S"), junctions: [y])
         XCTAssertEqual(ye.count, 3)
         guard case .segment(let ya, _) = ye[0], case .segment(let yb, _) = ye[1] else { return XCTFail() }
-        XCTAssertEqual(ya.x, 500 - 0.75 * 125, accuracy: 1e-6)
-        XCTAssertEqual(yb.x, 500 + 1.25 * 125, accuracy: 1e-6)
+        // 枝(0.7,0.7)は+x側へ傾く=上流は+x側 → 上流ティック(-0.75u)は+x側、下流(+1.25u)は-x側
+        XCTAssertEqual(ya.x, 500 + 0.75 * 125, accuracy: 1e-6)
+        XCTAssertEqual(yb.x, 500 - 1.25 * 125, accuracy: 1e-6)
     }
 
     /// 立てチーズ: 主管±u・枝uのティック+直径uの円。大曲Y(LT): 主管-1.25u/+0.75u+45°スイープ+枝u
@@ -113,7 +114,7 @@ final class PipeSymbolsTests: XCTestCase {
         let vt = PipeJunction(pipeID: id, position: Vec2(500, 0), z: 0,
                               kind: .tee(branchDirection: Vec2(0, 1), branchOD: 60, branchSizeLabel: "50",
                                          branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0),
-                                         verticalBranch: true))
+                                         verticalBranch: true, branchKind: "DT"))
         let els = PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)],
                                        attrs: attrs(series: "DV", usage: "S"), junctions: [vt])
         XCTAssertEqual(els.count, 4)
@@ -123,7 +124,7 @@ final class PipeSymbolsTests: XCTestCase {
         let lt = PipeJunction(pipeID: id, position: Vec2(500, 0), z: 0,
                               kind: .tee(branchDirection: Vec2(0, 1), branchOD: 60, branchSizeLabel: "50",
                                          branchDims: PipeFittingDims(), mainDirection: Vec2(1, 0),
-                                         verticalBranch: false))
+                                         verticalBranch: false, branchKind: "LT"))
         let le = PipeSymbols.elements(points: [Vec3(0, 0, 0), Vec3(1000, 0, 0)], attrs: a, junctions: [lt])
         XCTAssertEqual(le.count, 4)
         guard case .segment(let t1, _) = le[0], case .segment(let t2, _) = le[1],

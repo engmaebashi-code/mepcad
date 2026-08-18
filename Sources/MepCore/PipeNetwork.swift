@@ -15,12 +15,15 @@ public struct PipeJunction: Equatable, Sendable {
         /// branchDims=枝管側の継手寸法(径違いティーズの寸法補間用)
         /// mainDirection=本管の区間方向(単位・平面。作図方向=流れ方向として下流側の判定に使う)、
         /// verticalBranch=枝管が立管で本管に取り付く(立てチーズ: 枝の受口は上/下向き→平面では円)
+        /// branchKind=枝管側で指定した分岐部品("DT"/"LT"/"Y")
         case tee(branchDirection: Vec2, branchOD: Double, branchSizeLabel: String,
-                 branchDims: PipeFittingDims, mainDirection: Vec2, verticalBranch: Bool)
+                 branchDims: PipeFittingDims, mainDirection: Vec2, verticalBranch: Bool,
+                 branchKind: String)
         /// 枝管側の印(枝管の端が本管に取り付いている)。hostDirection=本管方向、
         /// hostLongRadius=本管が大曲(LT)指定、vertical=立てチーズ(枝の端が立管)。
         /// 単線の枝端の切り詰め・立管記号の抑制に使う(形状・集計には出ない)
         case teeBranch(hostDirection: Vec2, hostLongRadius: Bool, vertical: Bool)
+        // hostLongRadius は互換のため残す(現在は枝管側のbranchKind=="LT"で判定)
         /// 口径変更(大きい方の側)。direction=接続相手へ向かう方向、otherOD=相手の外径、
         /// otherDims=相手側の継手寸法(小径側受口)
         case reducer(direction: Vec2, otherOD: Double, otherSizeLabel: String,
@@ -108,7 +111,7 @@ public enum PipeNetwork {
                         result[p.id, default: []].append(
                             PipeJunction(pipeID: p.id, position: foot, z: a.z,
                                          kind: .teeBranch(hostDirection: mainDir,
-                                                          hostLongRadius: other.attrs.longRadius,
+                                                          hostLongRadius: p.attrs.branchKind == "LT",
                                                           vertical: end.vertical)))
                         // 同じ点に両側から枝管が来る場合(=クロス)は1つのティーズにまとめる
                         if (result[other.id] ?? []).contains(where: {
@@ -122,7 +125,8 @@ public enum PipeNetwork {
                                                     branchSizeLabel: p.attrs.sizeLabel,
                                                     branchDims: p.attrs.effectiveFittingDims,
                                                     mainDirection: mainDir,
-                                                    verticalBranch: end.vertical)))
+                                                    verticalBranch: end.vertical,
+                                                    branchKind: p.attrs.branchKind)))
                         break
                     }
                     if connected { break }
@@ -164,7 +168,7 @@ public enum PipeNetwork {
         let s = max(dims.socketOD / 2, r * 1.05)
         let d = dims.socketDepth
         switch j.kind {
-        case .tee(let bdir, let bod, _, let bdims, let mainDir, let vertical):
+        case .tee(let bdir, let bod, _, let bdims, let mainDir, let vertical, let branchKind):
             // 本管方向。枝が斜め(45°Y)でも本体は本管に沿わせ、枝受口は枝方向へ
             let along = mainDir
             let side = along.x * bdir.y - along.y * bdir.x   // 枝がどちら側か(左折正)
@@ -203,22 +207,23 @@ public enum PipeNetwork {
             let sinb = max(bdir.x * ny.x + bdir.y * ny.y, 0.2)
             let bnY = bn.x * ny.x + bn.y * ny.y
             func tRoot(_ o: Double) -> Double { max((r - bnY * o) / sinb, 0) }
-            if abs(cosb) > 0.3 {
+            if abs(cosb) > 0.3 && branchKind == "Y" {
                 // 斜め分岐(45°Y): 主管は枝が傾く側(下流)が短い。DV Y(2157)の比: 上流L1≈0.95L3、
                 // 下流L2≈0.42L3、枝L3(=y45A、無ければDT×1.72)。本体(本管部)+枝を別部品で(枝を後から重ねる)
                 let l3 = dims.y45A > 0 ? (sameSize ? dims.y45A : (dims.y45A + (bdims.y45A > 0 ? bdims.y45A : dims.y45A)) / 2)
                                        : aRun * 1.72
                 let l1 = l3 * 0.95, l2 = l3 * 0.42
-                let downstream = cosb > 0    // 枝が+along側へ傾く=下流は+along
-                let aUp = downstream ? l1 : l2
-                let aDown = downstream ? l2 : l1
+                // 枝は上流側へ傾いて取り付く(枝方向bdirは接合点→枝管=上流向き)。
+                // 上流(長い側L1)は枝が傾く側、下流(短い側L2)はその反対
+                let aUp = cosb > 0 ? l2 : l1      // -along側の長さ
+                let aDown = cosb > 0 ? l1 : l2    // +along側の長さ
                 let a2bY = max(l3 - db, r + 1, tRoot(-rb) + 1, tRoot(rb) + 1)
                 let aBrY = max(l3, a2bY + db * 0.5)
                 let branch: [Vec2] = [bw(tRoot(-rb), -rb), bw(a2bY, -rb), bw(a2bY, -sb), bw(aBrY, -sb),
                                       bw(aBrY, sb), bw(a2bY, sb), bw(a2bY, rb), bw(tRoot(rb), rb)]
                 return [PipeFittingShape(parts: [.polygon(hostPart(aUp: aUp, aDown: aDown)), .polygon(branch)])]
             }
-            if attrs.longRadius, dims.effectiveElbow90LLA > 0 {
+            if branchKind == "LT", abs(cosb) <= 0.3, dims.effectiveElbow90LLA > 0 {
                 // 大曲Y(LT): 枝→下流(=本管の作図方向)を大曲エルボ(LL)で結び、上流側は短い受口。
                 // DV LT(2155): 上流L1≈0.53×A_LL(95/178)、下流・枝=A_LL
                 let all = dims.effectiveElbow90LLA

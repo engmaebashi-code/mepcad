@@ -556,6 +556,24 @@ final class DrawingToolTests: XCTestCase {
         XCTAssertEqual(PipeGeometry.risers(points: points).count, 1)
     }
 
+    /// 45°立ち下がり: 高さを変えると直前の頂点から高低差ぶん進んだ点で新しい高さに達する勾配区間が入る(M6.8)
+    func testPipeHeightChangeWith45Drop() {
+        let (tool, cap) = makeTool()
+        cap.pipeStyle.z = 300
+        cap.pipeStyle.drop45 = true
+        tool.select(.pipe)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000, 0), shiftDown: false)
+        cap.pipeStyle.z = 0
+        tool.click(at: Vec2(3000, 0), shiftDown: false)
+        XCTAssertTrue(tool.keyInput("\r"))
+        guard case .pipe(let points, _) = cap.produced[0].kind else { return XCTFail() }
+        XCTAssertEqual(points, [Vec3(0, 0, 300), Vec3(1000, 0, 300), Vec3(1300, 0, 0), Vec3(3000, 0, 0)])
+        XCTAssertTrue(PipeGeometry.risers(points: points).isEmpty)
+        // 3D折れ角45°×2 → 45°エルボ2個
+        XCTAssertEqual(PipeGeometry.fittings(points: points).filter { $0.kind == .elbow45 }.count, 2)
+    }
+
     func testEscEndsChainThenReturnsToSelect() {
         let (tool, cap) = makeTool()
         tool.select(.line)

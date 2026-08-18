@@ -21,7 +21,7 @@ final class PipeNetworkTests: XCTestCase {
         let branch = pipe([Vec3(1500, 0, 0), Vec3(1500, 2000, 0)], od: 48, size: "40")
         let j = PipeNetwork.junctions(in: [main, branch])
         XCTAssertEqual(j[main.id]?.count, 1)
-        guard let tee = j[main.id]?.first, case .tee(let dir, let bod, let label, _, let mainDir, let vertical) = tee.kind else {
+        guard let tee = j[main.id]?.first, case .tee(let dir, let bod, let label, _, let mainDir, let vertical, let bk) = tee.kind else {
             return XCTFail("ティーズでない")
         }
         XCTAssertEqual(tee.position, Vec2(1500, 0))
@@ -31,6 +31,7 @@ final class PipeNetworkTests: XCTestCase {
         XCTAssertEqual(label, "40")
         XCTAssertEqual(mainDir.x, 1, accuracy: 1e-9)   // 本管方向(+x)
         XCTAssertFalse(vertical)
+        XCTAssertEqual(bk, "DT")
         // 枝管側には印(teeBranch)が付く
         XCTAssertEqual(j[branch.id]?.count, 1)
         guard case .teeBranch(_, let ll, let v)? = j[branch.id]?.first?.kind else { return XCTFail() }

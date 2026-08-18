@@ -25,8 +25,12 @@ public struct PipeToolStyle: Sendable {
     public var style: Style
     /// 現在の高さ(mm・基準面から)。作図中に変えると次の頂点で立管が発生する。M6.2
     public var z: Double
+    /// 高さ変更を45°の勾配(45°立ち下がり/上がり)で行う。falseなら垂直の立管(90°)。M6.8
+    public var drop45: Bool
 
-    public init(attrs: PipeAttributes = PipeAttributes(), style: Style = .byLayer, z: Double = 0) {
+    public init(attrs: PipeAttributes = PipeAttributes(), style: Style = .byLayer, z: Double = 0,
+                drop45: Bool = false) {
+        self.drop45 = drop45
         self.attrs = attrs
         self.style = style
         self.z = z
@@ -421,9 +425,22 @@ public final class DrawingToolController {
     }
 
     /// 配管の頂点追加。直前の頂点と高さが違えば立管(平面同一点・z違い)を挟む
+    /// 高さが変わっていれば直前の頂点で立管(90°)、または45°勾配区間(drop45)を挿入してから頂点を追加
     private func appendPipeVertex(_ v: Vec3) {
         if let last = pipePoints.last, abs(last.z - v.z) > 0.5 {
-            pipePoints.append(Vec3(last.xy, z: v.z))
+            let drop45 = delegate?.toolPipeStyle().drop45 ?? false
+            let dz = abs(v.z - last.z)
+            let plan = v.xy - last.xy
+            let len = plan.length
+            if drop45, len > dz + 1 {
+                // 45°勾配: 直前の頂点から高低差ぶんの平面距離を進んだ点で新しい高さに達し、以後水平
+                let u = plan * (1 / len)
+                pipePoints.append(Vec3(last.xy + u * dz, z: v.z))
+            } else if drop45, len > 1 {
+                // 平面距離が高低差より短い: そのまま勾配で結ぶ(区間全体が勾配)
+            } else {
+                pipePoints.append(Vec3(last.xy, z: v.z))
+            }
         }
         pipePoints.append(v)
     }
@@ -724,7 +741,7 @@ public final class DrawingToolController {
             if pipePoints.isEmpty {
                 return "配管: ルートの始点を指示 — 用途・口径は左上のカード" + constraint
             }
-            return "配管: 次点を指示(\(pipePoints.count)点)— 数値=距離 / x,y=相対 / 高さを変えると立管 / ⏎で確定" + constraint + num
+            return "配管: 次点を指示(\(pipePoints.count)点)— 数値=距離 / x,y=相対 / 高さを変えると立管(45°指定なら勾配) / ⏎で確定" + constraint + num
         }
     }
 }

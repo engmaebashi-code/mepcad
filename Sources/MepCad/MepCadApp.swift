@@ -94,6 +94,8 @@ final class CanvasUIState: ObservableObject {
     @Published var pipeSymbolSupply: Double = 2.0  // 単線記号サイズ 給水ほか(紙面mm)M6.5
     @Published var pipeLongRadius = false        // 90°曲り部品を大曲(LL)に(排水)M6.6
     @Published var pipeAnnotateMaterial = true   // 傍記に管種略号を含める M6.6
+    @Published var pipeBranchKind = "DT"         // 分岐部品 DT/LT/Y(枝管側で指定)M6.8
+    @Published var pipeDrop45 = false            // 高さ変更を45°勾配で(立ち下がり45°)M6.8
 
     /// メニュー項目用の色スウォッチ(テーマ切替時に作り直す)
     @Published var colorSwatches: [NSImage] = []
@@ -456,6 +458,9 @@ struct ContentView: View {
                     Button("材料集計…(配管の延長拾い)") {
                         controller.showMaterialReport()
                     }
+                    Button("継手プレビュー…(パラメトリック部品の確認)") {
+                        openFittingPreviewWindow(uiState: uiState)
+                    }
                     Divider()
                     Toggle("パネルを固定表示", isOn: $uiState.panelPinned)
                     Button(isDark ? "背景をライトに" : "背景をダークに") {
@@ -601,9 +606,10 @@ struct ContentView: View {
                                           fittingSeries: series, fittingDims: dims,
                                           capEnds: uiState.pipeCapEnds, symbolSize: symbol,
                                           longRadius: drainStyle && uiState.pipeLongRadius,
-                                          annotateMaterial: uiState.pipeAnnotateMaterial),
+                                          annotateMaterial: uiState.pipeAnnotateMaterial,
+                                          branchKind: drainStyle ? uiState.pipeBranchKind : "DT"),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
-                    z: uiState.pipeLevel)
+                    z: uiState.pipeLevel, drop45: uiState.pipeDrop45)
             }
             controller.onEditOpChanged = { kind in
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
@@ -720,6 +726,24 @@ struct TextPropertyCard: View {
 }
 
 /// 配管ツール中に出るプロパティカード(用途→管種→口径。色・線種は用途に連動)
+/// 継手プレビューを別ウィンドウで開く(M6.8)
+@MainActor private var fittingPreviewWindow: NSWindow?
+@MainActor func openFittingPreviewWindow(uiState: CanvasUIState) {
+    if let w = fittingPreviewWindow, w.isVisible {
+        w.makeKeyAndOrderFront(nil)
+        return
+    }
+    let host = NSHostingController(rootView: FittingPreviewView(uiState: uiState))
+    let w = NSWindow(contentViewController: host)
+    w.title = "継手プレビュー"
+    w.isReleasedWhenClosed = false
+    w.styleMask = [.titled, .closable, .resizable]
+    w.setContentSize(NSSize(width: 860, height: 600))
+    w.center()
+    w.makeKeyAndOrderFront(nil)
+    fittingPreviewWindow = w
+}
+
 struct PipePropertyCard: View {
     let controller: CanvasController
     @ObservedObject var uiState: CanvasUIState
@@ -848,13 +872,28 @@ struct PipePropertyCard: View {
                     .help("折れ点にエルボ、分岐にティーズ、口径違いにレデューサを自動発生(規格: \(seriesLabel))。複線は実形状、単線は記号。集計にも個数が出ます")
                 if isDrainStyleNow {
                     Picker("", selection: $uiState.pipeLongRadius) {
-                        Text("エルボ").tag(false)
-                        Text("大曲").tag(true)
+                        Text("DL").tag(false)
+                        Text("LL").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 80)
+                    .help("90°曲り部品: DL=90°エルボ / LL=90°大曲エルボ。単線の丸みも変わります")
+                    Picker("", selection: $uiState.pipeBranchKind) {
+                        Text("DT").tag("DT")
+                        Text("LT").tag("LT")
+                        Text("Y").tag("Y")
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 100)
-                    .help("90°曲り部品。大曲=LL(FILDERの90°大曲エルボ)。単線の丸みも大きくなります")
+                    .help("分岐部品(この配管を枝管として本管に突き当てたときに本管側へ発生): DT=90°Y / LT=90°大曲Y(枝は本管の作図方向へ抜ける) / Y=45°Y(枝を45°で突き当てる)")
                 }
+                Picker("", selection: $uiState.pipeDrop45) {
+                    Text("90°").tag(false)
+                    Text("45°").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 80)
+                .help("高さを変えたときの立ち下がり/立ち上がり: 90°=垂直の立管(DL) / 45°=高低差ぶんの勾配区間(45L)")
                 if !uiState.pipeDoubleLine {
                     Text("記号")
                         .font(.system(size: 11))

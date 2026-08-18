@@ -51,6 +51,9 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     public var longRadius: Bool
     /// 傍記に管種略号を含める("HI 20" のように)。M6.6
     public var annotateMaterial: Bool
+    /// この配管を枝管として本管に取り付けたときの分岐部品: "DT"(90°Y)/"LT"(90°大曲Y)/"Y"(45°Y)。M6.8
+    /// Yは枝が45°で取り付くときに使う(直角ならDTに落ちる)
+    public var branchKind: String
 
     public init(usage: String = "CW", usageName: String = "給水",
                 material: String = "HIVP", materialLabel: String = "HIVP",
@@ -61,7 +64,8 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
                 doubleLine: Bool = false, autoFittings: Bool = true,
                 fittingSeries: String = "", fittingDims: PipeFittingDims = PipeFittingDims(),
                 capEnds: Bool = false, symbolSize: Double = 0,
-                longRadius: Bool = false, annotateMaterial: Bool = true) {
+                longRadius: Bool = false, annotateMaterial: Bool = true,
+                branchKind: String = "DT") {
         self.usage = usage
         self.usageName = usageName
         self.material = material
@@ -81,6 +85,7 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         self.symbolSize = symbolSize
         self.longRadius = longRadius
         self.annotateMaterial = annotateMaterial
+        self.branchKind = branchKind
     }
 
     /// 単線シンボルの実効基準寸法(実寸mm)。未設定なら文字高さ(排水)・その0.8倍(給水)
