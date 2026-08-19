@@ -174,10 +174,10 @@ final class PipeTests: XCTestCase {
                                    autoFittings: true, fittingDims: dims)
         let pts = v3([Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000)])
         guard let layout = PipeGeometry.doubleLineLayout(points: pts, attrs: attrs) else { return XCTFail() }
-        // 区間2本、それぞれ折れ点側が受口底(A2=62)まで切り詰め
+        // 区間2本、それぞれ折れ点側が受口の先端(A=112)まで切り詰め(管は受口先端で止める)
         XCTAssertEqual(layout.runs.count, 2)
-        XCTAssertEqual(layout.runs[0].left.last!.x, 1000 - 62, accuracy: 1e-9)
-        XCTAssertEqual(layout.runs[1].left.first!.y, 62, accuracy: 1e-9)
+        XCTAssertEqual(layout.runs[0].left.last!.x, 1000 - 112, accuracy: 1e-9)
+        XCTAssertEqual(layout.runs[1].left.first!.y, 112, accuracy: 1e-9)
         XCTAssertEqual(layout.endCaps.count, 2)
         XCTAssertEqual(layout.fittings.count, 1)
         guard case .polygon(let poly) = layout.fittings[0].parts[0] else { return XCTFail() }
@@ -210,7 +210,7 @@ final class PipeTests: XCTestCase {
         guard let layout = PipeGeometry.doubleLineLayout(points: pts, attrs: attrs),
               case .polygon(let poly) = layout.fittings.first?.parts.first else { return XCTFail() }
         XCTAssertEqual(poly[0].x, 1000 - 178, accuracy: 1e-9)
-        XCTAssertEqual(layout.runs[0].left.last!.x, 1000 - 128, accuracy: 1e-9)
+        XCTAssertEqual(layout.runs[0].left.last!.x, 1000 - 178, accuracy: 1e-9)
         XCTAssertTrue(poly.contains { abs($0.distance(to: Vec2(872, 128)) - 185) < 1e-6 })
         // マスタにLLが無ければDL×1.6
         XCTAssertEqual(PipeFittingDims(elbow90A: 100).effectiveElbow90LLA, 160, accuracy: 1e-9)

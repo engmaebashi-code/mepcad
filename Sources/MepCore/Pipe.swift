@@ -371,13 +371,10 @@ public enum PipeGeometry {
         return dims.elbow45A
     }
 
-    /// エルボの受口底までの距離a2(脚の長さで頭打ち。外形線の切り詰め量と共通)
+    /// エルボの受口底までの距離a2(=A−受口深さ)
     static func elbowSocketBottom(dims: PipeFittingDims, turnDeg: Double, len1: Double, len2: Double,
                                   longRadius: Bool = false) -> Double {
-        let a = elbowA(dims, turnDeg: turnDeg, longRadius: longRadius)
-        let a1 = min(a, len1)
-        let a2Leg = min(a, len2)
-        return min(max(a - dims.socketDepth, 0), max(a1 - 1, 0), max(a2Leg - 1, 0))
+        max(elbowA(dims, turnDeg: turnDeg, longRadius: longRadius) - dims.socketDepth, 0)
     }
 
     /// 平面エルボの実形状(受口2つ+曲がり本体)。メーカー図面どおり、本体は
@@ -394,11 +391,10 @@ public enum PipeGeometry {
         let a = elbowA(dims, turnDeg: turnDeg, longRadius: longRadius)
         let s = dims.socketOD / 2
         guard a > 0, s > 0 else { return nil }
-        // 各脚の受口端(A)は脚の長さで頭打ち。受口底(a2)は共通(短い方に合わせる)
-        let a1 = min(a, len1)
-        let a2Leg = min(a, len2)
-        let a2 = elbowSocketBottom(dims: dims, turnDeg: turnDeg, len1: len1, len2: len2,
-                                   longRadius: longRadius)
+        // 受口は脚の長さに関わらず実寸(FILDER同様。短い管なら継手同士が重なる)
+        let a1 = a
+        let a2Leg = a
+        let a2 = max(a - dims.socketDepth, 0)
         // 内側二等分線方向と受口底面の交点C
         let bis = u1 + u2
         let bl = bis.length
@@ -474,8 +470,8 @@ public enum PipeGeometry {
         let s = dims.socketOD / 2
         guard a > 0, s > 0 else { return nil }
         let d = dims.socketDepth
-        let aH = min(a, hLen)
-        let a2 = max(min(a - d, aH - 1, hLen * 0.5), 0)
+        let aH = a
+        let a2 = max(a - d, 0)
         let cs = 0.70710678
         let a2c = max(a - d, 0) * cs           // 勾配脚の受口底(平面投影)
         let ac = a * cs                        // 勾配脚の受口端(平面投影)
@@ -500,7 +496,7 @@ public enum PipeGeometry {
         parts.append(.polyline(ellipseArc(center: cU, along: f, a: s * cs, across: nv, b: s,
                                           from: -(Double.pi / 2 - phi0), to: .pi + (Double.pi / 2 - phi0),
                                           segments: 24)))
-        return (PipeFittingShape(parts: parts), a2)
+        return (PipeFittingShape(parts: parts), aH)
     }
 
     /// ひねり(折れ点の片脚が45°勾配)の継手表現(FILDER部品DVDL1005準拠)。
@@ -514,8 +510,8 @@ public enum PipeGeometry {
         let s = dims.socketOD / 2
         guard a > 0, s > 0 else { return nil }
         let d = dims.socketDepth
-        let aH = min(a, hLen)
-        let a2 = max(min(a - d, aH - 1, hLen * 0.5), 0)
+        let aH = a
+        let a2 = max(a - d, 0)
         let cs = 0.70710678
         let a2c = max(a - d, 0) * cs
         let ac = a * cs
@@ -632,11 +628,11 @@ public enum PipeGeometry {
                                 shapes.append(t.shape)
                                 let ac = dims.elbow45A * 0.70710678
                                 if sloped2 {
-                                    trimEnd[i - 1] = t.hTrim
-                                    trimStart[i] = min(ac, lens[i] * 0.5)
+                                    trimEnd[i - 1] = min(t.hTrim, lens[i - 1])
+                                    trimStart[i] = min(ac, lens[i])
                                 } else {
-                                    trimStart[i] = t.hTrim
-                                    trimEnd[i - 1] = min(ac, lens[i - 1] * 0.5)
+                                    trimStart[i] = min(t.hTrim, lens[i])
+                                    trimEnd[i - 1] = min(ac, lens[i - 1])
                                 }
                             }
                             continue
@@ -650,52 +646,54 @@ public enum PipeGeometry {
                                                       dims: dims, pipeRadius: r, longRadius: attrs.longRadius) {
                                 shapes.append(shape)
                                 let a = attrs.longRadius ? dims.effectiveElbow90LLA : dims.elbow90A
-                                let a2 = max(a - dims.socketDepth, 0)
                                 let ac = a * 0.70710678
                                 if sloped2 {
-                                    trimEnd[i - 1] = min(a2, lens[i - 1] * 0.5)
-                                    trimStart[i] = min(ac, lens[i] * 0.5)
+                                    trimEnd[i - 1] = min(a, lens[i - 1])
+                                    trimStart[i] = min(ac, lens[i])
                                 } else {
-                                    trimStart[i] = min(a2, lens[i] * 0.5)
-                                    trimEnd[i - 1] = min(ac, lens[i - 1] * 0.5)
+                                    trimStart[i] = min(a, lens[i])
+                                    trimEnd[i - 1] = min(ac, lens[i - 1])
                                 }
                             }
                             continue
                         }
-                        // 折れ点のエルボ(両脚水平)
+                        // 折れ点のエルボ(両脚水平)。管は受口の先端(A)で止める(FILDER同様)
                         if let shape = elbowShape(corner: pts[i], u1: u1, u2: u2,
                                                   len1: lens[i - 1], len2: lens[i],
                                                   dims: dims, pipeRadius: r,
                                                   longRadius: attrs.longRadius) {
                             shapes.append(shape)
-                            let a2 = elbowSocketBottom(dims: dims, turnDeg: turnDeg,
-                                                       len1: lens[i - 1], len2: lens[i],
-                                                       longRadius: attrs.longRadius)
-                            trimEnd[i - 1] = min(a2, lens[i - 1] * 0.5)
-                            trimStart[i] = min(a2, lens[i] * 0.5)
+                            let a = elbowA(dims, turnDeg: turnDeg, longRadius: attrs.longRadius)
+                            trimEnd[i - 1] = min(a, lens[i - 1])
+                            trimStart[i] = min(a, lens[i])
                         }
                     }
                 }
                 if riserAtStart {
-                    let a = min(a90, lens[0])
-                    let a2 = min(a2Riser, max(a - 1, 0), lens[0] * 0.5)
+                    let a = a90
+                    let a2 = a2Riser
                     let nn = normals[0]
                     shapes.append(PipeFittingShape(parts: [
                         .polygon(socketRect(from: pts[0], dir: dirs[0], a2: a2, a: a, halfWidth: s)),
                         .polyline([pts[0] + dirs[0] * a2 + nn * s, pts[0] + dirs[0] * a2 - nn * s])]))
-                    trimStart[0] = a2
+                    trimStart[0] = min(a, lens[0])
                 }
                 if riserAtEnd {
                     let u = Vec2(-dirs[n - 2].x, -dirs[n - 2].y)
-                    let a = min(a90, lens[n - 2])
-                    let a2 = min(a2Riser, max(a - 1, 0), lens[n - 2] * 0.5)
+                    let a = a90
+                    let a2 = a2Riser
                     let nn = normals[n - 2]
                     shapes.append(PipeFittingShape(parts: [
                         .polygon(socketRect(from: pts[n - 1], dir: u, a2: a2, a: a, halfWidth: s)),
                         .polyline([pts[n - 1] + u * a2 + nn * s, pts[n - 1] + u * a2 - nn * s])]))
-                    trimEnd[n - 2] = a2
+                    trimEnd[n - 2] = min(a, lens[n - 2])
                 }
                 for i in 0..<(n - 1) {
+                    // 継手に全部隠れる短い区間は外形線を出さない(芯線は残す)
+                    guard trimStart[i] + trimEnd[i] < lens[i] - 1e-6 else {
+                        runsOut.append(([], [], [pts[i], pts[i + 1]]))
+                        continue
+                    }
                     let a = pts[i] + dirs[i] * trimStart[i]
                     let b = pts[i + 1] - dirs[i] * trimEnd[i]
                     let nn = normals[i]
