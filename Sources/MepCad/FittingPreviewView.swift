@@ -210,8 +210,13 @@ private struct FittingCanvas: View {
                         let sc = S(riser.position); let sr = rs * scale
                         let rect = CGRect(x: sc.x - sr, y: sc.y - sr, width: sr * 2, height: sr * 2)
                         ctx.fill(Path(ellipseIn: rect), with: fill)
+                        let innerR = doubleLine ? p.attrs.outerDiameter / 2 * scale : 0
                         if riser.isUp {
                             ctx.stroke(Path(ellipseIn: rect), with: stroke, lineWidth: 1.4)
+                            if innerR > 1 {
+                                ctx.stroke(Path(ellipseIn: CGRect(x: sc.x - innerR, y: sc.y - innerR, width: innerR * 2, height: innerR * 2)),
+                                           with: stroke, lineWidth: 1.4)
+                            }
                         } else {
                             let toward = PipeSymbols.riserLead(points: p.points, riserIndex: idx)?.toward ?? Vec2(-1, 0)
                             let a0 = atan2(toward.y, toward.x)
@@ -220,6 +225,12 @@ private struct FittingCanvas: View {
                             var arc = Path()
                             arc.addArc(center: sc, radius: sr, startAngle: .radians(-(a0 + half)), endAngle: .radians(-(a0 - half)), clockwise: true)
                             ctx.stroke(arc, with: stroke, lineWidth: 1.4)
+                            if innerR > 1 {
+                                var inner = Path()
+                                inner.addArc(center: sc, radius: innerR, startAngle: .radians(-(a0 + .pi / 2)),
+                                             endAngle: .radians(-(a0 - .pi / 2 + 2 * .pi)), clockwise: true)
+                                ctx.stroke(inner, with: stroke, lineWidth: 1.4)
+                            }
                         }
                     }
                 }

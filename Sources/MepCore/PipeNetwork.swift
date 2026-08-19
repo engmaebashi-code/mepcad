@@ -186,22 +186,25 @@ public enum PipeNetwork {
             let bn = Vec2(-bdir.y, bdir.x)      // 枝の法線
             func bw(_ t: Double, _ o: Double) -> Vec2 { j.position + bdir * t + bn * o }
             // 本管部だけの多角形(受口2つ+本体。x範囲 -aUp〜+aDown)
-            func hostPart(aUp: Double, aDown: Double, downSocket: Bool = true) -> [Vec2] {
-                let a2u = max(aUp - d, r + 1)
-                if !downSocket {
-                    // 下流側は受口なし(別部品=大曲の受口が被さる)。本体はaDownまで
-                    return [w(-aUp, -s), w(-a2u, -s), w(-a2u, -r), w(aDown, -r),
-                            w(aDown, r), w(-a2u, r), w(-a2u, s), w(-aUp, s)]
-                }
-                let a2d = max(aDown - d, r + 1)
+            func hostPart(aUp: Double, aDown: Double) -> [Vec2] {
+                let a2u = max(aUp - d, r + 1), a2d = max(aDown - d, r + 1)
                 return [w(-aUp, -s), w(-a2u, -s), w(-a2u, -r), w(a2d, -r), w(a2d, -s), w(aDown, -s),
                         w(aDown, s), w(a2d, s), w(a2d, r), w(-a2u, r), w(-a2u, s), w(-aUp, s)]
             }
+            // 受口底の線(本管の両受口)
+            func hostBottoms(aUp: Double, aDown: Double) -> [PipeFittingShape.Part] {
+                let a2u = max(aUp - d, r + 1), a2d = max(aDown - d, r + 1)
+                return [.polyline([w(-a2u, -s), w(-a2u, s)]), .polyline([w(a2d, -s), w(a2d, s)])]
+            }
             let cosb = bdir.x * along.x + bdir.y * along.y
-            // 立てチーズ: 枝の受口は上/下向き → 本管部+枝受口外径の円
+            // 立てチーズ: 枝の受口は上/下向き → 本管部+枝受口外径の円+管の縁(奥側の半円)
             if vertical {
-                return [PipeFittingShape(parts: [.polygon(hostPart(aUp: aRun, aDown: aRun)),
-                                                 .circle(center: j.position, radius: sb)])]
+                let far = Vec2(-bdir.x, -bdir.y)
+                let inner = PipeGeometry.ellipseArc(center: j.position, along: far, a: rb, across: bn, b: rb,
+                                                    from: 0, to: .pi, segments: 12)
+                return [PipeFittingShape(parts: [.polygon(hostPart(aUp: aRun, aDown: aRun))]
+                                         + hostBottoms(aUp: aRun, aDown: aRun)
+                                         + [.circle(center: j.position, radius: sb), .polyline(inner)])]
             }
             // 枝の付け根: 枝の外形線(オフセットo=±rb)が本管外形線(y=r)と交わる枝方向距離
             let sinb = max(bdir.x * ny.x + bdir.y * ny.y, 0.2)
@@ -221,21 +224,51 @@ public enum PipeNetwork {
                 let aBrY = max(l3, a2bY + db * 0.5)
                 let branch: [Vec2] = [bw(tRoot(-rb), -rb), bw(a2bY, -rb), bw(a2bY, -sb), bw(aBrY, -sb),
                                       bw(aBrY, sb), bw(a2bY, sb), bw(a2bY, rb), bw(tRoot(rb), rb)]
-                return [PipeFittingShape(parts: [.polygon(hostPart(aUp: aUp, aDown: aDown)), .polygon(branch)])]
+                return [PipeFittingShape(parts: [.polygon(hostPart(aUp: aUp, aDown: aDown))]
+                                         + hostBottoms(aUp: aUp, aDown: aDown)
+                                         + [.polygon(branch), .polyline([bw(a2bY, -sb), bw(a2bY, sb)])])]
             }
             if branchKind == "LT", abs(cosb) <= 0.3, dims.effectiveElbow90LLA > 0 {
-                // 大曲Y(LT): 枝→下流(=本管の作図方向)を大曲エルボ(LL)で結び、上流側は短い受口。
-                // DV LT(2155): 上流L1≈0.53×A_LL(95/178)、下流・枝=A_LL
+                // 大曲Y(LT。FILDERの表現準拠): 上流受口(A_LL×0.53)+本体+下流受口(A_LL)+枝受口(A_LL)を
+                // 1つの輪郭に。枝→下流(=本管の作図方向)へ大曲のスイープ。
+                // 内側の弧: 中心(a2−k, a2−k)・半径(a2−k)−r、外側の弧: 枝の外壁に接し(高さa2−k)半径0.736·a2+r
+                // (k=0.12·a2。DV100実測: a2=128, k=15, 内R59, 外R148)
                 let all = dims.effectiveElbow90LLA
+                let a2 = max(all - d, r + 1)
                 let aUp = all * 0.53
-                let hostPoly = hostPart(aUp: aUp, aDown: max(all - d, r + 1), downSocket: false)
-                var parts: [PipeFittingShape.Part] = [.polygon(hostPoly)]
-                if let sweep = PipeGeometry.elbowShape(corner: j.position, u1: bdir, u2: along,
-                                                       len1: all * 2, len2: all * 2,
-                                                       dims: dims, pipeRadius: r, longRadius: true) {
-                    parts += sweep.parts
+                let a2u = max(aUp - d, r + 1)
+                let k = a2 * 0.12
+                let ri = max(a2 - k - r, 1)
+                let ci = w(a2 - k, a2 - k)
+                let ro = 0.736 * a2 + r
+                let co = w(0.736 * a2, a2 - k)
+                // 外側の弧が本管上側外形線(y=r)と交わる点
+                let dy = (a2 - k) - r
+                let dxo = (ro * ro - dy * dy).squareRoot()
+                let xo = 0.736 * a2 - dxo
+                var poly: [Vec2] = []
+                poly += [w(-aUp, -s), w(-a2u, -s), w(-a2u, -r), w(a2, -r), w(a2, -s), w(all, -s),
+                         w(all, s), w(a2, s), w(a2, r)]
+                // 上側外形線を(a2−k, r)まで戻り、内側の弧で枝の右壁(x=r, y=a2−k)へ
+                poly.append(w(a2 - k, r))
+                for kk in 1..<8 {
+                    let ang = -Double.pi / 2 - (Double.pi / 2) * Double(kk) / 8   // -90°→-180°
+                    poly.append(ci + Vec2(cos(ang), sin(ang)) * ri)
                 }
-                return [PipeFittingShape(parts: parts)]
+                poly += [w(r, a2 - k), w(r, a2), w(s, a2), w(s, all), w(-s, all), w(-s, a2), w(-r, a2), w(-r, a2 - k)]
+                // 外側の弧: 枝の左壁(-r, a2−k)から下がって上側外形線(y=r)へ
+                var angEnd = atan2(r - (a2 - k), xo - 0.736 * a2)     // ≒ 200°(第3象限)
+                if angEnd < 0 { angEnd += 2 * .pi }
+                let angStart = Double.pi
+                for kk in 1...8 {
+                    let ang = angStart + (angEnd - angStart) * Double(kk) / 8
+                    poly.append(co + Vec2(cos(ang), sin(ang)) * ro)
+                }
+                poly += [w(-a2u, r), w(-a2u, s), w(-aUp, s)]
+                let bottoms: [PipeFittingShape.Part] = [
+                    .polyline([w(-a2u, -s), w(-a2u, s)]), .polyline([w(a2, -s), w(a2, s)]),
+                    .polyline([w(-s, a2), w(s, a2)])]
+                return [PipeFittingShape(parts: [.polygon(poly)] + bottoms)]
             }
             let poly: [Vec2] = [
                 w(-aRun, -s), w(-a2r, -s), w(-a2r, -r), w(a2r, -r), w(a2r, -s), w(aRun, -s),
@@ -243,18 +276,21 @@ public enum PipeNetwork {
                 bw(tRoot(-rb), -rb), bw(a2b, -rb), bw(a2b, -sb), bw(aBr, -sb),
                 bw(aBr, sb), bw(a2b, sb), bw(a2b, rb), bw(tRoot(rb), rb),
                 w(-a2r, r), w(-a2r, s), w(-aRun, s)]
-            return [PipeFittingShape(parts: [.polygon(poly)])]
+            return [PipeFittingShape(parts: [.polygon(poly), .polyline([w(-a2r, -s), w(-a2r, s)]),
+                                             .polyline([w(a2r, -s), w(a2r, s)]),
+                                             .polyline([bw(a2b, -sb), bw(a2b, sb)])])]
         case .reducer(let dir, let otherOD, _, let odims):
             let n = Vec2(-dir.y, dir.x)
             let r2 = otherOD / 2
             let s2 = max(odims.socketOD / 2, r2 * 1.05)
             let d2 = odims.socketDepth > 0 ? odims.socketDepth : d * 0.8
-            let taper = min(max(d * 0.55, 15), 45)
+            let taper = min(max(d * 0.6, 20), 40)     // DV IN: 40〜65A:20, 75:25, 100:30, 125:35, 150:40
             func w(_ x: Double, _ y: Double) -> Vec2 { j.position + dir * x + n * y }
             let poly: [Vec2] = [
                 w(-d, s), w(0, s), w(taper, s2), w(taper + d2, s2),
                 w(taper + d2, -s2), w(taper, -s2), w(0, -s), w(-d, -s)]
-            return [PipeFittingShape(parts: [.polygon(poly)])]
+            return [PipeFittingShape(parts: [.polygon(poly), .polyline([w(0, -s), w(0, s)]),
+                                             .polyline([w(taper, -s2), w(taper, s2)])])]
         case .teeBranch:
             return []
         case .cap(let dir):
@@ -262,7 +298,8 @@ public enum PipeNetwork {
             let n = Vec2(-dir.y, dir.x)
             let a = j.position - dir * d
             let b = j.position - dir * d + dir * len
-            return [PipeFittingShape(parts: [.polygon([a + n * s, b + n * s, b - n * s, a - n * s])])]
+            return [PipeFittingShape(parts: [.polygon([a + n * s, b + n * s, b - n * s, a - n * s]),
+                                             .polyline([j.position + n * s, j.position - n * s])])]
         }
     }
 }

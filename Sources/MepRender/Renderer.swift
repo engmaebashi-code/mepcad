@@ -396,7 +396,8 @@ public struct Renderer {
                                 ctx.fillEllipse(in: rect)
                                 ctx.strokeEllipse(in: rect)
                             case .polyline(let pts):
-                                guard pipePass == 1 else { continue }
+                                // 線だけの部品(受口底の線・傾いた受口の縁・立てチーズの管の縁)は最後に(円の上へ)
+                                guard pipePass == 2 else { continue }
                                 poly(pts)
                                 ctx.strokePath()
                             }
@@ -449,8 +450,14 @@ public struct Renderer {
                     let rect = CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
                     ctx.setFillColor(theme.background)
                     ctx.fillEllipse(in: rect)
+                    // 複線: 受口の中に管の縁(半径=管の外径/2)も描く(FILDER準拠)
+                    let innerR = attrs.doubleLine ? attrs.outerDiameter / 2 * transform.scale : 0
                     if riser.isUp {
                         ctx.strokeEllipse(in: rect)
+                        if innerR > 1 {
+                            ctx.strokeEllipse(in: CGRect(x: c.x - innerR, y: c.y - innerR,
+                                                         width: innerR * 2, height: innerR * 2))
+                        }
                     } else {
                         let lead = PipeSymbols.riserLead(points: points, riserIndex: idx)
                         let toward = lead?.toward ?? Vec2(-1, 0)
@@ -465,6 +472,13 @@ public struct Renderer {
                                    startAngle: -(a0 + halfOpen), endAngle: -(a0 - halfOpen),
                                    clockwise: true)
                         ctx.strokePath()
+                        if innerR > 1 {
+                            // 管の縁: 管と反対側の半円
+                            ctx.addArc(center: CGPoint(x: c.x, y: c.y), radius: innerR,
+                                       startAngle: -(a0 + .pi / 2), endAngle: -(a0 - .pi / 2 + 2 * .pi),
+                                       clockwise: true)
+                            ctx.strokePath()
+                        }
                     }
                 }
                 ctx.setLineWidth(baseWidth)

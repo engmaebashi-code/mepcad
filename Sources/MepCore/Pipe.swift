@@ -383,11 +383,9 @@ public enum PipeGeometry {
     /// 平面エルボの実形状(受口2つ+曲がり本体)。メーカー図面どおり、本体は
     /// 「受口底の面同士の交点C」を中心とする環状扇形(外径=t+r、内径=t−r)。
     /// - u1: 折れ点→手前の頂点方向、u2: 折れ点→次の頂点方向(単位)。len1/len2: 各脚の長さ
-    /// - slopedLeg: 1/2ならその脚が勾配(45°立ち下がり等の「ひねり」)。受口矩形の代わりに
-    ///   傾いた受口の縁(楕円弧2本)を描く(FILDER部品DVDL1005の見え方)。0=両脚とも水平
     public static func elbowShape(corner p: Vec2, u1: Vec2, u2: Vec2, len1: Double, len2: Double,
                                   dims: PipeFittingDims, pipeRadius r: Double,
-                                  longRadius: Bool = false, slopedLeg: Int = 0) -> PipeFittingShape? {
+                                  longRadius: Bool = false) -> PipeFittingShape? {
         let dot = max(-1, min(1, u1.x * u2.x + u1.y * u2.y))
         let phi = acos(dot)                       // 脚と脚のなす角(π=直進)
         let turn = Double.pi - phi                // 折れ角
@@ -427,28 +425,16 @@ public enum PipeGeometry {
         while sweep < -.pi { sweep += 2 * .pi }
         let segs = max(4, Int((abs(sweep) * 180 / .pi / 10).rounded(.up)))
         var poly: [Vec2] = []
-        var extra: [PipeFittingShape.Part] = []
-        if slopedLeg == 1 {
-            // 脚1が勾配: 受口矩形なし。受口底で閉じ、傾いた受口の縁(楕円弧)を添える
-            poly.append(p + u1 * a2 + n1 * r)
-            extra += tiltedSocketRims(at: p + u1 * a2, dir: u1, halfWidth: s, depth: dims.socketDepth)
-        } else {
-            poly.append(p + u1 * a1 + n1 * s)
-            poly.append(p + u1 * a2 + n1 * s)
-        }
+        poly.append(p + u1 * a1 + n1 * s)
+        poly.append(p + u1 * a2 + n1 * s)
         for k in 0...segs {
             let ang = ang1 + sweep * Double(k) / Double(segs)
             poly.append(c + Vec2(cos(ang), sin(ang)) * ro)
         }
-        if slopedLeg == 2 {
-            poly.append(p + u2 * a2 - n2 * r)
-            extra += tiltedSocketRims(at: p + u2 * a2, dir: u2, halfWidth: s, depth: dims.socketDepth)
-        } else {
-            poly.append(p + u2 * a2 + n2 * s)
-            poly.append(p + u2 * a2Leg + n2 * s)
-            poly.append(p + u2 * a2Leg - n2 * s)
-            poly.append(p + u2 * a2 - n2 * s)
-        }
+        poly.append(p + u2 * a2 + n2 * s)
+        poly.append(p + u2 * a2Leg + n2 * s)
+        poly.append(p + u2 * a2Leg - n2 * s)
+        poly.append(p + u2 * a2 - n2 * s)
         if ri > 1e-9 {
             for k in 0...segs {
                 let ang = ang2 - sweep * Double(k) / Double(segs)
@@ -457,35 +443,115 @@ public enum PipeGeometry {
         } else {
             poly.append(c)
         }
-        if slopedLeg == 1 {
-            poly.append(p + u1 * a2 - n1 * r)
-        } else {
-            poly.append(p + u1 * a2 - n1 * s)
-            poly.append(p + u1 * a1 - n1 * s)
-        }
-        return PipeFittingShape(parts: [.polygon(poly)] + extra)
+        poly.append(p + u1 * a2 - n1 * s)
+        poly.append(p + u1 * a1 - n1 * s)
+        // 受口底の線(FILDERは受口を閉じた矩形で描く)
+        let bottoms: [PipeFittingShape.Part] = [
+            .polyline([p + u1 * a2 + n1 * s, p + u1 * a2 - n1 * s]),
+            .polyline([p + u2 * a2 + n2 * s, p + u2 * a2 - n2 * s])]
+        return PipeFittingShape(parts: [.polygon(poly)] + bottoms)
     }
 
-    /// 傾いた(45°勾配の)受口を真上から見た縁: 半楕円弧2本(受口端と受口底。奥行きは受口深さ×cos45°)。
-    /// 楕円は脚方向に半径halfWidth×sin45°、直交方向にhalfWidth。dir方向へ膨らむ
-    /// - dir: 勾配脚の方向(2本目の弧はこの方向へ受口深さ×cos45°ずらす)
-    /// - bulge: 弧の膨らむ方向(省略時=dir。45°立ち下がりでは作図方向)
-    static func tiltedSocketRims(at origin: Vec2, dir: Vec2, halfWidth s: Double, depth: Double,
-                                 bulge: Vec2? = nil) -> [PipeFittingShape.Part] {
-        let b = bulge ?? dir
-        let n = Vec2(-b.y, b.x)
-        let along = s * 0.7071
-        var parts: [PipeFittingShape.Part] = []
-        for offset in [0.0, depth * 0.7071] {
-            let c = origin + dir * offset
-            var pts: [Vec2] = []
-            for k in 0...12 {
-                let th = -Double.pi / 2 + Double.pi * Double(k) / 12
-                pts.append(c + b * (along * cos(th)) + n * (s * sin(th)))
-            }
-            parts.append(.polyline(pts))
+    /// 楕円弧(点列)。中心c、across方向に半径b・along方向に半径a。媒介変数φ: 点=c+across·b·cosφ+along·a·sinφ
+    /// (φ=90°がalong方向の頂点)。φ1→φ2を等分
+    static func ellipseArc(center c: Vec2, along: Vec2, a: Double, across: Vec2, b: Double,
+                           from phi1: Double, to phi2: Double, segments: Int = 16) -> [Vec2] {
+        var pts: [Vec2] = []
+        for k in 0...segments {
+            let ph = phi1 + (phi2 - phi1) * Double(k) / Double(segments)
+            pts.append(c + across * (b * cos(ph)) + along * (a * sin(ph)))
         }
-        return parts
+        return pts
+    }
+
+    /// 45°立ち下がり/上がり(平面では直進、片脚が45°勾配)の継手表現(FILDER準拠、DVDL1004)。
+    /// - p: 折れ点、h: 水平脚の方向(単位)、v: 勾配脚の方向(単位、平面)、f: 作図方向(単位。膨らみの向き)
+    /// - 水平脚: 受口矩形(a2..A)+受口底線。勾配脚: 受口の側面2本(±s、a2·cos45〜A·cos45)、
+    ///   下流側の点に受口の縁=半楕円(s、fへ膨らむ)、上流側の点に管の縁=半楕円(r)と受口の縁の前面部分
+    static func tilt45Shape(corner p: Vec2, h: Vec2, v: Vec2, flow f: Vec2, hLen: Double,
+                            dims: PipeFittingDims, pipeRadius r: Double) -> (shape: PipeFittingShape, hTrim: Double)? {
+        let a = dims.elbow45A
+        let s = dims.socketOD / 2
+        guard a > 0, s > 0 else { return nil }
+        let d = dims.socketDepth
+        let aH = min(a, hLen)
+        let a2 = max(min(a - d, aH - 1, hLen * 0.5), 0)
+        let cs = 0.70710678
+        let a2c = max(a - d, 0) * cs           // 勾配脚の受口底(平面投影)
+        let ac = a * cs                        // 勾配脚の受口端(平面投影)
+        let nv = Vec2(-v.y, v.x)
+        var parts: [PipeFittingShape.Part] = []
+        parts.append(.polygon(socketRect(from: p, dir: h, a2: a2, a: aH, halfWidth: s)))
+        parts.append(.polyline([p + h * a2 + Vec2(-h.y, h.x) * s, p + h * a2 - Vec2(-h.y, h.x) * s]))
+        // 受口の側面(投影)
+        parts.append(.polyline([p + v * a2c + nv * s, p + v * ac + nv * s]))
+        parts.append(.polyline([p + v * a2c - nv * s, p + v * ac - nv * s]))
+        // 上流/下流の点(作図方向fに対して)
+        let downstreamIsFar = (v.x * f.x + v.y * f.y) > 0
+        let cD = p + v * (downstreamIsFar ? ac : a2c)
+        let cU = p + v * (downstreamIsFar ? a2c : ac)
+        // 下流点: 受口の縁 半楕円(fへ)
+        parts.append(.polyline(ellipseArc(center: cD, along: f, a: s * cs, across: nv, b: s,
+                                          from: 0, to: .pi)))
+        // 上流点: 管の縁 半楕円(r) + 受口の縁の前面部分(管の外形線との交点まで)
+        parts.append(.polyline(ellipseArc(center: cU, along: f, a: r * cs, across: nv, b: r,
+                                          from: 0, to: .pi)))
+        let phi0 = asin(min(r / s, 1))
+        parts.append(.polyline(ellipseArc(center: cU, along: f, a: s * cs, across: nv, b: s,
+                                          from: -(Double.pi / 2 - phi0), to: .pi + (Double.pi / 2 - phi0),
+                                          segments: 24)))
+        return (PipeFittingShape(parts: parts), a2)
+    }
+
+    /// ひねり(折れ点の片脚が45°勾配)の継手表現(FILDER部品DVDL1005準拠)。
+    /// - p: 折れ点、h: 水平脚の方向、v: 勾配脚の方向(平面)、flow: 膨らみの向き(作図方向)
+    /// - 水平脚: 受口矩形+底線。勾配脚: 外側の側面線(a2c〜ac)、受口端の縁=半楕円(s)、受口底の縁の前面部分、
+    ///   本体の外側曲線(勾配脚の外壁a2c点→水平受口底の外壁角、両壁に接する円弧)
+    static func twistShape(corner p: Vec2, h: Vec2, v: Vec2, flow f: Vec2, hLen: Double,
+                           dims: PipeFittingDims, pipeRadius r: Double,
+                           longRadius: Bool) -> PipeFittingShape? {
+        let a = longRadius ? dims.effectiveElbow90LLA : dims.elbow90A
+        let s = dims.socketOD / 2
+        guard a > 0, s > 0 else { return nil }
+        let d = dims.socketDepth
+        let aH = min(a, hLen)
+        let a2 = max(min(a - d, aH - 1, hLen * 0.5), 0)
+        let cs = 0.70710678
+        let a2c = max(a - d, 0) * cs
+        let ac = a * cs
+        // 外側法線: 水平脚の法線でvと反対側 / 勾配脚の法線でhと反対側
+        var nh = Vec2(-h.y, h.x); if nh.x * v.x + nh.y * v.y > 0 { nh = Vec2(-nh.x, -nh.y) }
+        var nv = Vec2(-v.y, v.x); if nv.x * h.x + nv.y * h.y > 0 { nv = Vec2(-nv.x, -nv.y) }
+        var parts: [PipeFittingShape.Part] = []
+        parts.append(.polygon(socketRect(from: p, dir: h, a2: a2, a: aH, halfWidth: s)))
+        parts.append(.polyline([p + h * a2 + nh * s, p + h * a2 - nh * s]))
+        // 勾配脚 外側の側面線
+        parts.append(.polyline([p + v * a2c + nv * s, p + v * ac + nv * s]))
+        // 受口端の縁(半楕円、fへ)
+        parts.append(.polyline(ellipseArc(center: p + v * ac, along: f, a: s * cs, across: nv, b: s,
+                                          from: 0, to: .pi)))
+        // 受口底の縁の前面部分(外側-30°〜内側140°)
+        let deg = Double.pi / 180
+        parts.append(.polyline(ellipseArc(center: p + v * a2c, along: f, a: s * cs, across: nv, b: s,
+                                          from: -30 * deg, to: 140 * deg, segments: 20)))
+        // 本体の外側曲線: 両外壁に接する円弧(半径R=s+a2c)。勾配脚外壁のa2c点→水平受口底の外壁角
+        // 中心は両外壁からbigR内側。始点/終点は各壁上の接点付近(始点=a2c点、終点=水平受口底)
+        let bigR = s + a2c
+        let cc = p + nh * (r - bigR) + nv * (r - bigR)
+        let start = p + nv * r + v * min(a2c, bigR - r)
+        let end = p + nh * r + h * min(a2, bigR - r)
+        let g1 = atan2(start.y - cc.y, start.x - cc.x)
+        let g2 = atan2(end.y - cc.y, end.x - cc.x)
+        var sw = g2 - g1
+        while sw > .pi { sw -= 2 * .pi }
+        while sw < -.pi { sw += 2 * .pi }
+        var arc: [Vec2] = []
+        for k in 0...16 {
+            let g = g1 + sw * Double(k) / 16
+            arc.append(cc + Vec2(cos(g), sin(g)) * bigR)
+        }
+        parts.append(.polyline(arc))
+        return PipeFittingShape(parts: parts)
     }
 
     /// 傾き(勾配)の判定: 平面長さに対する高低差の比(tan20°以上で勾配脚とみなす)
@@ -556,34 +622,51 @@ public enum PipeGeometry {
                         let dot = max(-1, min(1, u1.x * u2.x + u1.y * u2.y))
                         let turnDeg = (Double.pi - acos(dot)) * 180 / .pi
                         if turnDeg <= 2 {
-                            // 平面では直進。片脚だけ勾配なら「45°立ち下がり/上がり」の45°エルボ:
-                            // 水平脚に受口、勾配脚側は傾いた受口の縁(楕円弧×2。膨らみは作図方向)
+                            // 平面では直進。片脚だけ勾配なら「45°立ち下がり/上がり」(FILDER準拠の表現)
                             guard sloped1 != sloped2 else { continue }
-                            let a = dims.elbow45A
-                            guard a > 0 else { continue }
-                            let a2 = max(a - dims.socketDepth, 0)
-                            if sloped2 {
-                                let aa = min(a, lens[i - 1]), aa2 = max(min(a2, aa - 1, lens[i - 1] * 0.5), 0)
-                                shapes.append(PipeFittingShape(parts: [
-                                    .polygon(socketRect(from: pts[i], dir: u1, a2: aa2, a: aa, halfWidth: s))]
-                                    + tiltedSocketRims(at: pts[i], dir: u2, halfWidth: s, depth: dims.socketDepth)))
-                                trimEnd[i - 1] = aa2
-                            } else {
-                                let aa = min(a, lens[i]), aa2 = max(min(a2, aa - 1, lens[i] * 0.5), 0)
-                                shapes.append(PipeFittingShape(parts: [
-                                    .polygon(socketRect(from: pts[i], dir: u2, a2: aa2, a: aa, halfWidth: s))]
-                                    + tiltedSocketRims(at: pts[i], dir: u1, halfWidth: s, depth: dims.socketDepth,
-                                                       bulge: u2)))
-                                trimStart[i] = aa2
+                            let hDir = sloped2 ? u1 : u2      // 水平脚の方向(折れ点から)
+                            let vDir = sloped2 ? u2 : u1      // 勾配脚の方向(折れ点から)
+                            let hLen = sloped2 ? lens[i - 1] : lens[i]
+                            if let t = tilt45Shape(corner: pts[i], h: hDir, v: vDir, flow: u2, hLen: hLen,
+                                                   dims: dims, pipeRadius: r) {
+                                shapes.append(t.shape)
+                                let ac = dims.elbow45A * 0.70710678
+                                if sloped2 {
+                                    trimEnd[i - 1] = t.hTrim
+                                    trimStart[i] = min(ac, lens[i] * 0.5)
+                                } else {
+                                    trimStart[i] = t.hTrim
+                                    trimEnd[i - 1] = min(ac, lens[i - 1] * 0.5)
+                                }
                             }
                             continue
                         }
-                        // 折れ点のエルボ。片脚が勾配なら「ひねり」(その脚は傾いた受口の縁)
-                        let slopedLeg = sloped1 && !sloped2 ? 1 : (!sloped1 && sloped2 ? 2 : 0)
+                        if sloped1 != sloped2, turnDeg > 67.5 {
+                            // ひねり(90°折れ点の片脚が勾配): DVDL1005準拠の表現。45°折れの勾配脚は通常のエルボ扱い
+                            let hDir = sloped2 ? u1 : u2
+                            let vDir = sloped2 ? u2 : u1
+                            let hLen = sloped2 ? lens[i - 1] : lens[i]
+                            if let shape = twistShape(corner: pts[i], h: hDir, v: vDir, flow: u2, hLen: hLen,
+                                                      dims: dims, pipeRadius: r, longRadius: attrs.longRadius) {
+                                shapes.append(shape)
+                                let a = attrs.longRadius ? dims.effectiveElbow90LLA : dims.elbow90A
+                                let a2 = max(a - dims.socketDepth, 0)
+                                let ac = a * 0.70710678
+                                if sloped2 {
+                                    trimEnd[i - 1] = min(a2, lens[i - 1] * 0.5)
+                                    trimStart[i] = min(ac, lens[i] * 0.5)
+                                } else {
+                                    trimStart[i] = min(a2, lens[i] * 0.5)
+                                    trimEnd[i - 1] = min(ac, lens[i - 1] * 0.5)
+                                }
+                            }
+                            continue
+                        }
+                        // 折れ点のエルボ(両脚水平)
                         if let shape = elbowShape(corner: pts[i], u1: u1, u2: u2,
                                                   len1: lens[i - 1], len2: lens[i],
                                                   dims: dims, pipeRadius: r,
-                                                  longRadius: attrs.longRadius, slopedLeg: slopedLeg) {
+                                                  longRadius: attrs.longRadius) {
                             shapes.append(shape)
                             let a2 = elbowSocketBottom(dims: dims, turnDeg: turnDeg,
                                                        len1: lens[i - 1], len2: lens[i],
@@ -596,16 +679,20 @@ public enum PipeGeometry {
                 if riserAtStart {
                     let a = min(a90, lens[0])
                     let a2 = min(a2Riser, max(a - 1, 0), lens[0] * 0.5)
+                    let nn = normals[0]
                     shapes.append(PipeFittingShape(parts: [
-                        .polygon(socketRect(from: pts[0], dir: dirs[0], a2: a2, a: a, halfWidth: s))]))
+                        .polygon(socketRect(from: pts[0], dir: dirs[0], a2: a2, a: a, halfWidth: s)),
+                        .polyline([pts[0] + dirs[0] * a2 + nn * s, pts[0] + dirs[0] * a2 - nn * s])]))
                     trimStart[0] = a2
                 }
                 if riserAtEnd {
                     let u = Vec2(-dirs[n - 2].x, -dirs[n - 2].y)
                     let a = min(a90, lens[n - 2])
                     let a2 = min(a2Riser, max(a - 1, 0), lens[n - 2] * 0.5)
+                    let nn = normals[n - 2]
                     shapes.append(PipeFittingShape(parts: [
-                        .polygon(socketRect(from: pts[n - 1], dir: u, a2: a2, a: a, halfWidth: s))]))
+                        .polygon(socketRect(from: pts[n - 1], dir: u, a2: a2, a: a, halfWidth: s)),
+                        .polyline([pts[n - 1] + u * a2 + nn * s, pts[n - 1] + u * a2 - nn * s])]))
                     trimEnd[n - 2] = a2
                 }
                 for i in 0..<(n - 1) {
