@@ -187,13 +187,13 @@ public enum PipeNetwork {
             func bw(_ t: Double, _ o: Double) -> Vec2 { j.position + bdir * t + bn * o }
             // 本管部だけの多角形(受口2つ+本体。x範囲 -aUp〜+aDown)
             func hostPart(aUp: Double, aDown: Double) -> [Vec2] {
-                let a2u = max(aUp - d, r + 1), a2d = max(aDown - d, r + 1)
+                let a2u = max(aUp - d, 0), a2d = max(aDown - d, 0)   // 受口は常に深さdの実寸
                 return [w(-aUp, -s), w(-a2u, -s), w(-a2u, -r), w(a2d, -r), w(a2d, -s), w(aDown, -s),
                         w(aDown, s), w(a2d, s), w(a2d, r), w(-a2u, r), w(-a2u, s), w(-aUp, s)]
             }
             // 受口底の線(本管の両受口)
             func hostBottoms(aUp: Double, aDown: Double) -> [PipeFittingShape.Part] {
-                let a2u = max(aUp - d, r + 1), a2d = max(aDown - d, r + 1)
+                let a2u = max(aUp - d, 0), a2d = max(aDown - d, 0)
                 return [.polyline([w(-a2u, -s), w(-a2u, s)]), .polyline([w(a2d, -s), w(a2d, s)])]
             }
             let cosb = bdir.x * along.x + bdir.y * along.y
@@ -220,7 +220,7 @@ public enum PipeNetwork {
                 // 上流(長い側L1)は枝が傾く側、下流(短い側L2)はその反対
                 let aUp = cosb > 0 ? l2 : l1      // -along側の長さ
                 let aDown = cosb > 0 ? l1 : l2    // +along側の長さ
-                let a2bY = max(l3 - db, r + 1, tRoot(-rb) + 1, tRoot(rb) + 1)
+                let a2bY = max(l3 - db, tRoot(-rb) + 1, tRoot(rb) + 1)
                 let aBrY = max(l3, a2bY + db * 0.5)
                 let branch: [Vec2] = [bw(tRoot(-rb), -rb), bw(a2bY, -rb), bw(a2bY, -sb), bw(aBrY, -sb),
                                       bw(aBrY, sb), bw(a2bY, sb), bw(a2bY, rb), bw(tRoot(rb), rb)]
@@ -234,9 +234,9 @@ public enum PipeNetwork {
                 // 内側の弧: 中心(a2−k, a2−k)・半径(a2−k)−r、外側の弧: 枝の外壁に接し(高さa2−k)半径0.736·a2+r
                 // (k=0.12·a2。DV100実測: a2=128, k=15, 内R59, 外R148)
                 let all = dims.effectiveElbow90LLA
-                let a2 = max(all - d, r + 1)
+                let a2 = max(all - d, 0)
                 let aUp = all * 0.53
-                let a2u = max(aUp - d, r + 1)
+                let a2u = max(aUp - d, 0)
                 let k = a2 * 0.12
                 let ri = max(a2 - k - r, 1)
                 let ci = w(a2 - k, a2 - k)
