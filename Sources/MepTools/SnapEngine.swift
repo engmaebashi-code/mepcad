@@ -8,6 +8,7 @@ public enum SnapKind: Int, Sendable {
     case grid = 3          // グリッド
     case intersection = 4  // 交点
     case onLine = 5        // 線上
+    case port = 6          // 接続口(配管・機器のポート)M7
 
     public var label: String {
         switch self {
@@ -17,6 +18,7 @@ public enum SnapKind: Int, Sendable {
         case .grid: return "グリッド"
         case .intersection: return "交点"
         case .onLine: return "線上"
+        case .port: return "接続口"
         }
     }
 }
@@ -34,6 +36,8 @@ public struct SnapSettings: Sendable {
     public var intersection = true
     public var onLine = true
     public var grid = true
+    /// 接続口(配管の自由端・機器の接続口)への吸着。M7
+    public var port = true
 
     public init() {}
 }
@@ -55,6 +59,8 @@ public final class SnapEngine {
     }
 
     private var pointBuckets: [Int64: [TypedPoint]] = [:]
+    /// 未接続の接続口(M7)。数が少ない(数十〜数百)ので線形探索で足りる
+    private var openPorts: [PipePort] = []
     private var segments: [Segment] = []
     private var segmentBuckets: [Int64: [Int32]] = [:]
     private let cellSize: Double
@@ -88,8 +94,14 @@ public final class SnapEngine {
         pointBuckets.removeAll(keepingCapacity: true)
         segments.removeAll(keepingCapacity: true)
         segmentBuckets.removeAll(keepingCapacity: true)
+        openPorts.removeAll(keepingCapacity: true)
 
         let defs = document.blockDefinitionsByID
+        // 接続口(M7): 配管の自由端と機器の接続口。表示中・除外外のものだけ
+        let portSources = document.entities.filter {
+            !excluding.contains($0.id) && document.isEntityVisible($0)
+        }
+        openPorts = PipePortIndex.openPorts(in: portSources, definitions: defs)
         for entity in document.entities {
             guard !excluding.contains(entity.id) else { continue }
             guard document.isEntityVisible(entity) else { continue }
@@ -195,6 +207,10 @@ public final class SnapEngine {
             }
         }
 
+        if settings.port, let p = nearestPort(to: worldPoint, within: radius) {
+            // 接続口は端点より優遇する(端点と同じ位置にあるので、負けると種別が出ない)
+            consider((SnapResult(point: p.0.plan, kind: .port), p.1), weight: 0.7)
+        }
         if settings.endpoint {
             consider(nearestPoint(of: [.endpoint], to: worldPoint, within: radius), weight: 0.8)
         }
@@ -226,6 +242,25 @@ public final class SnapEngine {
         }
         return nil
     }
+
+    /// 最寄りの接続口。戻り値は(口, 距離)
+    private func nearestPort(to point: Vec2, within radius: Double) -> (PipePort, Double)? {
+        var best: (PipePort, Double)?
+        for p in openPorts {
+            let d = p.plan.distance(to: point)
+            guard d <= radius else { continue }
+            if best == nil || d < best!.1 { best = (p, d) }
+        }
+        return best
+    }
+
+    /// 指定点付近の接続口(作図側が口径・管種を継承するために引く)。M7
+    public func port(at point: Vec2, radius: Double) -> PipePort? {
+        nearestPort(to: point, within: radius)?.0
+    }
+
+    /// 現在索引されている未接続の接続口(表示・デバッグ用)
+    public var indexedOpenPorts: [PipePort] { openPorts }
 
     /// 最寄りの点系スナップ。戻り値は(結果, 距離)
     private func nearestPoint(of kinds: Set<SnapKind>, to world: Vec2, within radius: Double) -> (SnapResult, Double)? {

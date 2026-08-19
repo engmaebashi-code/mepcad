@@ -10,6 +10,37 @@ import Foundation
 // - DXFのBLOCKS/INSERT・JWWのCDataBlockと同じ構造なので相互変換の受け皿になる
 // 制約(v1): 定義の中にblockRefは入れない(ブロック化時に入れ子は展開して取り込む)
 
+/// 機器(ブロック定義)の接続口。定義のローカル座標で持ち、配置時に世界座標のPipePortになる。M7
+///
+/// これがあると「機器に配管を繋ぐ」が継手とまったく同じ仕組み(ポート突き合わせ)で扱える。
+/// メーカーCAD(DXF)から取り込んだ機器は図形だけでは接続口が分からないので定義側に明示的に持つ
+public struct BlockPort: Equatable, Codable, Sendable {
+    /// 定義ローカル座標での接続点
+    public var position: Vec2
+    /// 定義ローカル座標での外向き方位角(rad)。ここから配管が出ていく向き
+    public var azimuth: Double
+    /// 基準面からの高さ(mm)
+    public var z: Double
+    /// 接続口名("給水" "排水" "冷媒液" など)
+    public var name: String
+    /// 呼び径ラベルと外径(mm)。0なら接続する配管に合わせる
+    public var sizeLabel: String
+    public var outerDiameter: Double
+    /// 用途id("CW"等。空なら配管側の設定のまま)
+    public var usage: String
+
+    public init(position: Vec2, azimuth: Double, z: Double = 0, name: String = "",
+                sizeLabel: String = "", outerDiameter: Double = 0, usage: String = "") {
+        self.position = position
+        self.azimuth = azimuth
+        self.z = z
+        self.name = name
+        self.sizeLabel = sizeLabel
+        self.outerDiameter = outerDiameter
+        self.usage = usage
+    }
+}
+
 public struct BlockDefinition: Identifiable, Equatable, Codable, Sendable {
     public let id: UUID
     public var name: String
@@ -17,12 +48,30 @@ public struct BlockDefinition: Identifiable, Equatable, Codable, Sendable {
     public var entities: [Entity]
     /// 機器仕様書などへのリンク(v2: 図面から仕様書PDFを開く)
     public var linkURL: String?
+    /// 機器の接続口(M7)。空なら配管は吸着しない
+    public var ports: [BlockPort]
 
-    public init(id: UUID = UUID(), name: String, entities: [Entity], linkURL: String? = nil) {
+    public init(id: UUID = UUID(), name: String, entities: [Entity], linkURL: String? = nil,
+                ports: [BlockPort] = []) {
         self.id = id
         self.name = name
         self.entities = entities
         self.linkURL = linkURL
+        self.ports = ports
+    }
+
+    // portsは後から足した項目。旧図面(portsキーなし)もそのまま読めるようにする
+    private enum CodingKeys: String, CodingKey {
+        case id, name, entities, linkURL, ports
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        entities = try c.decode([Entity].self, forKey: .entities)
+        linkURL = try c.decodeIfPresent(String.self, forKey: .linkURL)
+        ports = try c.decodeIfPresent([BlockPort].self, forKey: .ports) ?? []
     }
 
     /// 配置情報を適用して実体化する(描画・スナップ・分解用)。
@@ -53,6 +102,34 @@ public struct BlockDefinition: Identifiable, Equatable, Codable, Sendable {
                 out = Entity(layer: out.layer, style: out.style, kind: out.kind)
             }
             return out
+        }
+    }
+
+    /// 配置情報を適用した世界座標の接続口(M7)。
+    /// 変換順は instantiate と同じ(反転→倍率→回転→挿入点)。反転は縦軸(x→−x)なので
+    /// 方位角は π−θ になる。回転はそのまま加算、倍率は位置だけに効く(口径は実寸のまま)
+    public func worldPorts(insert: Vec2, rotation: Double, scale: Double,
+                           mirrored: Bool, ownerID: EntityID? = nil) -> [PipePort] {
+        ports.map { p in
+            var pos = p.position
+            var az = p.azimuth
+            if mirrored {
+                pos = Vec2(-pos.x, pos.y)
+                az = .pi - az
+            }
+            if abs(scale - 1) > 1e-12 {
+                pos = pos * scale
+            }
+            if abs(rotation) > 1e-12 {
+                let c = cos(rotation), s = sin(rotation)
+                pos = Vec2(pos.x * c - pos.y * s, pos.x * s + pos.y * c)
+                az += rotation
+            }
+            pos = pos + insert
+            return PipePort(position: Vec3(pos, z: p.z), azimuth: az, axis: .horizontal,
+                            role: .equipment, sizeLabel: p.sizeLabel,
+                            outerDiameter: p.outerDiameter,
+                            usage: p.usage, name: p.name, ownerID: ownerID, isOpen: true)
         }
     }
 

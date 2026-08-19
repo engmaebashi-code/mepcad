@@ -131,6 +131,9 @@ final class CanvasController: NSObject {
     var leaderStyleProvider: (() -> LeaderToolStyle)?
     /// 配管設定の提供(プロパティカードの値。用途の色・線種込み)
     var pipeStyleProvider: (() -> PipeToolStyle)?
+    /// 配管を既存の接続口から描き始めたときの通知(M7)。
+    /// 受け側(UI)が口径・管種・用途・高さをコマンドプロパティへ反映する
+    var onPipePortPicked: ((PipePort) -> Void)?
     /// インライン文字入力の依頼(スクリーン座標・初期文字列・画面上のフォントpx。
     /// CanvasViewがクリック位置にテキスト欄を出し、確定文字列(キャンセルはnil)を返す)
     var onTextInputRequested: ((_ screen: Vec2, _ initial: String, _ fontPx: Double,
@@ -1100,7 +1103,17 @@ final class CanvasController: NSObject {
         let effective = snappedScreen ?? cursor
         // ハッチングの「始点クリックで閉じる」判定にピックボックス幅を渡す
         tools.closeTolerance = hitToleranceMm
-        tools.click(at: transform.toWorld(effective), shiftDown: shiftDown)
+        let world = transform.toWorld(effective)
+        // 配管の描き始めが既存の接続口なら、その口径・管種・高さを引き継ぐ(M7)。
+        // tools.click より先に反映する — 属性は確定時にpipeStyleProviderが読むため
+        if tools.kind == .pipe, tools.pipePoints.isEmpty,
+           let port = snapEngine.port(at: world, radius: hitToleranceMm) {
+            onPipePortPicked?(port)
+            let label = port.name.isEmpty ? port.role.rawValue : port.name
+            let size = port.sizeLabel.isEmpty ? "" : " \(port.sizeLabel)"
+            onInfo?("\(label)\(size)の接続口から作図します")
+        }
+        tools.click(at: world, shiftDown: shiftDown)
         refreshPreview(shiftDown: shiftDown)
     }
 

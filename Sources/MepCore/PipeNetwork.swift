@@ -179,7 +179,12 @@ public enum PipeNetwork {
             let aRun = sameSize ? dims.teeA : (dims.teeA + (bdims.teeA > 0 ? bdims.teeA : dims.teeA)) / 2
             let aBr = aRun
             let a2r = max(max(aRun - d, 0), rb + 1)
-            let a2b = max(aBr - db, r + 1)
+            // 径違いは枝の受口底をテーパの傾きぶん外へずらす(M7。同径なら0で従来どおり)
+            let branchShift = PipeGeometry.socketShift(od: attrs.outerDiameter, otherOD: bod,
+                                                       socketOD: dims.socketOD,
+                                                       otherSocketOD: bdims.socketOD,
+                                                       taper: max(aBr - db, 1))
+            let a2b = max(aBr - db + min(max(branchShift, -db * 0.5), db * 0.5), r + 1)
             // 本管座標系(x=along, y=枝側の法線)。枝は枝方向bdirに沿って伸ばす
             let ny = Vec2(-along.y, along.x) * (side >= 0 ? 1 : -1)
             func w(_ x: Double, _ y: Double) -> Vec2 { j.position + along * x + ny * y }
@@ -285,12 +290,17 @@ public enum PipeNetwork {
             let s2 = max(odims.socketOD / 2, r2 * 1.05)
             let d2 = odims.socketDepth > 0 ? odims.socketDepth : d * 0.8
             let taper = min(max(d * 0.6, 20), 40)     // DV IN: 40〜65A:20, 75:25, 100:30, 125:35, 150:40
+            // 受口底はテーパの傾きぶん小径側へずれる(M7。大径側の受口が a1 だけ深くなる)
+            let shift = PipeGeometry.socketShift(od: attrs.outerDiameter, otherOD: otherOD,
+                                                 socketOD: dims.socketOD,
+                                                 otherSocketOD: odims.socketOD, taper: taper)
+            let a1 = min(max(shift, -d * 0.5), d2 * 0.5)
             func w(_ x: Double, _ y: Double) -> Vec2 { j.position + dir * x + n * y }
             let poly: [Vec2] = [
-                w(-d, s), w(0, s), w(taper, s2), w(taper + d2, s2),
-                w(taper + d2, -s2), w(taper, -s2), w(0, -s), w(-d, -s)]
-            return [PipeFittingShape(parts: [.polygon(poly), .polyline([w(0, -s), w(0, s)]),
-                                             .polyline([w(taper, -s2), w(taper, s2)])])]
+                w(-d, s), w(a1, s), w(taper + a1, s2), w(taper + d2, s2),
+                w(taper + d2, -s2), w(taper + a1, -s2), w(a1, -s), w(-d, -s)]
+            return [PipeFittingShape(parts: [.polygon(poly), .polyline([w(a1, -s), w(a1, s)]),
+                                             .polyline([w(taper + a1, -s2), w(taper + a1, s2)])])]
         case .teeBranch:
             return []
         case .cap(let dir):

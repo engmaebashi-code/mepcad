@@ -363,6 +363,29 @@ public enum PipeGeometry {
         max(outerDiameter * 0.9, 20)
     }
 
+    /// 径違い継手で受口の底がずれる量 a1(mm)。M7
+    ///
+    /// 大径側と小径側をつなぐテーパが傾いているぶん、受口の底は小径側へずれる
+    /// (ずらさないとテーパ部の肉が受口の肉より薄くなる)。OSE Piping Workbench の
+    /// `Dimensions.shiftA1` と同じ式:
+    ///
+    ///     a2 = max(M − POD, M1 − POD1) / 2     … 肉厚の代表値
+    ///     x  = POD − POD1                       … 径差(正なら大径→小径)
+    ///     N  = 受口底どうしの距離(テーパ区間長)
+    ///     a1 = x / √(4N² + x²) · a2             … = sin(テーパの傾き) × 肉厚
+    ///
+    /// - 大径側の受口は a1 だけ深くなり、小径側の受口は a1 だけ浅くなる
+    /// - 同径(x=0)なら 0 を返すので、同径の継手の見た目は一切変わらない
+    public static func socketShift(od: Double, otherOD: Double,
+                                   socketOD: Double, otherSocketOD: Double,
+                                   taper: Double) -> Double {
+        let x = od - otherOD
+        guard abs(x) > 1e-9, taper > 1e-9 else { return 0 }
+        let a2 = max(max(socketOD - od, otherSocketOD - otherOD) / 2, 0)
+        guard a2 > 0 else { return 0 }
+        return x / (4 * taper * taper + x * x).squareRoot() * a2
+    }
+
     // MARK: - 複線表現
 
     /// エルボの外形寸法(実効。角度で90°/45°、90°は大曲(LL)指定ならLLのA)

@@ -24,11 +24,32 @@ struct FittingPreviewView: View {
 
     var body: some View {
         let attrs = currentAttrs()
+        // 継手マスタ(fittings.csv)の妥当性検査。破綻した行は図面に出る前にここで気づく(M7)
+        let issues = FittingMaster.standard.validate(with: master)
         VStack(alignment: .leading, spacing: 8) {
             Text("継手プレビュー — \(attrs.materialLabel) \(attrs.sizeLabel)  (継手規格 \(attrs.fittingSeries.isEmpty ? "概算" : attrs.fittingSeries))")
                 .font(.system(size: 13, weight: .semibold))
             Text("複線の実形状(左)と単線記号(右)。コマンドプロパティの管種・口径・記号サイズに追従します")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
+            if !issues.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("継手マスタに\(issues.count)件の問題があります (fittings.csv)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    ForEach(Array(issues.prefix(6).enumerated()), id: \.offset) { item in
+                        Text(item.element.description)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    if issues.count > 6 {
+                        Text("ほか\(issues.count - 6)件").font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.12)))
+            }
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 10)], spacing: 10) {
                     ForEach(Item.allCases) { item in

@@ -133,6 +133,10 @@ public struct PipeTotal: Equatable, Sendable {
     public let usageName: String
     public let materialLabel: String
     public let sizeLabel: String
+    /// 継手の規格シリーズ("DV"等。型番の引き当てに使う)M7
+    public var series: String = ""
+    /// 呼び径のマスタキー(型番の引き当てに使う)M7
+    public var size: String = ""
     public let totalLengthMm: Double
     public let runCount: Int
     /// エルボ90°の個数(折れ点の自動発生分。M6.1)
@@ -159,6 +163,8 @@ public enum PipeAggregator {
             let usage: String
             let material: String
             let size: String
+            let series: String
+            let sizeKey: String
         }
         var lengths: [Key: (length: Double, count: Int, e90: Int, e45: Int,
                             tee: Int, cap: Int, red: Int)] = [:]
@@ -185,14 +191,15 @@ public enum PipeAggregator {
                 }
             }
             let key = Key(usage: attrs.usageName, material: attrs.materialLabel,
-                          size: attrs.sizeLabel)
+                          size: attrs.sizeLabel, series: attrs.fittingSeries, sizeKey: attrs.size)
             let cur = lengths[key] ?? (0, 0, 0, 0, 0, 0, 0)
             lengths[key] = (cur.length + len, cur.count + 1, cur.e90 + e90, cur.e45 + e45,
                             cur.tee + tee, cur.cap + cap, cur.red + red)
         }
         return lengths.map { key, value in
             PipeTotal(usageName: key.usage, materialLabel: key.material,
-                      sizeLabel: key.size, totalLengthMm: value.length,
+                      sizeLabel: key.size, series: key.series, size: key.sizeKey,
+                      totalLengthMm: value.length,
                       runCount: value.count,
                       elbow90Count: value.e90, elbow45Count: value.e45,
                       teeCount: value.tee, capCount: value.cap, reducerCount: value.red)
@@ -214,6 +221,28 @@ public enum PipeAggregator {
         }
         return lines.joined(separator: "\n")
     }
+
+    /// 型番つきの集計表(M7)。継手マスタに型番があれば継手ごとの列に添える。
+    /// 発注・見積の受け渡しでは呼び径だけでなく型番が要るため
+    public static func reportText(_ totals: [PipeTotal], master: FittingMaster) -> String {
+        var lines = ["用途\t管種\t呼び径\t延長(m)\t本数"
+                     + "\tエルボ90°\t型番\tエルボ45°\t型番\tティーズ\t型番\tキャップ\t型番\tレデューサ"]
+        for t in totals {
+            func part(_ kind: String) -> String {
+                guard !t.series.isEmpty, !t.size.isEmpty else { return "" }
+                return master.row(series: t.series, kind: kind, size: t.size)?.partNumber ?? ""
+            }
+            lines.append("\(t.usageName)\t\(t.materialLabel)\t\(t.sizeLabel)\t"
+                         + String(format: "%.1f", t.lengthMeters)
+                         + "\t\(t.runCount)"
+                         + "\t\(t.elbow90Count)\t\(part("elbow90"))"
+                         + "\t\(t.elbow45Count)\t\(part("elbow45"))"
+                         + "\t\(t.teeCount)\t\(part("tee"))"
+                         + "\t\(t.capCount)\t\(part("cap"))"
+                         + "\t\(t.reducerCount)")
+        }
+        return lines.joined(separator: "\n")
+    }
 }
 
 // MARK: - 継手マスタ(M6.3)
@@ -229,9 +258,40 @@ public final class FittingMaster {
         public let a: Double
         public let socketDepth: Double
         public let socketOD: Double
+        /// メーカー型番("2151 DL-100"等。任意)。集計表に出す・採寸元をたどる。M7
+        public let partNumber: String
+        /// 元CSVの行番号(1始まり。検査結果の表示用)
+        public let line: Int
+
+        public var key: String { "\(series)|\(kind)|\(size)" }
+
+        public init(series: String, kind: String, size: String, a: Double,
+                    socketDepth: Double, socketOD: Double,
+                    partNumber: String = "", line: Int = 0) {
+            self.series = series
+            self.kind = kind
+            self.size = size
+            self.a = a
+            self.socketDepth = socketDepth
+            self.socketOD = socketOD
+            self.partNumber = partNumber
+            self.line = line
+        }
+    }
+
+    /// 寸法表の検査結果(M7)。OSE Piping Workbench の Dimensions.isValid() 相当を
+    /// ロード時に走らせ、破綻した行を図面に出る前に捕まえる
+    public struct Issue: Equatable, Sendable {
+        public let line: Int
+        public let key: String
+        public let message: String
+
+        public var description: String { "\(line)行目 \(key): \(message)" }
     }
 
     public let rows: [Row]
+    /// ロード時に見つかった破綻(寸法の矛盾・キー重複・列不足)
+    public let issues: [Issue]
     private let index: [String: Row]   // "series|kind|size"
 
     public static let standard: FittingMaster = {
@@ -245,19 +305,80 @@ public final class FittingMaster {
     }()
 
     public init(csv: String) {
-        rows = csv.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
-            .map(String.init)
-            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
-            .compactMap { line -> Row? in
-                let f = line.split(separator: ",", omittingEmptySubsequences: false)
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                guard f.count >= 6, let a = Double(f[3]), let d = Double(f[4]), let od = Double(f[5]) else {
-                    return nil
-                }
-                return Row(series: f[0], kind: f[1], size: f[2], a: a, socketDepth: d, socketOD: od)
+        var parsed: [Row] = []
+        var found: [Issue] = []
+        var seen: [String: Int] = [:]     // key → 先に出た行番号
+        for (i, raw) in csv.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
+            .map(String.init).enumerated() {
+            let lineNo = i + 1
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            let f = line.split(separator: ",", omittingEmptySubsequences: false)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            guard f.count >= 6 else {
+                found.append(Issue(line: lineNo, key: f.first ?? "",
+                                   message: "列が足りません(6列必要・\(f.count)列)"))
+                continue
             }
-        index = Dictionary(rows.map { ("\($0.series)|\($0.kind)|\($0.size)", $0) },
-                           uniquingKeysWith: { first, _ in first })
+            guard let a = Double(f[3]), let d = Double(f[4]), let od = Double(f[5]) else {
+                found.append(Issue(line: lineNo, key: "\(f[0])|\(f[1])|\(f[2])",
+                                   message: "寸法が数値として読めません"))
+                continue
+            }
+            let row = Row(series: f[0], kind: f[1], size: f[2], a: a, socketDepth: d,
+                          socketOD: od, partNumber: f.count >= 7 ? f[6] : "", line: lineNo)
+            found.append(contentsOf: FittingMaster.validate(row))
+            if let prev = seen[row.key] {
+                found.append(Issue(line: lineNo, key: row.key,
+                                   message: "キーが\(prev)行目と重複しています(先の行が使われます)"))
+            } else {
+                seen[row.key] = lineNo
+            }
+            parsed.append(row)
+        }
+        rows = parsed
+        issues = found
+        index = Dictionary(parsed.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// 1行ぶんの妥当性検査。OSEの isValid() と同じ考え方で、
+    /// 「幾何として成立しない寸法」だけを弾く(値の当否は判定しない)
+    static func validate(_ row: Row) -> [Issue] {
+        var out: [Issue] = []
+        func bad(_ m: String) { out.append(Issue(line: row.line, key: row.key, message: m)) }
+        if !(row.a > 0) { bad("A寸法が正の値ではありません(\(row.a))") }
+        if !(row.socketDepth > 0) { bad("受口深さが正の値ではありません(\(row.socketDepth))") }
+        if !(row.socketOD > 0) { bad("受口外径が正の値ではありません(\(row.socketOD))") }
+        if row.a > 0, row.socketDepth > 0, !(row.a >= row.socketDepth) {
+            bad("A寸法(\(row.a))が受口深さ(\(row.socketDepth))より小さい — 受口が継手からはみ出します")
+        }
+        return out
+    }
+
+    /// 配管マスタと突き合わせた検査(受口外径 > 管外径 か)。
+    /// 管外径は継手マスタ側では分からないので別関数にしてある。
+    /// 戻り値にはロード時のissuesも含む
+    public func validate(with master: PipeMaster) -> [Issue] {
+        // series → その規格が使われる管種のod表(呼び径→外径)
+        var odBySeries: [String: [String: Double]] = [:]
+        for material in master.materials {
+            for usage in master.usages {
+                let s = FittingMaster.series(material: material.id, usage: usage.id)
+                guard !s.isEmpty else { continue }
+                for size in master.sizes(for: material.id) {
+                    odBySeries[s, default: [:]][size.size] = size.outerDiameter
+                }
+            }
+        }
+        var out = issues
+        for row in rows {
+            guard let od = odBySeries[row.series]?[row.size] else { continue }
+            if !(row.socketOD > od) {
+                out.append(Issue(line: row.line, key: row.key,
+                                 message: "受口外径(\(row.socketOD))が管外径(\(od))以下です"))
+            }
+        }
+        return out.sorted { $0.line < $1.line }
     }
 
     public var seriesList: [String] {

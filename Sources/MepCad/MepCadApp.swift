@@ -611,6 +611,31 @@ struct ContentView: View {
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
                     z: uiState.pipeLevel, drop45: uiState.pipeDrop45)
             }
+            // 既存の接続口から配管を描き始めたら、その口に合わせて設定を引き継ぐ(M7)
+            controller.onPipePortPicked = { [weak uiState] port in
+                guard let uiState else { return }
+                let master = PipeMaster.standard
+                if !port.usage.isEmpty, master.usage(port.usage) != nil {
+                    uiState.pipeUsage = port.usage
+                }
+                if !port.material.isEmpty, master.material(port.material) != nil {
+                    uiState.pipeMaterial = port.material
+                }
+                // 呼び径: 口が持つラベル、無ければ外径から現在の管種の最寄りを選ぶ
+                let sizes = master.sizes(for: uiState.pipeMaterial)
+                if let hit = sizes.first(where: {
+                    $0.label == port.sizeLabel || $0.size == port.sizeLabel
+                }) {
+                    uiState.pipeSize = hit.size
+                } else if port.outerDiameter > 0,
+                          let nearest = sizes.min(by: {
+                              abs($0.outerDiameter - port.outerDiameter)
+                                  < abs($1.outerDiameter - port.outerDiameter)
+                          }) {
+                    uiState.pipeSize = nearest.size
+                }
+                uiState.pipeLevel = port.position.z
+            }
             controller.onEditOpChanged = { kind in
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                     uiState.activeEditOp = kind
