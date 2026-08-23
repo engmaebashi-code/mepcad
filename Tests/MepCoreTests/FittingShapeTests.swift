@@ -147,4 +147,41 @@ final class FittingShapeTests: XCTestCase {
         let polygons = shape.parts.filter { if case .polygon = $0 { return true }; return false }
         XCTAssertEqual(polygons.count, 1)
     }
+
+    /// 45°の枝: 枝の受口は実寸の深さがあり、本管の受口底は枝の付け根より外側にある
+    /// (受口底が付け根より内側だと受口と枝が重なって継手として成立しない)M7.2
+    func testObliqueBranchSocketDepthAndUpstreamClearance() {
+        let main = pipe([Vec3(-3000, 0, 0), Vec3(3000, 0, 0)], od: 114, dims: dv100())
+        // 枝は上流(−x)側へ傾けて取り付ける
+        let branch = pipe([Vec3(0, 0, 0), Vec3(-2000, 2000, 0)], od: 89, dims: dv75(),
+                          branchKind: "DT")
+        let js = PipeNetwork.junctions(in: [main, branch])
+        guard let tee = js[main.id]?.first(where: { if case .tee = $0.kind { return true }; return false }),
+              case .pipe(_, let attrs) = main.kind,
+              let shape = PipeNetwork.junctionShapes(tee, attrs: attrs).first else {
+            return XCTFail("ティーズが出ない")
+        }
+        let polygons: [[Vec2]] = shape.parts.compactMap {
+            if case .polygon(let pts) = $0 { return pts }
+            return nil
+        }
+        XCTAssertEqual(polygons.count, 2)
+        let host = polygons[0], branchPoly = polygons[1]
+        let bdir = Vec2(-cos(Double.pi / 4), sin(Double.pi / 4))   // 枝の方向(上流側へ45°)
+        func alongBranch(_ p: Vec2) -> Double { p.x * bdir.x + p.y * bdir.y }
+
+        // 枝の受口の深さ = 受口底(index1)から先端(index3)まで。枝(75)の実寸40mm
+        let socket = alongBranch(branchPoly[3]) - alongBranch(branchPoly[1])
+        XCTAssertEqual(socket, dv75().socketDepth, accuracy: 0.5,
+                       "枝の受口が浅い(実寸の受口深さが要る)")
+
+        // 本管上流の受口底(host[1])は、枝の付け根(branchPoly[0] と [7])より外側(−x側)
+        let socketBottomX = host[1].x
+        let rootX = min(branchPoly[0].x, branchPoly[7].x)
+        XCTAssertLessThan(socketBottomX, rootX, "上流の受口底が枝の付け根と重なっている")
+
+        // 上流(長い側)は下流より長い — 枝が傾く側が上流
+        XCTAssertLessThan(host[0].x, 0)
+        XCTAssertGreaterThan(abs(host[0].x), abs(host.map(\.x).max()!))
+    }
 }

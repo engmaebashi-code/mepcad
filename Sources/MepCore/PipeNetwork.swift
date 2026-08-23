@@ -216,23 +216,27 @@ public enum PipeNetwork {
             let sinb = max(bdir.x * ny.x + bdir.y * ny.y, 0.2)
             let bnY = bn.x * ny.x + bn.y * ny.y
             func tRoot(_ o: Double) -> Double { max((r - bnY * o) / sinb, 0) }
-            // 斜め分岐(枝が本管に直角でない)はY形の輪郭で描く。実物でも斜めに取り付く部品はY。
-            // 直角用の輪郭は斜めだと枝の付け根(tRoot)が受口底を追い越して自己交差する。M7.1
+            // 斜め分岐(枝が本管に直角でない)は実物ではY(45°Y)。DT/LT指定でもY形の輪郭・
+            // Yの寸法で描く(直角用の輪郭は枝の付け根が受口底を追い越して自己交差する)。M7.1
             if abs(cosb) > 0.3 {
-                // 45°Y: 主管は枝が傾く側(下流)が短い。DV Y(2157)の比: 上流L1≈0.95L3、
-                // 下流L2≈0.42L3、枝L3(=y45A、無ければDT×1.72)。本体(本管部)+枝を別部品で(枝を後から重ねる)。
-                // DT/LT指定でも斜めに取り付いたときはこの輪郭を使い、長さだけ手持ちのA寸法にする
-                let isY = branchKind == "Y"
-                let l3 = !isY ? aRun
-                    : (dims.y45A > 0 ? (sameSize ? dims.y45A : (dims.y45A + (bdims.y45A > 0 ? bdims.y45A : dims.y45A)) / 2)
-                                     : aRun * 1.72)
-                let l1 = isY ? l3 * 0.95 : l3, l2 = isY ? l3 * 0.42 : l3
-                // 枝は上流側へ傾いて取り付く(枝方向bdirは接合点→枝管=上流向き)。
-                // 上流(長い側L1)は枝が傾く側、下流(短い側L2)はその反対
-                let aUp = cosb > 0 ? l2 : l1      // -along側の長さ
-                let aDown = cosb > 0 ? l1 : l2    // +along側の長さ
+                // 枝の長さL3(=y45A、無ければDT×1.72)。径違いはDV YR実測に寄せて
+                // L3 = 0.45×本管 + 0.55×枝 (100×75 → 172.6、実測172)
+                let l3base = dims.y45A > 0 ? dims.y45A : aRun * 1.72
+                let l3branch = bdims.y45A > 0 ? bdims.y45A : l3base
+                let l3 = sameSize ? l3base : 0.45 * l3base + 0.55 * l3branch
+                // DV Y(2157)の比: 上流L1≈0.95·L3、下流L2≈0.42·L3
+                // 枝は上流側へ傾いて取り付く(枝方向bdirは接合点→枝管=上流向き)
+                var aUp = cosb > 0 ? l3 * 0.42 : l3 * 0.95
+                var aDown = cosb > 0 ? l3 * 0.95 : l3 * 0.42
+                let bnAlong = bn.x * along.x + bn.y * along.y
+                func xRoot(_ o: Double) -> Double { tRoot(o) * cosb + o * bnAlong }
+                let clearance = max(s - r, 3)
+                aUp = max(aUp, d - min(xRoot(-rb), xRoot(rb)) + clearance)
+                aDown = max(aDown, d + max(xRoot(-rb), xRoot(rb)) + clearance)
                 let a2bY = max(l3 - db, tRoot(-rb) + 1, tRoot(rb) + 1)
-                let aBrY = max(l3, a2bY + db * 0.5)
+                // 枝の受口は必ず実寸の深さ(db)を確保する。付け根がせり上がった分は
+                // 枝を伸ばして吸収する。M7.2
+                let aBrY = max(l3, a2bY + db)
                 let branch: [Vec2] = [bw(tRoot(-rb), -rb), bw(a2bY, -rb), bw(a2bY, -sb), bw(aBrY, -sb),
                                       bw(aBrY, sb), bw(a2bY, sb), bw(a2bY, rb), bw(tRoot(rb), rb)]
                 return [PipeFittingShape(parts: [.polygon(hostPart(aUp: aUp, aDown: aDown))]
