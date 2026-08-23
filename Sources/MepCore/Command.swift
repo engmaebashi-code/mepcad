@@ -109,6 +109,34 @@ public final class TranslateEntitiesCommand: Command {
     }
 }
 
+/// 移動+接続追随(M7.3)。動かした配管に取り付いている配管の端も同時に更新し、
+/// 1回のUndoで両方が元に戻るようにする
+public final class TranslateWithFollowersCommand: Command {
+    public let name = "移動"
+    private let ids: Set<EntityID>
+    private let delta: Vec2
+    /// 追随して姿が変わる配管(更新後の姿)
+    private let followers: [Entity]
+    private var before: [Entity] = []
+
+    public init(ids: Set<EntityID>, delta: Vec2, followers: [Entity]) {
+        self.ids = ids
+        self.delta = delta
+        self.followers = followers
+    }
+
+    public func execute(on document: Document) {
+        before = document.entities(ids: ids)
+            + document.entities(ids: Set(followers.map(\.id)))
+        document.translateBulk(ids: ids, by: delta)
+        document.replaceBulk(followers)
+    }
+
+    public func undo(on document: Document) {
+        document.replaceBulk(before)
+    }
+}
+
 /// 複数エンティティの回転(回転コマンド)。
 /// Undoはスナップショット復元(三角関数の往復誤差を残さない)。
 public final class RotateEntitiesCommand: Command {

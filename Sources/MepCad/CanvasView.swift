@@ -438,6 +438,13 @@ final class CrosshairOverlayView: NSView {
         let ghostColor = CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.45)
         let entities = controller.selectedEntities
 
+        // 接続を保つために伸縮する配管(M7.3)。移動側と同じ色で先に描く
+        if !controller.ghostFollowers.isEmpty {
+            renderer.drawOutlines(controller.ghostFollowers, transform: controller.transform,
+                                  color: ghostColor, lineWidth: 1.5,
+                                  blockDefinitions: controller.document.blockDefinitions, in: ctx)
+        }
+
         // 変換後のゴースト本体(applyingが全変換対応)
         if entities.count <= outlineDrawLimit {
             let moved = entities.map { $0.applying(ghost) }

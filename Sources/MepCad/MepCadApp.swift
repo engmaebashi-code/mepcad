@@ -191,6 +191,7 @@ struct ContentView: View {
     @State private var snapPort = true
     // 配管の伸縮(継手の角度を保つ)M7.1
     @State private var pipeStretch = true
+    @State private var pipeFollow = true
     // パネル自動格納(Dock風: 右端に近づくと出る)
     @State private var panelRevealed = false
     @State private var panelHideWork: DispatchWorkItem?
@@ -490,6 +491,8 @@ struct ContentView: View {
                     Section("配管") {
                         Toggle("伸縮で継手の角度を保つ", isOn: $pipeStretch)
                             .onChange(of: pipeStretch) { _, v in controller.pipePreserveAngles = v }
+                        Toggle("移動時に接続先の配管を追随させる", isOn: $pipeFollow)
+                            .onChange(of: pipeFollow) { _, v in controller.pipeFollowConnections = v }
                     }
                 } label: {
                     Image(systemName: "gearshape")

@@ -416,7 +416,12 @@ final class CanvasController: NSObject {
         if tools.kind != .select { tools.select(.select) }
         editOp.angleConstraint = tools.angleConstraint  // パレットの角度拘束を移動・複写にも効かせる
         editOp.begin(kind, hasSelection: true)
+        // 接続追随の候補(配管だけ)をひろっておく
+        followerCandidates = (kind == .move && pipeFollowConnections)
+            ? document.entities.filter { if case .pipe = $0.kind { return true }; return false }
+            : []
         ghostTransform = nil
+        ghostFollowers = []
         onEditOpChanged?(kind)
         onInfo?(editOp.hint)
         needsOverlayRedraw?()
@@ -446,12 +451,37 @@ final class CanvasController: NSObject {
         needsOverlayRedraw?()
     }
 
+    /// 移動で接続が切れないよう、取り付いている配管の更新後の姿を求める(M7.3)。
+    /// 対象が配管を含まないときや設定OFFのときは空
+    private func connectionFollowers(delta: Vec2) -> [Entity] {
+        guard pipeFollowConnections, delta.length > 1e-9 else { return [] }
+        guard !followerCandidates.isEmpty else { return [] }
+        return PipeConnections.followers(movingIDs: selection, delta: delta,
+                                         in: followerCandidates)
+    }
+
+    /// 移動ゴースト中の追随プレビュー
+    private func updateGhostFollowers() {
+        guard case .move = editOp.kind, case .translate(let delta)? = ghostTransform else {
+            ghostFollowers = []
+            return
+        }
+        ghostFollowers = connectionFollowers(delta: delta)
+    }
+
     private func commitEditTransform(_ result: EditTransform) {
         guard !selection.isEmpty else { return }
         switch (editOp.kind, result) {
         case (.move, .translate(let delta)):
-            commandStack.run(TranslateEntitiesCommand(ids: selection, delta: delta))
-            onInfo?("\(selection.count)個を移動しました(⌘Zで取り消し)")
+            let followers = connectionFollowers(delta: delta)
+            if followers.isEmpty {
+                commandStack.run(TranslateEntitiesCommand(ids: selection, delta: delta))
+                onInfo?("\(selection.count)個を移動しました(⌘Zで取り消し)")
+            } else {
+                commandStack.run(TranslateWithFollowersCommand(ids: selection, delta: delta,
+                                                               followers: followers))
+                onInfo?("\(selection.count)個を移動しました — 接続している配管\(followers.count)本が伸縮して追随(⌘Zで取り消し)")
+            }
         case (.copy, .translate(let delta)):
             let copies = selectedEntities.map { $0.duplicated(by: delta) }
             commandStack.run(AddEntitiesCommand(name: "複写", entities: copies))
@@ -491,6 +521,8 @@ final class CanvasController: NSObject {
         guard editOp.isActive else { return }
         editOp.cancel()
         ghostTransform = nil
+        ghostFollowers = []
+        followerCandidates = []
         onEditOpChanged?(nil)
         publishSelectionHint()
         needsOverlayRedraw?()
@@ -522,6 +554,16 @@ final class CanvasController: NSObject {
         didSet { onPipeStretchChanged?(pipePreserveAngles) }
     }
     var onPipeStretchChanged: ((Bool) -> Void)?
+
+    /// 配管を移動したとき、取り付いている配管の端を管軸方向へ伸縮させて接続を保つ(M7.3)
+    var pipeFollowConnections = true
+
+    /// 移動ゴースト中に追随して伸縮する配管(プレビュー表示用)
+    private(set) var ghostFollowers: [Entity] = []
+
+    /// 追随計算の対象になりうる配管(移動開始時にひろっておく。
+    /// ドラッグ中は図面が変わらないので毎回の全走査を避ける)
+    private var followerCandidates: [Entity] = []
     private(set) var gripNumericBuffer = ""
 
     /// いま表示すべきグリップ(選択ツール・非編集中・少数選択のときだけ)
@@ -1352,8 +1394,10 @@ final class CanvasController: NSObject {
         if editOp.isActive {
             let effective = snappedScreen ?? p
             ghostTransform = editOp.previewTransform(cursor: transform.toWorld(effective))
+            updateGhostFollowers()
         } else {
             ghostTransform = nil
+            ghostFollowers = []
         }
         // 伸縮(グリップ編集)中のプレビュー更新
         if gripDrag != nil {
