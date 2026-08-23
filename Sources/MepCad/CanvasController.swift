@@ -515,6 +515,13 @@ final class CanvasController: NSObject {
     }
 
     private(set) var gripDrag: GripDragState?
+
+    /// 配管の頂点を掴んだときに継手の角度を保つ「伸縮」で動かす(M7.1)。
+    /// 切ると従来どおり頂点だけが自由に動く(角度も変わる)
+    var pipePreserveAngles = true {
+        didSet { onPipeStretchChanged?(pipePreserveAngles) }
+    }
+    var onPipeStretchChanged: ((Bool) -> Void)?
     private(set) var gripNumericBuffer = ""
 
     /// いま表示すべきグリップ(選択ツール・非編集中・少数選択のときだけ)
@@ -567,7 +574,8 @@ final class CanvasController: NSObject {
         let effective = snappedScreen ?? cursor
         let world = gripConstrained(transform.toWorld(effective), state: state)
         state.current = world
-        state.preview = GripEngine.apply(state.grip.kind, to: state.original, at: world)
+        state.preview = GripEngine.apply(state.grip.kind, to: state.original, at: world,
+                                         preserveAngles: pipePreserveAngles)
         gripDrag = state
     }
 
@@ -654,7 +662,8 @@ final class CanvasController: NSObject {
             guard len > 1e-9 else { return true }
             let target = Vec2(fixed.x + dir.x / len * value, fixed.y + dir.y / len * value)
             state.current = target
-            state.preview = GripEngine.apply(state.grip.kind, to: state.original, at: target)
+            state.preview = GripEngine.apply(state.grip.kind, to: state.original, at: target,
+                                             preserveAngles: pipePreserveAngles)
             gripDrag = state
             commitGripDrag()
             return true
@@ -692,7 +701,9 @@ final class CanvasController: NSObject {
         case .leaderElbow:
             return "引出線: 文字位置を動かす(引出線が追随)/ \(commit) / esc中止"
         case .pipeVertex:
-            return "配管: 折れ点を動かす(傍記が追随)— スナップ有効 / \(commit) / esc中止"
+            return pipePreserveAngles
+                ? "配管の伸縮: 継手の角度を保ったまま脚が伸び縮みします(歯車メニューで切替可)/ \(commit) / esc中止"
+                : "配管: 折れ点を自由に動かす(継手の角度も変わります)/ \(commit) / esc中止"
         }
     }
 

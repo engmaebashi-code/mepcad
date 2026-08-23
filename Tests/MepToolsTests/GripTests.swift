@@ -213,4 +213,25 @@ final class GripTests: XCTestCase {
         let r = engine.snap(Vec2(1002, 2), radius: 10)
         XCTAssertEqual(r?.point, Vec2(1000, 0))
     }
+
+    // MARK: - 配管の伸縮(M7.1)
+
+    /// 配管の頂点グリップは既定で「伸縮」— 継手の角度を保ったまま脚が伸び縮みする
+    func testPipeVertexGripPreservesFittingAngles() {
+        let pts = [Vec3(0, 0, 0), Vec3(3000, 0, 0), Vec3(3000, 4000, 0)]
+        let entity = Entity(layer: LayerAddress(0, 0),
+                            kind: .pipe(points: pts, attrs: PipeAttributes()))
+        let kept = GripEngine.apply(.pipeVertex(index: 1), to: entity, at: Vec2(4500, 500))
+        guard case .pipe(let keptPts, _) = kept.kind else { return XCTFail() }
+        XCTAssertEqual(PipeGeometry.fittings(points: keptPts).first?.kind, .elbow90)
+        XCTAssertEqual(keptPts[1].xy, Vec2(4500, 500))   // 掴んだ点はカーソルに追随
+
+        // 切ると従来どおり頂点だけが自由に動く(角度も変わる)
+        let free = GripEngine.apply(.pipeVertex(index: 1), to: entity, at: Vec2(4500, 500),
+                                    preserveAngles: false)
+        guard case .pipe(let freePts, _) = free.kind else { return XCTFail() }
+        XCTAssertEqual(freePts[0], pts[0])
+        XCTAssertEqual(freePts[2], pts[2])
+        XCTAssertNotEqual(PipeGeometry.fittings(points: freePts).first?.kind, .elbow90)
+    }
 }

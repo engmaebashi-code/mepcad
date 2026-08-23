@@ -363,6 +363,96 @@ public enum PipeGeometry {
         max(outerDiameter * 0.9, 20)
     }
 
+    // MARK: - 伸縮(継手の角度を保つ頂点移動)M7.1
+
+    /// 配管の頂点を、継手の角度を保ったまま動かす(FILDERの「伸縮」に相当)。
+    ///
+    /// 掴んだ頂点をそのまま動かすと折れ角が変わってしまい、90°エルボが「その他の角度」に
+    /// 化けてしまう。そこで移動量δを隣り合う2区間の方向 u(手前)・v(先)に分解し
+    /// δ = α·u + β·v として:
+    ///   - 掴んだ頂点は δ だけ動かす(=カーソルに追随する)
+    ///   - 手前側(1つ前の頂点から始点まで)を β·v だけ平行移動
+    ///   - 先側(1つ次の頂点から終点まで)を α·u だけ平行移動
+    /// とすると、どの区間も方向が変わらない = すべての継手角度が保たれ、
+    /// 掴んだ頂点の両脚だけが伸び縮みする。
+    ///
+    /// - 端点(隣が1区間しかない)はその区間の方向へ伸縮するだけ(他は動かない)
+    /// - 直進に近い頂点(u≒v)は分解できないので区間方向への伸縮に落とす
+    /// - 立管(平面上同一点の連続頂点)はひとまとまりで動かす。高さ(z)は変えない
+    /// - 脚が潰れないよう、残り長さが minLeg を下回る手前で止める
+    public static func stretch(points: [Vec3], index: Int, to target: Vec2,
+                               minLeg: Double = 1.0) -> [Vec3] {
+        guard points.count >= 2, points.indices.contains(index) else { return points }
+        // 立管(平面上で同じ位置の連続頂点)をひとまとまりにする
+        let anchor = points[index].xy
+        var groupStart = index, groupEnd = index
+        while groupStart > 0,
+              points[groupStart - 1].xy.distance(to: anchor) <= planEpsilon { groupStart -= 1 }
+        while groupEnd < points.count - 1,
+              points[groupEnd + 1].xy.distance(to: anchor) <= planEpsilon { groupEnd += 1 }
+        let delta = target - anchor
+        guard delta.length > 1e-12 else { return points }
+
+        func unit(_ from: Vec2, _ to: Vec2) -> (Vec2, Double)? {
+            let d = to - from
+            let len = d.length
+            return len > planEpsilon ? (d * (1 / len), len) : nil
+        }
+        let back = groupStart > 0 ? unit(points[groupStart - 1].xy, anchor) : nil
+        let fwd = groupEnd < points.count - 1 ? unit(anchor, points[groupEnd + 1].xy) : nil
+
+        /// 区間方向tへの伸縮量(残り長さがminLegを下回らないよう頭打ち)
+        func slide(_ u: Vec2, _ length: Double) -> Double {
+            let t = delta.x * u.x + delta.y * u.y
+            return max(t, -(max(length - minLeg, 0)))
+        }
+
+        var vertexShift = Vec2.zero
+        var upstreamShift = Vec2.zero
+        var downstreamShift = Vec2.zero
+        switch (back, fwd) {
+        case (let b?, let f?):
+            let (u, l1) = b
+            let (v, l2) = f
+            let cross = u.x * v.y - u.y * v.x
+            if abs(cross) < 0.05 {
+                // ほぼ直進 — 2方向に分解できないので手前区間の方向へ伸縮する
+                let t = slide(u, l1)
+                vertexShift = u * t
+                downstreamShift = u * t
+            } else {
+                var alpha = (delta.x * v.y - delta.y * v.x) / cross
+                var beta = (u.x * delta.y - u.y * delta.x) / cross
+                alpha = max(alpha, -(max(l1 - minLeg, 0)))   // 手前脚が潰れない
+                beta = min(beta, max(l2 - minLeg, 0))        // 先の脚が潰れない
+                vertexShift = u * alpha + v * beta
+                upstreamShift = v * beta
+                downstreamShift = u * alpha
+            }
+        case (let b?, nil):
+            let (u, l1) = b
+            vertexShift = u * slide(u, l1)
+        case (nil, let f?):
+            let (v, l2) = f
+            // 始点側: 区間方向vへの伸縮(手前に伸ばすとl2が伸びるので頭打ちは逆向き)
+            let t = delta.x * v.x + delta.y * v.y
+            vertexShift = v * min(t, max(l2 - minLeg, 0))
+        default:
+            return points
+        }
+
+        var out = points
+        for i in points.indices {
+            let shift: Vec2
+            if i < groupStart { shift = upstreamShift }
+            else if i > groupEnd { shift = downstreamShift }
+            else { shift = vertexShift }
+            guard shift.length > 0 else { continue }
+            out[i] = Vec3(points[i].xy + shift, z: points[i].z)
+        }
+        return out
+    }
+
     /// 径違い継手で受口の底がずれる量 a1(mm)。M7
     ///
     /// 大径側と小径側をつなぐテーパが傾いているぶん、受口の底は小径側へずれる

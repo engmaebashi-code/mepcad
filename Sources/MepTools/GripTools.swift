@@ -98,8 +98,11 @@ public enum GripEngine {
     }
 
     /// グリップをワールド点pへ動かした結果のエンティティ(idは維持)。
-    /// 組合せが不正・退化する場合は元のまま返す
-    public static func apply(_ kind: Grip.Kind, to entity: Entity, at p: Vec2) -> Entity {
+    /// 組合せが不正・退化する場合は元のまま返す。
+    /// - preserveAngles: 配管の頂点を動かすとき、継手の角度を保つ「伸縮」にする(M7.1)。
+    ///   falseなら頂点だけが自由に動く(従来の挙動)
+    public static func apply(_ kind: Grip.Kind, to entity: Entity, at p: Vec2,
+                             preserveAngles: Bool = true) -> Entity {
         var copy = entity
         switch (kind, entity.kind) {
         case (.lineStart, .line(_, let b)):
@@ -158,6 +161,12 @@ public enum GripEngine {
             copy.kind = .leader(tip: tip, elbow: p, content: content, attrs: attrs)
         case (.pipeVertex(let index), .pipe(let points, let attrs)):
             guard points.indices.contains(index) else { return entity }
+            if preserveAngles {
+                // 伸縮: 継手の角度(90°/45°)を保ったまま脚を伸び縮みさせる(M7.1)
+                copy.kind = .pipe(points: PipeGeometry.stretch(points: points, index: index, to: p),
+                                  attrs: attrs)
+                break
+            }
             var moved = points
             // 立管の上下端(平面上同一点の連続頂点)は一緒に動かす。高さは維持
             let anchor = points[index].xy

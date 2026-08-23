@@ -188,6 +188,9 @@ struct ContentView: View {
     @State private var snapMidpoint = true
     @State private var snapCenter = true
     @State private var snapOnLine = true
+    @State private var snapPort = true
+    // 配管の伸縮(継手の角度を保つ)M7.1
+    @State private var pipeStretch = true
     // パネル自動格納(Dock風: 右端に近づくと出る)
     @State private var panelRevealed = false
     @State private var panelHideWork: DispatchWorkItem?
@@ -480,11 +483,18 @@ struct ContentView: View {
                             .onChange(of: snapCenter) { _, v in controller.snapEngine.settings.center = v }
                         Toggle("線上", isOn: $snapOnLine)
                             .onChange(of: snapOnLine) { _, v in controller.snapEngine.settings.onLine = v }
+                        Toggle("接続口(配管・機器)", isOn: $snapPort)
+                            .onChange(of: snapPort) { _, v in controller.snapEngine.settings.port = v }
+                    }
+                    Divider()
+                    Section("配管") {
+                        Toggle("伸縮で継手の角度を保つ", isOn: $pipeStretch)
+                            .onChange(of: pipeStretch) { _, v in controller.pipePreserveAngles = v }
                     }
                 } label: {
                     Image(systemName: "gearshape")
                 }
-                .help("設定: パネル固定 / 背景色 / スナップ種別")
+                .help("設定: パネル固定 / 背景色 / スナップ種別 / 配管の伸縮")
             }
         }
         .onChange(of: uiState.panelPinned) { _, pinned in
