@@ -118,4 +118,28 @@ final class PipeConnectionTests: XCTestCase {
         XCTAssertTrue(PipeConnections.followers(movingIDs: [main.id], delta: .zero,
                                                 in: [main, branch]).isEmpty)
     }
+
+    /// 芯線にきっちりスナップできていない枝(胴の中で止まっている)も追随する。M7.4
+    /// 追随後は端が芯線にぴったり乗るので、そこで継手も出るようになる
+    func testLooselyAttachedBranchStillFollows() {
+        let main = pipe([Vec3(-3000, 0, 0), Vec3(3000, 0, 0)])          // VP100(外径114)
+        // 枝の端が芯線から40mm手前で止まっている(本管の胴の中)
+        let branch = pipe([Vec3(40, 40, 0), Vec3(2040, 2040, 0)], od: 89, size: "75")
+        let moved = PipeConnections.followers(movingIDs: [main.id], delta: Vec2(0, -500),
+                                              in: [main, branch])
+        XCTAssertEqual(moved.count, 1)
+        let after = points(moved[0])
+        // 移動後の芯線(y=-500)にぴったり乗る
+        XCTAssertEqual(after[0].xy.y, -500, accuracy: 1e-6)
+        XCTAssertEqual(after[0].xy.x, -500, accuracy: 1e-6)   // 45°の軸上を滑る
+    }
+
+    /// 胴からも外れている(明らかに繋がっていない)枝は追随しない
+    func testClearlyDetachedBranchDoesNotFollow() {
+        let main = pipe([Vec3(-3000, 0, 0), Vec3(3000, 0, 0)])
+        // 芯線から400mm離れている(本管の外半径57+枝の外半径44.5を大きく超える)
+        let branch = pipe([Vec3(400, 400, 0), Vec3(2400, 2400, 0)], od: 89, size: "75")
+        XCTAssertTrue(PipeConnections.followers(movingIDs: [main.id], delta: Vec2(0, -500),
+                                                in: [main, branch]).isEmpty)
+    }
 }

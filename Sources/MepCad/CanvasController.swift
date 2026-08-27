@@ -476,7 +476,12 @@ final class CanvasController: NSObject {
             let followers = connectionFollowers(delta: delta)
             if followers.isEmpty {
                 commandStack.run(TranslateEntitiesCommand(ids: selection, delta: delta))
-                onInfo?("\(selection.count)個を移動しました(⌘Zで取り消し)")
+                // 追随が効くはずの状況で0本なら、接続が見つからなかったことを伝える
+                // (作図時に芯線へスナップできていないと接続とみなせない)
+                let hadPipes = !followerCandidates.isEmpty && pipeFollowConnections
+                onInfo?(hadPipes
+                        ? "\(selection.count)個を移動しました — 接続している配管は見つかりませんでした(⌘Zで取り消し)"
+                        : "\(selection.count)個を移動しました(⌘Zで取り消し)")
             } else {
                 commandStack.run(TranslateWithFollowersCommand(ids: selection, delta: delta,
                                                                followers: followers))

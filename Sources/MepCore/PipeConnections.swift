@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - 移動時の接続追随(伸縮移動)M7.3
+// MARK: - 移動時の接続追随(伸縮移動)M7.3 / M7.4
 //
 // 本管を移動したとき、そこに取り付いている枝管が置き去りになって接続が切れると
 // 継手も消えてしまう。FILDERの伸縮移動と同じく、動かさない側の配管の端を
@@ -11,11 +11,16 @@ import Foundation
 //   端は自分の軸線上を滑るだけなので、枝管の角度(=継手の角度)は変わらない。
 // - 端どうしが突き合わさっている場合: 接続点そのものが動くので、端をその点へ合わせる。
 //
+// M7.4: 判定を2段階にした。まず継手と同じ厳密な許容(1mm)で探し、見つからなければ
+// 「枝の端が本管の胴に入っている(両者の外半径の和まで)」を接続とみなす。
+// 作図時にきっちり芯線へスナップできていなくても掴めるようにするため
+// — 追随後は端がぴったり芯線に乗るので、そこで継手も出るようになる。
+//
 // 移動する側は既存の平行移動のまま。ここで求めるのは「動かさない側の新しい姿」だけ。
 
 public enum PipeConnections {
 
-    /// 接続とみなす許容(mm)
+    /// 継手判定と同じ厳密な許容(mm)
     public static var tolerance: Double { PipeNetwork.joinTolerance }
 
     /// 伸縮後に残す最小の脚長(mm)
@@ -28,13 +33,14 @@ public enum PipeConnections {
         guard delta.length > 1e-9, !movingIDs.isEmpty else { return [] }
         struct Moving {
             let points: [Vec3]
+            let radius: Double
         }
         var moving: [Moving] = []
         var others: [Entity] = []
         for e in entities {
-            guard case .pipe(let pts, _) = e.kind, pts.count >= 2 else { continue }
+            guard case .pipe(let pts, let attrs) = e.kind, pts.count >= 2 else { continue }
             if movingIDs.contains(e.id) {
-                moving.append(Moving(points: pts))
+                moving.append(Moving(points: pts, radius: max(attrs.outerDiameter / 2, 0)))
             } else {
                 others.append(e)
             }
@@ -46,6 +52,7 @@ public enum PipeConnections {
         for entity in others {
             guard case .pipe(let pts, let attrs) = entity.kind else { continue }
             var points = pts
+            let selfRadius = max(attrs.outerDiameter / 2, 0)
             var changed = false
             for atStart in [true, false] {
                 let idx = atStart ? 0 : points.count - 1
@@ -54,31 +61,46 @@ public enum PipeConnections {
                 guard let axis = PipeNetwork.outwardDirection(points: points, atStart: atStart),
                       let anchor = axisAnchor(points: points, atStart: atStart) else { continue }
 
-                var target: Vec2?
-                search: for m in moving {
-                    // (a) 端点どうしの突き合わせ — 接続点そのものが動く
-                    for mi in [0, m.points.count - 1] {
-                        let mp = m.points[mi]
-                        if mp.xy.distance(to: end.xy) <= tol, abs(mp.z - end.z) <= tol {
-                            target = mp.xy + delta
-                            break search
+                /// 相手の端点と一致しているか(接続点そのものが動く)
+                func buttJoint(within reach: Double) -> Vec2? {
+                    var best: (Vec2, Double)?
+                    for m in moving {
+                        let limit = max(reach, tol)
+                        for mi in [0, m.points.count - 1] {
+                            let mp = m.points[mi]
+                            let d = mp.xy.distance(to: end.xy)
+                            guard d <= limit, abs(mp.z - end.z) <= tol else { continue }
+                            if best == nil || d < best!.1 { best = (mp.xy + delta, d) }
                         }
                     }
-                    // (b) 相手の芯線上に乗っている(枝管→本管)— 移動後の芯線と自分の軸線の交点へ
-                    for s in 0..<(m.points.count - 1) {
-                        let a = m.points[s], b = m.points[s + 1]
-                        guard a.xy.distance(to: b.xy) > PipeGeometry.planEpsilon else { continue }
-                        let foot = HitGeometry.closestPointOnSegment(end.xy, a.xy, b.xy)
-                        guard foot.distance(to: end.xy) <= tol, abs(end.z - a.z) <= tol else { continue }
-                        if let x = intersection(origin: anchor, direction: axis,
-                                                segmentA: a.xy + delta, segmentB: b.xy + delta) {
-                            target = x
-                        } else {
-                            target = end.xy + delta   // 軸が本管と平行 — 平行移動で追随
-                        }
-                        break search
-                    }
+                    return best?.0
                 }
+
+                /// 相手の芯線上に乗っているか(枝管→本管)。移動後の芯線と自分の軸線の交点へ
+                func onCenterline(within reach: Double) -> Vec2? {
+                    var best: (Vec2, Double)?
+                    for m in moving {
+                        let limit = max(reach + m.radius, tol)
+                        for s in 0..<(m.points.count - 1) {
+                            let a = m.points[s], b = m.points[s + 1]
+                            guard a.xy.distance(to: b.xy) > PipeGeometry.planEpsilon else { continue }
+                            let foot = HitGeometry.closestPointOnSegment(end.xy, a.xy, b.xy)
+                            let d = foot.distance(to: end.xy)
+                            guard d <= limit, abs(end.z - a.z) <= tol else { continue }
+                            let x = intersection(origin: anchor, direction: axis,
+                                                 segmentA: a.xy + delta, segmentB: b.xy + delta)
+                                ?? (end.xy + delta)     // 軸が本管と平行 — 平行移動で追随
+                            if best == nil || d < best!.1 { best = (x, d) }
+                        }
+                    }
+                    return best?.0
+                }
+
+                // 1段目: 継手と同じ厳密な判定(端点の一致 → 芯線上)
+                // 2段目: 胴に入っていれば接続とみなす(芯線上を優先 — 枝の角度が保たれる)
+                let reach = selfRadius + 1
+                let target = buttJoint(within: tol) ?? onCenterline(within: tol)
+                    ?? onCenterline(within: reach) ?? buttJoint(within: reach)
                 guard let t = target else { continue }
                 // 動く必要がない(接続点が同じ位置のまま)なら触らない
                 guard t.distance(to: end.xy) > 1e-6 else { continue }
@@ -127,7 +149,7 @@ public enum PipeConnections {
         return out
     }
 
-    /// 半直線(origin, direction)と線分ABを含む直線の交点。平行ならnil
+    /// 直線(origin, direction)と線分ABを含む直線の交点。平行ならnil
     static func intersection(origin: Vec2, direction: Vec2,
                              segmentA: Vec2, segmentB: Vec2) -> Vec2? {
         let s = segmentB - segmentA
