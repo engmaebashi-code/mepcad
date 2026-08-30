@@ -115,4 +115,58 @@ final class PipeStretchTests: XCTestCase {
         XCTAssertEqual(out[1].xy.x, 3500, accuracy: 1e-9)
         assertSameDirections(pts, out)
     }
+
+    // MARK: - 区間の伸縮(M7.5)
+
+    /// Z形: 上の横走りを下げると、縦の区間が縮んで吸収し、下の横走りは1mmも動かない
+    func testSegmentStretchAbsorbedByNeighbour() {
+        let pts = [Vec3(0, 3000, 0), Vec3(6000, 3000, 0), Vec3(6000, 0, 0), Vec3(12000, 0, 0)]
+        let out = PipeGeometry.stretchSegment(points: pts, index: 0, by: Vec2(0, -800))
+        // 掴んだ区間は800下がる
+        XCTAssertEqual(out[0].xy, Vec2(0, 2200))
+        XCTAssertEqual(out[1].xy, Vec2(6000, 2200))
+        // 下の横走りは動かない
+        XCTAssertEqual(out[2], pts[2])
+        XCTAssertEqual(out[3], pts[3])
+        // 縦の区間が3000→2200に縮む(方向は不変)
+        XCTAssertEqual(out[1].xy.distance(to: out[2].xy), 2200, accuracy: 1e-6)
+        assertSameDirections(pts, out)
+        XCTAssertEqual(PipeGeometry.fittings(points: out).map(\.kind), [.elbow90, .elbow90])
+    }
+
+    /// 中央の縦区間を横へ動かすと、上下の横走りが伸縮して両端は動かない
+    func testMiddleSegmentSlidesAndNeighboursAdjust() {
+        let pts = [Vec3(0, 3000, 0), Vec3(6000, 3000, 0), Vec3(6000, 0, 0), Vec3(12000, 0, 0)]
+        let out = PipeGeometry.stretchSegment(points: pts, index: 1, by: Vec2(500, 0))
+        XCTAssertEqual(out[0], pts[0])                    // 両端は据え置き
+        XCTAssertEqual(out[3], pts[3])
+        XCTAssertEqual(out[1].xy, Vec2(6500, 3000))       // 縦区間が500右へ
+        XCTAssertEqual(out[2].xy, Vec2(6500, 0))
+        assertSameDirections(pts, out)
+    }
+
+    /// 区間の軸方向へ動かしても形は変わらない(直線を自分の上で滑らせても同じ直線)
+    func testSegmentMoveAlongItsAxisDoesNothing() {
+        let pts = [Vec3(0, 3000, 0), Vec3(6000, 3000, 0), Vec3(6000, 0, 0)]
+        let out = PipeGeometry.stretchSegment(points: pts, index: 0, by: Vec2(700, 0))
+        XCTAssertEqual(out[1], pts[1])                    // 折れ点は動かない
+        XCTAssertEqual(out[2], pts[2])
+        XCTAssertEqual(out[0].xy, Vec2(700, 3000))        // 自由端だけが軸上を動く
+        assertSameDirections(pts, out)
+    }
+
+    /// 隣の区間が潰れる手前で止まる
+    func testSegmentStretchStopsBeforeCollapse() {
+        let pts = [Vec3(0, 3000, 0), Vec3(6000, 3000, 0), Vec3(6000, 0, 0), Vec3(12000, 0, 0)]
+        let out = PipeGeometry.stretchSegment(points: pts, index: 0, by: Vec2(0, -5000), minLeg: 1)
+        XCTAssertEqual(out[1].xy.distance(to: out[2].xy), 1, accuracy: 1e-6)
+        XCTAssertEqual(out[2], pts[2])
+        assertSameDirections(pts, out)
+    }
+
+    /// 立管(平面上は点)の区間には伸縮グリップを作らない = 何も起きない
+    func testRiserSegmentIsNotStretched() {
+        let pts = [Vec3(0, 0, 0), Vec3(3000, 0, 0), Vec3(3000, 0, 2500)]
+        XCTAssertEqual(PipeGeometry.stretchSegment(points: pts, index: 1, by: Vec2(0, 500)), pts)
+    }
 }

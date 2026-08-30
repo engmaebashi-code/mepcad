@@ -26,6 +26,7 @@ public struct Grip: Equatable, Sendable {
         case leaderTip                     // 引出線: 指示点(矢印先端)
         case leaderElbow                   // 引出線: 文字位置/バルーン中心
         case pipeVertex(index: Int)        // 配管: 折れ点(頂点ごと)
+        case pipeSegment(index: Int)       // 配管: 区間の中点(区間ごと平行移動=伸縮)M7.5
     }
 
     public let entityID: EntityID
@@ -93,6 +94,13 @@ public enum GripEngine {
                 if i > 0, points[i - 1].xy.distance(to: p.xy) <= PipeGeometry.planEpsilon { continue }
                 grips.append(Grip(entityID: entity.id, kind: .pipeVertex(index: i), point: p.xy))
             }
+            // 区間の中点(掴むとその区間だけ平行に動き、隣の区間が伸縮して吸収する)M7.5
+            for i in 0..<(points.count - 1) {
+                let a = points[i].xy, b = points[i + 1].xy
+                guard a.distance(to: b) > PipeGeometry.planEpsilon else { continue }  // 立管は除く
+                grips.append(Grip(entityID: entity.id, kind: .pipeSegment(index: i),
+                                  point: Vec2((a.x + b.x) / 2, (a.y + b.y) / 2)))
+            }
             return grips
         }
     }
@@ -159,6 +167,15 @@ public enum GripEngine {
         case (.leaderElbow, .leader(let tip, _, let content, let attrs)):
             guard p.distance(to: tip) > 1e-9 else { return entity }
             copy.kind = .leader(tip: tip, elbow: p, content: content, attrs: attrs)
+        case (.pipeSegment(let index), .pipe(let points, let attrs)):
+            // 区間の伸縮: 掴んだ区間を平行に動かし、隣の区間が伸び縮みして吸収する。
+            // 掴んだ区間の向こう側は1つも動かない(他の配管の位置に影響しない)M7.5
+            guard index >= 0, index + 1 < points.count else { return entity }
+            let mid = Vec2((points[index].x + points[index + 1].x) / 2,
+                           (points[index].y + points[index + 1].y) / 2)
+            copy.kind = .pipe(points: PipeGeometry.stretchSegment(points: points, index: index,
+                                                                 by: p - mid),
+                              attrs: attrs)
         case (.pipeVertex(let index), .pipe(let points, let attrs)):
             guard points.indices.contains(index) else { return entity }
             if preserveAngles {

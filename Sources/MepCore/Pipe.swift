@@ -453,6 +453,98 @@ public enum PipeGeometry {
         return out
     }
 
+    /// 区間(セグメント)の伸縮。掴んだ区間を平行に動かし、両隣の区間が伸び縮みして吸収する。M7.5
+    ///
+    /// Z形の配管で「上の横走りだけを動かし、縦の区間が伸び縮みして、下の横走りは
+    /// そのまま」という操作。掴んだ区間の直線をdeltaだけ平行移動し、両端の頂点は
+    /// 隣の区間の直線との交点へ移す:
+    ///   - どの区間も方向が変わらない = すべての継手の角度が保たれる
+    ///   - 掴んだ区間の向こう側(隣の区間より先)の頂点は1つも動かない
+    ///   - 区間の軸方向の成分は直線を動かさないので、実質「垂直方向のずらし」になる
+    /// 端の区間(隣が無い側)は、その端の頂点が区間と一緒に平行移動する。
+    /// 隣の区間が平行(一直線)で交点が無い場合もその頂点は平行移動する。
+    public static func stretchSegment(points: [Vec3], index: Int, by delta: Vec2,
+                                      minLeg: Double = 1) -> [Vec3] {
+        guard points.count >= 2, index >= 0, index + 1 < points.count,
+              delta.length > 1e-12 else { return points }
+        let aPlan = points[index].xy
+        let bPlan = points[index + 1].xy
+        let seg = bPlan - aPlan
+        guard seg.length > planEpsilon else { return points }   // 立管(平面上は点)は対象外
+        let u = seg * (1 / seg.length)
+
+        // 掴んだ区間の両端(立管は平面上同じ位置の連続頂点をひとまとまりに)
+        let (aStart, aEnd) = planGroup(points, index)
+        let (bStart, bEnd) = planGroup(points, index + 1)
+        let neighborA = aStart > 0 ? aStart - 1 : nil
+        let neighborB = bEnd < points.count - 1 ? bEnd + 1 : nil
+
+        /// deltaをscale倍したときの、隣の区間の長さ(端で隣が無ければnil)
+        func legLength(_ plan: Vec2, neighbor: Int?, scale: Double) -> Double? {
+            guard let ni = neighbor else { return nil }
+            let nb = points[ni].xy
+            let d = plan - nb
+            guard d.length > planEpsilon else { return nil }
+            let dir = d * (1 / d.length)
+            guard let x = lineIntersection(origin: nb, direction: dir,
+                                           other: aPlan + delta * scale,
+                                           otherDirection: u) else { return nil }
+            return (x - nb).x * dir.x + (x - nb).y * dir.y
+        }
+
+        // 隣の区間が潰れる手前で止める(頂点ごとに切ると区間が傾いてしまうので、
+        // 移動量そのものを縮めて区間の向きを保つ)
+        var scale = 1.0
+        for (plan, nb) in [(aPlan, neighborA), (bPlan, neighborB)] {
+            guard let t1 = legLength(plan, neighbor: nb, scale: 1),
+                  let t0 = legLength(plan, neighbor: nb, scale: 0) else { continue }
+            if t1 < minLeg, abs(t1 - t0) > 1e-9 {
+                scale = min(scale, max((minLeg - t0) / (t1 - t0), 0))
+            }
+        }
+        let shift = delta * scale
+        let lineOrigin = aPlan + shift
+
+        /// 隣の頂点から見て方向を保ったまま、移動後の直線と交わる点
+        func adjusted(_ plan: Vec2, neighbor: Int?) -> Vec2 {
+            guard let ni = neighbor else { return plan + shift }   // 端 → 一緒に動く
+            let nb = points[ni].xy
+            let d = plan - nb
+            guard d.length > planEpsilon else { return plan + shift }
+            let dir = d * (1 / d.length)
+            return lineIntersection(origin: nb, direction: dir,
+                                    other: lineOrigin, otherDirection: u)
+                ?? (plan + shift)                                  // 平行 → 平行移動
+        }
+
+        let newA = adjusted(aPlan, neighbor: neighborA)
+        let newB = adjusted(bPlan, neighbor: neighborB)
+
+        var out = points
+        for i in aStart...aEnd { out[i] = Vec3(newA, z: points[i].z) }
+        for i in bStart...bEnd { out[i] = Vec3(newB, z: points[i].z) }
+        return out
+    }
+
+    /// 平面上で同じ位置に並ぶ連続頂点の範囲(立管の上下端をひとまとまりに扱う)
+    static func planGroup(_ points: [Vec3], _ index: Int) -> (Int, Int) {
+        let anchor = points[index].xy
+        var start = index, end = index
+        while start > 0, points[start - 1].xy.distance(to: anchor) <= planEpsilon { start -= 1 }
+        while end < points.count - 1, points[end + 1].xy.distance(to: anchor) <= planEpsilon { end += 1 }
+        return (start, end)
+    }
+
+    /// 2直線の交点(それぞれ点と方向で与える)。平行ならnil
+    static func lineIntersection(origin: Vec2, direction: Vec2,
+                                 other: Vec2, otherDirection: Vec2) -> Vec2? {
+        let den = direction.x * otherDirection.y - direction.y * otherDirection.x
+        guard abs(den) > 1e-9 else { return nil }
+        let q = other - origin
+        let t = (q.x * otherDirection.y - q.y * otherDirection.x) / den
+        return origin + direction * t
+    }
+
     /// 径違い継手で受口の底がずれる量 a1(mm)。M7
     ///
     /// 大径側と小径側をつなぐテーパが傾いているぶん、受口の底は小径側へずれる

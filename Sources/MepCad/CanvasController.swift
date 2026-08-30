@@ -747,6 +747,9 @@ final class CanvasController: NSObject {
             return "引出線: 指示点(矢印の先端)を動かす — スナップ有効 / \(commit) / esc中止"
         case .leaderElbow:
             return "引出線: 文字位置を動かす(引出線が追随)/ \(commit) / esc中止"
+        case .pipeSegment:
+            return "配管の区間伸縮: この区間だけを平行に動かします — 隣の区間が伸び縮みして吸収し、"
+                + "その先の配管は動きません / \(commit) / esc中止"
         case .pipeVertex:
             return pipePreserveAngles
                 ? "配管の伸縮: 継手の角度を保ったまま脚が伸び縮みします(歯車メニューで切替可)/ \(commit) / esc中止"
