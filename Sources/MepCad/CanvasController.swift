@@ -460,6 +460,24 @@ final class CanvasController: NSObject {
                                          in: followerCandidates)
     }
 
+    /// 伸縮(グリップ編集)で変形した配管に接続している配管の追随後の姿。M7.6
+    /// 変形前後の芯線を渡すので、平行移動でない伸縮でも接続が保たれる
+    private func stretchFollowers(original: Entity, preview: Entity) -> [Entity] {
+        guard pipeFollowConnections, !followerCandidates.isEmpty,
+              case .pipe(let before, let attrs) = original.kind,
+              case .pipe(let after, _) = preview.kind, before != after else { return [] }
+        let change = PipeConnections.PipeChange(before: before, after: after,
+                                               radius: max(attrs.outerDiameter / 2, 0))
+        return PipeConnections.followers(changes: [change], movingIDs: [original.id],
+                                         in: followerCandidates)
+    }
+
+    /// 配管エンティティか
+    private func isPipe(_ entity: Entity) -> Bool {
+        if case .pipe = entity.kind { return true }
+        return false
+    }
+
     /// 移動ゴースト中の追随プレビュー
     private func updateGhostFollowers() {
         guard case .move = editOp.kind, case .translate(let delta)? = ghostTransform else {
@@ -563,7 +581,7 @@ final class CanvasController: NSObject {
     /// 配管を移動したとき、取り付いている配管の端を管軸方向へ伸縮させて接続を保つ(M7.3)
     var pipeFollowConnections = true
 
-    /// 移動ゴースト中に追随して伸縮する配管(プレビュー表示用)
+    /// 移動ゴースト中・伸縮中に追随して伸縮する配管(プレビュー表示用)
     private(set) var ghostFollowers: [Entity] = []
 
     /// 追随計算の対象になりうる配管(移動開始時にひろっておく。
@@ -598,6 +616,11 @@ final class CanvasController: NSObject {
         gripDrag = GripDragState(grip: grip, original: entity, downScreen: p,
                                  current: grip.point, preview: entity)
         gripNumericBuffer = ""
+        ghostFollowers = []
+        // 接続追随の候補(配管だけ)をひろっておく(伸縮中は図面が変わらない)M7.6
+        followerCandidates = (pipeFollowConnections && isPipe(entity))
+            ? document.entities.filter { if case .pipe = $0.kind { return true }; return false }
+            : []
         // 自分自身の旧位置に吸着して動かせなくなるのを防ぐため、索引から除外
         snapEngine.rebuild(from: document, excluding: [grip.entityID])
         onInfo?(gripHint)
@@ -624,6 +647,7 @@ final class CanvasController: NSObject {
         state.preview = GripEngine.apply(state.grip.kind, to: state.original, at: world,
                                          preserveAngles: pipePreserveAngles)
         gripDrag = state
+        ghostFollowers = stretchFollowers(original: state.original, preview: state.preview)
     }
 
     /// 線の端点グリップに角度拘束(パレット連動)を効かせる(固定端からの方向を丸める)
@@ -662,11 +686,17 @@ final class CanvasController: NSObject {
         gripNumericBuffer = ""
         if state.preview != state.original {
             let name = state.grip.kind == .position ? "移動" : "伸縮"
+            // 接続している配管も一緒に更新する(1回のUndoで両方戻る)M7.6
+            let followers = stretchFollowers(original: state.original, preview: state.preview)
+            let followerBefore = followers.compactMap { document.entity(id: $0.id) }
+            ghostFollowers = []
             commandStack.run(UpdateEntitiesCommand(name: name,
-                                                   before: [state.original],
-                                                   after: [state.preview]))
+                                                   before: [state.original] + followerBefore,
+                                                   after: [state.preview] + followers))
             selectionDidChange()  // コミットのonChangeでスナップ索引も全体再構築される
-            onInfo?("\(name)しました(⌘Zで取り消し)")
+            onInfo?(followers.isEmpty
+                    ? "\(name)しました(⌘Zで取り消し)"
+                    : "\(name)しました — 接続している配管\(followers.count)本が追随(⌘Zで取り消し)")
         } else {
             snapEngine.rebuild(from: document)  // 除外を戻す
             publishSelectionHint()
@@ -678,6 +708,8 @@ final class CanvasController: NSObject {
         guard gripDrag != nil else { return }
         gripDrag = nil
         gripNumericBuffer = ""
+        ghostFollowers = []
+        followerCandidates = []
         snapEngine.rebuild(from: document)  // 除外を戻す
         publishSelectionHint()
         needsOverlayRedraw?()

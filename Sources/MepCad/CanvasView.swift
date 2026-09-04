@@ -565,6 +565,12 @@ final class CrosshairOverlayView: NSView {
         if let state = controller.gripDrag {
             let renderer = Renderer(theme: controller.theme)
             let ghostColor = CGColor(red: 0.0, green: 0.47, blue: 1.0, alpha: 0.55)
+            // 接続を保つために追随する配管(M7.6)
+            if !controller.ghostFollowers.isEmpty {
+                renderer.drawOutlines(controller.ghostFollowers, transform: controller.transform,
+                                      color: ghostColor, lineWidth: 1.5,
+                                      blockDefinitions: controller.document.blockDefinitions, in: ctx)
+            }
             renderer.drawOutlines([state.preview], transform: controller.transform,
                                   color: ghostColor, lineWidth: 1.5,
                                   blockDefinitions: controller.document.blockDefinitions, in: ctx)

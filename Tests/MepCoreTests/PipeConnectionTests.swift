@@ -142,4 +142,50 @@ final class PipeConnectionTests: XCTestCase {
         XCTAssertTrue(PipeConnections.followers(movingIDs: [main.id], delta: Vec2(0, -500),
                                                 in: [main, branch]).isEmpty)
     }
+
+    // MARK: - 伸縮での追随(M7.6)
+
+    /// 本管を「区間伸縮」で下げると、DT(直角)の枝管が伸びて接続を保つ
+    func testBranchFollowsSegmentStretch() {
+        let main = pipe([Vec3(0, 3000, 0), Vec3(6000, 3000, 0), Vec3(6000, 0, 0)])
+        let branch = pipe([Vec3(3000, 3000, 0), Vec3(3000, 6000, 0)], od: 89, size: "75")
+        // 上の横走り(区間0)を800下げる
+        let after = PipeGeometry.stretchSegment(points: points(main), index: 0, by: Vec2(0, -800))
+        let change = PipeConnections.PipeChange(before: points(main), after: after, radius: 57)
+        let moved = PipeConnections.followers(changes: [change], movingIDs: [main.id],
+                                              in: [main, branch])
+        XCTAssertEqual(moved.count, 1)
+        let b = points(moved[0])
+        XCTAssertEqual(b[0].xy, Vec2(3000, 2200))     // 枝の端が新しい芯線へ
+        XCTAssertEqual(b[1].xy, Vec2(3000, 6000))     // 反対の端は動かない
+    }
+
+    /// 45°の枝(Y)は自分の管軸上を滑るので角度が変わらない
+    func testObliqueBranchKeepsAngleOnStretch() {
+        let main = pipe([Vec3(0, 0, 0), Vec3(6000, 0, 0), Vec3(6000, -3000, 0)])
+        let branch = pipe([Vec3(3000, 0, 0), Vec3(5000, 2000, 0)], od: 89, size: "75")
+        let before = points(branch)
+        let after = PipeGeometry.stretchSegment(points: points(main), index: 0, by: Vec2(0, -500))
+        let change = PipeConnections.PipeChange(before: points(main), after: after, radius: 57)
+        let moved = PipeConnections.followers(changes: [change], movingIDs: [main.id],
+                                              in: [main, branch])
+        XCTAssertEqual(moved.count, 1)
+        let b = points(moved[0])
+        XCTAssertEqual(b[0].xy.y, -500, accuracy: 1e-6)
+        XCTAssertEqual(b[0].xy.x, 2500, accuracy: 1e-6)         // 45°の軸上を滑る
+        XCTAssertEqual(direction(b, 0, 1), direction(before, 0, 1), accuracy: 1e-9)
+    }
+
+    /// 頂点の伸縮(掴んだ折れ点を動かす)でも、その区間に付いている枝は追随する
+    func testBranchFollowsVertexStretch() {
+        let main = pipe([Vec3(0, 0, 0), Vec3(6000, 0, 0), Vec3(6000, 4000, 0)])
+        let branch = pipe([Vec3(3000, 0, 0), Vec3(3000, -2000, 0)], od: 89, size: "75")
+        // 折れ点を動かすと手前の区間が+yへ平行移動する
+        let after = PipeGeometry.stretch(points: points(main), index: 1, to: Vec2(6500, 400))
+        let change = PipeConnections.PipeChange(before: points(main), after: after, radius: 57)
+        let moved = PipeConnections.followers(changes: [change], movingIDs: [main.id],
+                                              in: [main, branch])
+        XCTAssertEqual(moved.count, 1)
+        XCTAssertEqual(points(moved[0])[0].xy.y, 400, accuracy: 1e-6)
+    }
 }
