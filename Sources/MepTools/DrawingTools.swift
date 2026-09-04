@@ -27,13 +27,17 @@ public struct PipeToolStyle: Sendable {
     public var z: Double
     /// 高さ変更を45°の勾配(45°立ち下がり/上がり)で行う。falseなら垂直の立管(90°)。M6.8
     public var drop45: Bool
+    /// 直管(塩ビ・鋼管など)は継手の角度が90°/45°しか無いので、折れ角をそこへ丸める。M7.7
+    /// 架橋ポリエチレン管・ポリブテン管などの可撓管は自由(false)
+    public var rigidAngles: Bool
 
     public init(attrs: PipeAttributes = PipeAttributes(), style: Style = .byLayer, z: Double = 0,
-                drop45: Bool = false) {
+                drop45: Bool = false, rigidAngles: Bool = false) {
         self.drop45 = drop45
         self.attrs = attrs
         self.style = style
         self.z = z
+        self.rigidAngles = rigidAngles
     }
 }
 
@@ -134,6 +138,9 @@ public protocol DrawingToolDelegate: AnyObject {
     func toolLeaderStyle() -> LeaderToolStyle
     /// 配管の現在設定(プロパティカードの値。用途の色・線種込み)
     func toolPipeStyle() -> PipeToolStyle
+    /// 配管の描き始めの点に既存の配管があれば、その管軸の方向(rad)。枝管の角度をそこに
+    /// 合わせるために使う(DT=90°/Y=45°)。無ければnil。M7.7
+    func toolReferenceDirection(at point: Vec2) -> Double?
 }
 
 extension DrawingToolDelegate {
@@ -146,6 +153,9 @@ extension DrawingToolDelegate {
     }
     public func toolLeaderStyle() -> LeaderToolStyle {
         LeaderToolStyle()
+    }
+    public func toolReferenceDirection(at point: Vec2) -> Double? {
+        nil
     }
     public func toolPipeStyle() -> PipeToolStyle {
         PipeToolStyle()
@@ -188,6 +198,8 @@ public final class DrawingToolController {
     public private(set) var leaderTip: Vec2?
     /// 配管ルートの確定済み頂点(3D。⏎/ダブルクリックで確定)
     public private(set) var pipePoints: [Vec3] = []
+    /// 描き始めの点にあった既存配管の管軸方向(枝管の最初の区間をこれに対して90°/45°に丸める)M7.7
+    private var pipeStartReference: Double?
     /// 始点クリックで閉じる判定の許容距離(ワールドmm。呼び出し側がピックボックス幅を設定)
     public var closeTolerance: Double = 0
 
@@ -208,6 +220,7 @@ public final class DrawingToolController {
     }
 
     private func resetPoints() {
+        pipeStartReference = nil
         anchor = nil
         arcStart = nil
         pendingRectSize = nil
@@ -282,8 +295,8 @@ public final class DrawingToolController {
             return .leader(tip, cursor, style.attrs)
         case .pipe:
             guard let last = pipePoints.last else { return .none }
-            return .polyline(pipePoints.map(\.xy),
-                             constrained(from: last.xy, to: cursor, active: shiftDown))
+            let c = constrained(from: last.xy, to: cursor, active: shiftDown)
+            return .polyline(pipePoints.map(\.xy), rigidCorner(from: last.xy, to: c))
         default:
             return .none
         }
@@ -379,12 +392,15 @@ public final class DrawingToolController {
             // 高さ(カード)が前の頂点と違えば、その位置で立管を挟んでから進む
             let z = delegate?.toolPipeStyle().z ?? 0
             if let last = pipePoints.last {
-                let next = constrained(from: last.xy, to: p, active: shiftDown)
+                let next = rigidCorner(from: last.xy,
+                                       to: constrained(from: last.xy, to: p, active: shiftDown))
                 if last.xy.distance(to: next) > 0.01 {
                     appendPipeVertex(Vec3(next, z: z))
                 }
             } else {
                 pipePoints.append(Vec3(p, z: z))
+                // 既存配管の上から描き始めたら、その管軸を最初の区間の基準にする(枝管の角度)
+                pipeStartReference = delegate?.toolReferenceDirection(at: p)
             }
 
         case .leader:
@@ -456,6 +472,7 @@ public final class DrawingToolController {
                                         style: style.style,
                                         kind: .pipe(points: pipePoints, attrs: style.attrs)))
         pipePoints = []
+        pipeStartReference = nil
         publishHint()
     }
 
@@ -568,7 +585,8 @@ public final class DrawingToolController {
 
         case .pipe:
             guard let last = pipePoints.last,
-                  let next = numericTarget(from: last.xy, comps: comps) else { return }
+                  let target = numericTarget(from: last.xy, comps: comps) else { return }
+            let next = rigidCorner(from: last.xy, to: target)
             appendPipeVertex(Vec3(next, z: delegate?.toolPipeStyle().z ?? last.z))
 
         case .circle:
@@ -634,6 +652,38 @@ public final class DrawingToolController {
         guard len > 1e-9 else { return p }
         let snapped = (atan2(d.y, d.x) / step).rounded() * step
         return Vec2(a.x + cos(snapped) * len, a.y + sin(snapped) * len)
+    }
+
+    /// 直管の継手角度の拘束(M7.7)。直前の区間(無ければ描き始めの既存配管)の方向に対して、
+    /// 新しい区間の折れ角を 0°/±45°/±90° のいずれかへ丸める(長さは保つ)。
+    /// 塩ビ・鋼管にはそれ以外の角度の継手が無いため。可撓管(rigidAngles=false)はそのまま
+    private func rigidCorner(from a: Vec2, to p: Vec2) -> Vec2 {
+        guard delegate?.toolPipeStyle().rigidAngles ?? false else { return p }
+        guard let base = previousPlanDirection() ?? pipeStartReference else { return p }
+        let d = p - a
+        let len = d.length
+        guard len > 1e-9 else { return p }
+        var turn = atan2(d.y, d.x) - base
+        while turn > .pi { turn -= 2 * .pi }
+        while turn < -.pi { turn += 2 * .pi }
+        // 0 / ±45° / ±90° の最寄り。それより深い折れは90°で頭打ち(135°の継手は無い)
+        let step = Double.pi / 4
+        let snapped = max(-2, min(2, (turn / step).rounded())) * step
+        let angle = base + snapped
+        return Vec2(a.x + cos(angle) * len, a.y + sin(angle) * len)
+    }
+
+    /// 直前の平面区間の方向(立管をまたいで、最後に平面上で動いた区間)
+    private func previousPlanDirection() -> Double? {
+        guard pipePoints.count >= 2 else { return nil }
+        let last = pipePoints[pipePoints.count - 1].xy
+        var i = pipePoints.count - 2
+        while i >= 0 {
+            let d = last - pipePoints[i].xy
+            if d.length > PipeGeometry.planEpsilon { return atan2(d.y, d.x) }
+            i -= 1
+        }
+        return nil
     }
 
     private func commitLine(_ a: Vec2, _ b: Vec2, style: Style = .byLayer) {

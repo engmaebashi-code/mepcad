@@ -28,6 +28,8 @@ final class DrawingToolTests: XCTestCase {
         func toolLeaderStyle() -> LeaderToolStyle { leaderStyle }
         var pipeStyle = PipeToolStyle()
         func toolPipeStyle() -> PipeToolStyle { pipeStyle }
+        var referenceDirection: Double?
+        func toolReferenceDirection(at point: Vec2) -> Double? { referenceDirection }
     }
 
     func makeTool() -> (DrawingToolController, Capture) {
@@ -583,5 +585,108 @@ final class DrawingToolTests: XCTestCase {
         tool.cancel()  // 待機中→選択へ
         XCTAssertEqual(tool.kind, .select)
         XCTAssertTrue(cap.produced.isEmpty)
+    }
+
+    // MARK: - 直管の継手角度の拘束(M7.7)
+
+    private func rigidTool() -> (DrawingToolController, Capture) {
+        let (tool, cap) = makeTool()
+        cap.pipeStyle = PipeToolStyle(attrs: PipeAttributes(material: "VP", materialLabel: "VP"),
+                                      rigidAngles: true)
+        tool.select(.pipe)
+        return (tool, cap)
+    }
+
+    private func pipePoints(_ cap: Capture) -> [Vec3] {
+        guard case .pipe(let pts, _)? = cap.produced.first?.kind else { return [] }
+        return pts
+    }
+
+    /// 直管: 前の区間に対して30°の折れはあり得ないので45°へ丸まる(長さは保つ)
+    func testRigidPipeSnapsCornerTo45() {
+        let (tool, cap) = rigidTool()
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(2000, 0), shiftDown: false)
+        // 30°方向へ1000
+        tool.click(at: Vec2(2000 + 1000 * cos(Double.pi / 6), 1000 * sin(Double.pi / 6)), shiftDown: false)
+        XCTAssertTrue(tool.keyInput("\r"))
+        let pts = pipePoints(cap)
+        XCTAssertEqual(pts.count, 3)
+        let d = pts[2].xy - pts[1].xy
+        XCTAssertEqual(atan2(d.y, d.x), Double.pi / 4, accuracy: 1e-9)   // 45°
+        XCTAssertEqual(d.length, 1000, accuracy: 1e-6)                     // 長さは保つ
+        XCTAssertEqual(PipeGeometry.fittings(points: pts).first?.kind, .elbow45)
+    }
+
+    /// 直管: 80°の折れは90°へ、10°の折れは直進(0°)へ
+    func testRigidPipeSnapsTo90AndStraight() {
+        let (tool, cap) = rigidTool()
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(2000, 0), shiftDown: false)
+        tool.click(at: Vec2(2000 + 1000 * cos(80 * Double.pi / 180), 1000 * sin(80 * Double.pi / 180)),
+                   shiftDown: false)
+        tool.click(at: Vec2(2000 + 1000 * cos(80 * Double.pi / 180) + 800 * cos(100 * Double.pi / 180),
+                            1000 * sin(80 * Double.pi / 180) + 800 * sin(100 * Double.pi / 180)),
+                   shiftDown: false)   // 前区間(90°)に対して+10°
+        XCTAssertTrue(tool.keyInput("\r"))
+        let pts = pipePoints(cap)
+        XCTAssertEqual(pts.count, 4)
+        let d1 = pts[2].xy - pts[1].xy
+        XCTAssertEqual(atan2(d1.y, d1.x), Double.pi / 2, accuracy: 1e-9)   // 90°
+        let d2 = pts[3].xy - pts[2].xy
+        XCTAssertEqual(atan2(d2.y, d2.x), Double.pi / 2, accuracy: 1e-9)   // 直進
+    }
+
+    /// 直管: 135°の深い折れは90°で頭打ち(135°の継手は無い)
+    func testRigidPipeClampsDeepTurnTo90() {
+        let (tool, cap) = rigidTool()
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(2000, 0), shiftDown: false)
+        tool.click(at: Vec2(2000 - 700, 700), shiftDown: false)     // 135°戻る
+        XCTAssertTrue(tool.keyInput("\r"))
+        let pts = pipePoints(cap)
+        let d = pts[2].xy - pts[1].xy
+        XCTAssertEqual(atan2(d.y, d.x), Double.pi / 2, accuracy: 1e-9)
+    }
+
+    /// 既存配管の上から描き始めた枝管は、その管軸に対して90°/45°になる(DT/Y)
+    func testRigidBranchAlignsToHostPipe() {
+        let (tool, cap) = rigidTool()
+        cap.referenceDirection = 0            // 本管は+x向き
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(1000 * cos(70 * Double.pi / 180), 1000 * sin(70 * Double.pi / 180)),
+                   shiftDown: false)         // 本管に対して70° → 90°へ
+        XCTAssertTrue(tool.keyInput("\r"))
+        let pts = pipePoints(cap)
+        let d = pts[1].xy - pts[0].xy
+        XCTAssertEqual(atan2(d.y, d.x), Double.pi / 2, accuracy: 1e-9)
+    }
+
+    /// 可撓管(架橋ポリエチレン管)は自由な角度のまま
+    func testFlexiblePipeKeepsFreeAngle() {
+        let (tool, cap) = makeTool()
+        cap.pipeStyle = PipeToolStyle(attrs: PipeAttributes(material: "PEX", materialLabel: "PEX"),
+                                      rigidAngles: false)
+        tool.select(.pipe)
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        tool.click(at: Vec2(2000, 0), shiftDown: false)
+        let p = Vec2(2000 + 1000 * cos(Double.pi / 6), 1000 * sin(Double.pi / 6))
+        tool.click(at: p, shiftDown: false)
+        XCTAssertTrue(tool.keyInput("\r"))
+        let pts = pipePoints(cap)
+        XCTAssertEqual(pts[2].xy.x, p.x, accuracy: 1e-9)
+        XCTAssertEqual(pts[2].xy.y, p.y, accuracy: 1e-9)
+    }
+
+    /// 基準が無い最初の区間は自由(壁に沿った斜めの本管も描ける)
+    func testRigidFirstSegmentIsFree() {
+        let (tool, cap) = rigidTool()
+        tool.click(at: Vec2(0, 0), shiftDown: false)
+        let p = Vec2(1000 * cos(Double.pi / 6), 1000 * sin(Double.pi / 6))
+        tool.click(at: p, shiftDown: false)
+        XCTAssertTrue(tool.keyInput("\r"))
+        let pts = pipePoints(cap)
+        XCTAssertEqual(pts[1].xy.x, p.x, accuracy: 1e-9)
+        XCTAssertEqual(pts[1].xy.y, p.y, accuracy: 1e-9)
     }
 }

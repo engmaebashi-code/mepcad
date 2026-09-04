@@ -1543,6 +1543,26 @@ extension CanvasController: DrawingToolDelegate {
                              style: Style(colorIndex: 2, lineType: 0), z: 0)
     }
 
+    /// 描き始めの点に既存の配管があれば、その区間の管軸方向を返す(枝管の角度合わせ用)M7.7
+    func toolReferenceDirection(at point: Vec2) -> Double? {
+        let tol = max(hitToleranceMm, PipeNetwork.joinTolerance)
+        var best: (Double, Double)?
+        for e in document.entities {
+            guard case .pipe(let pts, _) = e.kind, pts.count >= 2,
+                  document.isEntityVisible(e) else { continue }
+            for i in 0..<(pts.count - 1) {
+                let a = pts[i].xy, b = pts[i + 1].xy
+                let seg = b - a
+                guard seg.length > PipeGeometry.planEpsilon else { continue }
+                let foot = HitGeometry.closestPointOnSegment(point, a, b)
+                let d = foot.distance(to: point)
+                guard d <= tol else { continue }
+                if best == nil || d < best!.1 { best = (atan2(seg.y, seg.x), d) }
+            }
+        }
+        return best?.0
+    }
+
     /// 高さの基準面(1FL/2FL/GL…)を設定(図面設定)
     func setLevelDatum(_ datum: String) {
         document.setLevelDatum(datum)

@@ -622,7 +622,8 @@ struct ContentView: View {
                                           annotateMaterial: uiState.pipeAnnotateMaterial,
                                           branchKind: drainStyle ? uiState.pipeBranchKind : "DT"),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
-                    z: uiState.pipeLevel, drop45: uiState.pipeDrop45)
+                    z: uiState.pipeLevel, drop45: uiState.pipeDrop45,
+                    rigidAngles: !material.isFlexible)   // 直管は継手角度を90°/45°に拘束(M7.7)
             }
             // 既存の接続口から配管を描き始めたら、その口に合わせて設定を引き継ぐ(M7)
             controller.onPipePortPicked = { [weak uiState] port in

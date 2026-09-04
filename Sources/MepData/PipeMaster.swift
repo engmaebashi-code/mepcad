@@ -30,11 +30,15 @@ public struct PipeMaterial: Identifiable, Equatable, Sendable {
     public let id: String          // "VP"
     public let name: String        // "硬質ポリ塩化ビニル管"
     public let shortLabel: String  // "VP"(傍記・集計表示用)
+    /// 可撓管(架橋ポリエチレン管・ポリブテン管など)。自由な角度で曲げられるので
+    /// 継手角度の拘束(90°/45°)をかけない。直管はfalse。M7.7
+    public let isFlexible: Bool
 
-    public init(id: String, name: String, shortLabel: String) {
+    public init(id: String, name: String, shortLabel: String, isFlexible: Bool = false) {
         self.id = id
         self.name = name
         self.shortLabel = shortLabel
+        self.isFlexible = isFlexible
     }
 }
 
@@ -100,7 +104,9 @@ public final class PipeMaster {
         }
         materials = rows(materialsCSV).compactMap { f in
             guard f.count >= 3 else { return nil }
-            return PipeMaterial(id: f[0], name: f[1], shortLabel: f[2])
+            // 4列目: 可撓管なら1(省略は直管)
+            return PipeMaterial(id: f[0], name: f[1], shortLabel: f[2],
+                                isFlexible: f.count >= 4 && f[3] == "1")
         }
         sizes = rows(sizesCSV).compactMap { f in
             guard f.count >= 4, let od = Double(f[3]) else { return nil }
