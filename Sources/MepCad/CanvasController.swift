@@ -806,6 +806,9 @@ final class CanvasController: NSObject {
             menu.addItem(menuItem("反転", #selector(menuMirror)))
             menu.addItem(menuItem("反転複写", #selector(menuMirrorCopy)))
             menu.addItem(menuItem("拡大縮小", #selector(menuScale)))
+            if selectedEntities.contains(where: isPipe) {
+                menu.addItem(menuItem("継手を反転(分岐の向き)", #selector(menuFlipFittings)))
+            }
             menu.addItem(.separator())
             // レイヤ間の移動・複写(グループ→レイヤの2段サブメニュー)
             menu.addItem(layerSubmenu(title: "レイヤへ移動", action: #selector(menuMoveToLayer(_:))))
@@ -877,6 +880,7 @@ final class CanvasController: NSObject {
     @objc private func menuMirror() { beginEditOperation(.mirror) }
     @objc private func menuMirrorCopy() { beginEditOperation(.mirrorCopy) }
     @objc private func menuScale() { beginEditOperation(.scale) }
+    @objc private func menuFlipFittings() { flipSelectedFittings() }
     @objc private func menuBlockify() { startBlockify() }
     @objc private func menuExplodeBlocks() { explodeSelectedBlocks() }
     @objc private func menuDelete() { deleteSelection() }
@@ -1629,6 +1633,54 @@ extension CanvasController {
         updateSelectedPipes(name: "分岐部品を\(kind)に変更") { attrs, _, _ in
             attrs.branchKind = kind
         }
+    }
+
+    /// 継手反転(分岐の向きを逆にする)。M7.8
+    /// 45°の枝管は鏡映して傾きを逆に、直角の枝管は下流側の印を切替、本管は作図方向を逆にする。
+    /// 鏡映で端が動いた枝管に接続している配管は伸縮して追随する(設定ON時)
+    func flipSelectedFittings() {
+        let pipes = selectedEntities.filter(isPipe)
+        guard !pipes.isEmpty else {
+            onInfo?("継手を反転する配管を選択してください")
+            return
+        }
+        let all = document.entities
+        var before: [Entity] = []
+        var after: [Entity] = []
+        var notes: [String] = []
+        var changes: [PipeConnections.PipeChange] = []
+        for e in pipes {
+            guard let r = PipeFlip.flip(e, in: all) else { continue }
+            before.append(e)
+            after.append(r.entity)
+            switch r.outcome {
+            case .mirroredBranch(let aboutFarEnd):
+                notes.append(aboutFarEnd ? "45°の枝を反転(接続点が本管上を移動)"
+                                         : "45°の枝を反転(反対側の端が移動)")
+                if case .pipe(let p0, let a0) = e.kind, case .pipe(let p1, _) = r.entity.kind {
+                    changes.append(PipeConnections.PipeChange(before: p0, after: p1,
+                                                              radius: max(a0.outerDiameter / 2, 0)))
+                }
+            case .toggledBranch(let nowReversed):
+                notes.append(nowReversed ? "分岐の下流側を作図方向と逆に" : "分岐の下流側を作図方向どおりに")
+            case .reversedFlow(let branches):
+                notes.append(branches > 0 ? "本管の流れ方向を反転(分岐\(branches)か所)" : "作図方向を反転")
+            }
+        }
+        guard !before.isEmpty else { return }
+        if pipeFollowConnections, !changes.isEmpty {
+            let movingIDs = Set(before.map(\.id))
+            let followers = PipeConnections.followers(changes: changes, movingIDs: movingIDs, in: all)
+            for f in followers where !movingIDs.contains(f.id) {
+                guard let original = document.entity(id: f.id) else { continue }
+                before.append(original)
+                after.append(f)
+            }
+            if !followers.isEmpty { notes.append("接続先\(followers.count)本が追随") }
+        }
+        commandStack.run(UpdateEntitiesCommand(name: "継手を反転", before: before, after: after))
+        selectionDidChange()
+        onInfo?("継手を反転: " + notes.joined(separator: " / ") + "(⌘Zで取り消し)")
     }
 
     /// 90°曲り部品(エルボ/大曲)の一括変更。M6.6

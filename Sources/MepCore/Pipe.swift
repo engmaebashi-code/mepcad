@@ -54,6 +54,9 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     /// この配管を枝管として本管に取り付けたときの分岐部品: "DT"(90°Y)/"LT"(90°大曲Y)/"Y"(45°Y)。M6.8
     /// Yは枝が45°で取り付くときに使う(直角ならDTに落ちる)
     public var branchKind: String
+    /// 分岐の下流側を本管の作図方向と逆にする(継手反転)。M7.8
+    /// 本管を流れと逆向きに描いてしまったとき、この枝の継手(LTのスイープ・単線記号)だけ向きを直せる
+    public var branchReversed: Bool
 
     public init(usage: String = "CW", usageName: String = "給水",
                 material: String = "HIVP", materialLabel: String = "HIVP",
@@ -65,7 +68,7 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
                 fittingSeries: String = "", fittingDims: PipeFittingDims = PipeFittingDims(),
                 capEnds: Bool = false, symbolSize: Double = 0,
                 longRadius: Bool = false, annotateMaterial: Bool = true,
-                branchKind: String = "DT") {
+                branchKind: String = "DT", branchReversed: Bool = false) {
         self.usage = usage
         self.usageName = usageName
         self.material = material
@@ -86,6 +89,7 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         self.longRadius = longRadius
         self.annotateMaterial = annotateMaterial
         self.branchKind = branchKind
+        self.branchReversed = branchReversed
     }
 
     /// 単線シンボルの実効基準寸法(実寸mm)。未設定なら文字高さ(排水)・その0.8倍(給水)

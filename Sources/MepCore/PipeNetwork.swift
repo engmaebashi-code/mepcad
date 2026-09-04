@@ -106,7 +106,8 @@ public enum PipeNetwork {
                         // 枝管の方向 = 本管から見て端点の内側方向の逆(=本管→枝管)
                         let branchDir = Vec2(-end.dirIn.x, -end.dirIn.y)
                         let mainVec = b.xy - a.xy
-                        let mainDir = mainVec * (1 / mainVec.length)
+                        // 本管の作図方向=流れ方向。枝側で「継手反転」されていれば逆向きにする(M7.8)
+                        let mainDir = mainVec * ((p.attrs.branchReversed ? -1 : 1) / mainVec.length)
                         // 枝管側にも印(単線の枝端の切り詰め・立管記号の抑制用)
                         result[p.id, default: []].append(
                             PipeJunction(pipeID: p.id, position: foot, z: a.z,

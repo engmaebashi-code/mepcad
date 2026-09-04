@@ -537,6 +537,7 @@ struct PropertyPanelView: View {
                                     Button("LT(90°大曲Y)") { controller.applyPipeBranchKind("LT") }
                                     Button("Y(45°Y)") { controller.applyPipeBranchKind("Y") }
                                 }
+                                Button("継手を反転(分岐の向き)") { controller.flipSelectedFittings() }
                                 Divider()
                                 Menu("単線記号サイズ") {
                                     ForEach([1.5, 2.0, 2.5, 3.0, 3.5], id: \.self) { mm in
