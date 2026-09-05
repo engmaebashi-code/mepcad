@@ -33,12 +33,16 @@ public struct PipeMaterial: Identifiable, Equatable, Sendable {
     /// 可撓管(架橋ポリエチレン管・ポリブテン管など)。自由な角度で曲げられるので
     /// 継手角度の拘束(90°/45°)をかけない。直管はfalse。M7.7
     public let isFlexible: Bool
+    /// 最小曲げ半径(外径の倍数。可撓管のみ。0=曲げない)。作図の曲げRはこれ×外径。M7.9
+    public let bendRadiusFactor: Double
 
-    public init(id: String, name: String, shortLabel: String, isFlexible: Bool = false) {
+    public init(id: String, name: String, shortLabel: String, isFlexible: Bool = false,
+                bendRadiusFactor: Double = 0) {
         self.id = id
         self.name = name
         self.shortLabel = shortLabel
         self.isFlexible = isFlexible
+        self.bendRadiusFactor = bendRadiusFactor
     }
 }
 
@@ -104,9 +108,11 @@ public final class PipeMaster {
         }
         materials = rows(materialsCSV).compactMap { f in
             guard f.count >= 3 else { return nil }
-            // 4列目: 可撓管なら1(省略は直管)
-            return PipeMaterial(id: f[0], name: f[1], shortLabel: f[2],
-                                isFlexible: f.count >= 4 && f[3] == "1")
+            // 4列目: 可撓管なら1(省略は直管)。5列目: 最小曲げ半径(外径の倍数。可撓管の既定8)
+            let flexible = f.count >= 4 && f[3] == "1"
+            let factor = f.count >= 5 ? Double(f[4]) ?? 0 : 0
+            return PipeMaterial(id: f[0], name: f[1], shortLabel: f[2], isFlexible: flexible,
+                                bendRadiusFactor: flexible ? (factor > 0 ? factor : 8) : 0)
         }
         sizes = rows(sizesCSV).compactMap { f in
             guard f.count >= 4, let od = Double(f[3]) else { return nil }
@@ -180,7 +186,8 @@ public enum PipeAggregator {
             let len = PipeGeometry.length(of: points)
             var e90 = 0, e45 = 0, tee = 0, cap = 0, red = 0
             if attrs.autoFittings {
-                for f in PipeGeometry.fittings(points: points) {
+                // 可撓管は折れ点を曲げるのでエルボは数えない(分岐・端部・口径変更は数える)。M7.9
+                for f in PipeGeometry.fittings(points: points) where !attrs.isBent {
                     switch f.kind {
                     case .elbow90: e90 += 1
                     case .elbow45: e45 += 1

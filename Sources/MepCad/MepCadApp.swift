@@ -620,7 +620,10 @@ struct ContentView: View {
                                           capEnds: uiState.pipeCapEnds, symbolSize: symbol,
                                           longRadius: drainStyle && uiState.pipeLongRadius,
                                           annotateMaterial: uiState.pipeAnnotateMaterial,
-                                          branchKind: drainStyle ? uiState.pipeBranchKind : "DT"),
+                                          branchKind: drainStyle ? uiState.pipeBranchKind : "DT",
+                                          // 可撓管は折れ点を最小曲げ半径(外径×倍率)で曲げる(M7.9)
+                                          bendRadius: material.isFlexible
+                                              ? material.bendRadiusFactor * size.outerDiameter : 0),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
                     z: uiState.pipeLevel, drop45: uiState.pipeDrop45,
                     rigidAngles: !material.isFlexible)   // 直管は継手角度を90°/45°に拘束(M7.7)

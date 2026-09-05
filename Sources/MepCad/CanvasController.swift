@@ -1606,6 +1606,10 @@ extension CanvasController {
             attrs.outerDiameter = size.outerDiameter
             attrs.fittingSeries = FittingMaster.series(material: attrs.material, usage: attrs.usage)
             attrs.fittingDims = FittingMaster.standard.dims(series: attrs.fittingSeries, size: attrs.size)
+            // 可撓管なら折れ点を曲げる半径(外径×倍率)、直管なら0=継手(M7.9)
+            let material = PipeMaster.standard.material(size.material)
+            attrs.bendRadius = (material?.isFlexible ?? false)
+                ? (material?.bendRadiusFactor ?? 0) * size.outerDiameter : 0
         }
     }
 

@@ -169,4 +169,31 @@ final class PipeMasterTests: XCTestCase {
         XCTAssertEqual(totals[0].elbow90Count, 2)
         XCTAssertEqual(totals[0].elbow45Count, 1)
     }
+
+    /// 可撓管(曲げ半径あり)は折れ点を曲げるのでエルボを数えない。分岐のチーズは数える(M7.9)
+    func testBentPipeCountsNoElbows() {
+        func pex(_ pts: [Vec2]) -> Entity {
+            Entity(layer: LayerAddress(0, 0),
+                   kind: .pipe(points: pts.map { Vec3($0, z: 0) },
+                               attrs: PipeAttributes(usage: "給水", usageName: "給水",
+                                                     material: "PEX", materialLabel: "PEX",
+                                                     size: "13", sizeLabel: "13", outerDiameter: 17,
+                                                     bendRadius: 136)))
+        }
+        let main = pex([Vec2(0, 0), Vec2(1000, 0), Vec2(1000, 1000), Vec2(2000, 2000)])
+        let branch = pex([Vec2(500, 0), Vec2(500, 800)])
+        let totals = PipeAggregator.aggregate([main, branch])
+        XCTAssertEqual(totals.count, 1)
+        XCTAssertEqual(totals[0].elbow90Count, 0)
+        XCTAssertEqual(totals[0].elbow45Count, 0)
+        XCTAssertEqual(totals[0].teeCount, 1)
+    }
+
+    /// 管種マスタの可撓管には最小曲げ半径の倍率がある(M7.9)
+    func testFlexibleMaterialsHaveBendRadiusFactor() {
+        let m = PipeMaster.standard
+        XCTAssertEqual(m.material("PEX")?.bendRadiusFactor ?? 0, 8, accuracy: 1e-9)
+        XCTAssertEqual(m.material("PB")?.bendRadiusFactor ?? 0, 8, accuracy: 1e-9)
+        XCTAssertEqual(m.material("VP")?.bendRadiusFactor ?? -1, 0, accuracy: 1e-9)
+    }
 }

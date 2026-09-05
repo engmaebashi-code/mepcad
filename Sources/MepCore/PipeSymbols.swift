@@ -121,6 +121,10 @@ public enum PipeSymbols {
     public static func singleLineRuns(points: [Vec3], attrs: PipeAttributes,
                                       junctions: [PipeJunction] = []) -> [[Vec2]] {
         var runs = PipeGeometry.planRuns(points: points).map { $0.map(\.xy) }
+        // 可撓管: 折れ点を曲げ半径で丸めた芯線(継手の記号は出ない)。M7.9
+        if attrs.isBent {
+            return runs.map { PipeBend.centerline($0, radius: attrs.bendRadius) }
+        }
         guard attrs.autoFittings, isDrainStyle(attrs) else { return runs }
         let u = unit(attrs)
         // 大曲Y(LT)の本管に取り付く枝端: 本管手前0.5uで切る(そこから45°のスイープを記号で描く)
@@ -179,8 +183,8 @@ public enum PipeSymbols {
             out.append(.segment(p + n * half, p - n * half))
         }
 
-        // 折れ点(平面)ごとのエルボ記号
-        for run in PipeGeometry.planRuns(points: points) {
+        // 折れ点(平面)ごとのエルボ記号(可撓管は曲げなので出さない。M7.9)
+        for run in PipeGeometry.planRuns(points: points) where !attrs.isBent {
             let pts = run.map(\.xy)
             guard pts.count >= 3 else { continue }
             for i in 1..<(pts.count - 1) {

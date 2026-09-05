@@ -57,6 +57,10 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     /// 分岐の下流側を本管の作図方向と逆にする(継手反転)。M7.8
     /// 本管を流れと逆向きに描いてしまったとき、この枝の継手(LTのスイープ・単線記号)だけ向きを直せる
     public var branchReversed: Bool
+    /// 曲げ半径(実寸mm)。0より大きければ可撓管(架橋ポリエチレン管・ポリブテン管・冷媒管・ケーブル):
+    /// 折れ点に継手を作らず、この半径で曲げて描く(脚が短ければ収まる半径まで小さくする)。
+    /// 分岐(チーズ)・端部・口径変更の継手は従来どおり位置関係から発生する。M7.9
+    public var bendRadius: Double
 
     public init(usage: String = "CW", usageName: String = "給水",
                 material: String = "HIVP", materialLabel: String = "HIVP",
@@ -68,7 +72,8 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
                 fittingSeries: String = "", fittingDims: PipeFittingDims = PipeFittingDims(),
                 capEnds: Bool = false, symbolSize: Double = 0,
                 longRadius: Bool = false, annotateMaterial: Bool = true,
-                branchKind: String = "DT", branchReversed: Bool = false) {
+                branchKind: String = "DT", branchReversed: Bool = false,
+                bendRadius: Double = 0) {
         self.usage = usage
         self.usageName = usageName
         self.material = material
@@ -90,7 +95,11 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         self.annotateMaterial = annotateMaterial
         self.branchKind = branchKind
         self.branchReversed = branchReversed
+        self.bendRadius = bendRadius
     }
+
+    /// 可撓管(曲げで配管する管)か
+    public var isBent: Bool { bendRadius > 0 }
 
     /// 単線シンボルの実効基準寸法(実寸mm)。未設定なら文字高さ(排水)・その0.8倍(給水)
     public var effectiveSymbolSize: Double {
@@ -811,6 +820,18 @@ public enum PipeGeometry {
             let riserAtEnd = lastIdx < points.count - 1
                 && points[lastIdx + 1].xy.distance(to: pts[n - 1]) <= planEpsilon
                 && abs(points[lastIdx + 1].z - run[n - 1].z) > 0.5
+
+            if attrs.isBent {
+                // 可撓管: 折れ点は継手でなく曲げ。外形線2本と芯線を曲げの弧に沿わせる(M7.9)
+                let pieces = PipeBend.pieces(pts, radius: attrs.bendRadius)
+                let left = PipeBend.polyline(pieces, offset: r)
+                let right = PipeBend.polyline(pieces, offset: -r)
+                let center = PipeBend.polyline(pieces, offset: 0)
+                if !riserAtStart { caps.append((left[0], right[0])) }
+                if !riserAtEnd { caps.append((left[left.count - 1], right[right.count - 1])) }
+                runsOut.append((left, right, center))
+                continue
+            }
 
             if attrs.autoFittings {
                 // 区間ごとの切り詰め量(始点側・終点側)
