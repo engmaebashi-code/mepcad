@@ -39,9 +39,9 @@ final class CanvasController: NSObject {
     let editOp = EditOperation()
 
     var transform = ViewTransform(scale: 0.08, origin: Vec2(60, 540))
-    var theme = RenderTheme.light()
+    var theme = RenderTheme.dark()   // 既定はダーク背景(M8.0c)
     var gridSpacing: Double = 250  // mm
-    var gridVisible = true
+    var gridVisible = false          // 既定はグリッドOFF(スナップも連動OFF)(M8.0c)
     var pickBoxPx: Double = 10     // 環境設定と連動予定
 
     /// 描画に渡すグリッド間隔(非表示時は0=描かない)
@@ -146,6 +146,7 @@ final class CanvasController: NSObject {
         tools = DrawingToolController(currentLayer: doc.current)
         super.init()
         document.loadDemoContent()
+        snapEngine.gridEnabled = gridVisible
         snapEngine.rebuild(from: document)
         document.onChange = { [weak self] in
             guard let self else { return }

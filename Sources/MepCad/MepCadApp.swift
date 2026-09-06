@@ -32,7 +32,7 @@ final class CanvasUIState: ObservableObject {
     @Published var selection: SelectionSummary?
     @Published var panelPinned = false
     @Published var paletteColors: [Color] = []
-    @Published var gridOn = true
+    @Published var gridOn = false               // 既定はグリッドOFF(M8.0c)
     @Published var gridSpacing: Double = 250
     @Published var auxOn = true
     /// 用紙サイズと書込グループの縮尺分母(フッター表示)
@@ -181,7 +181,7 @@ private func toolIcon(_ kind: ToolKind) -> String {
 struct ContentView: View {
     let controller: CanvasController
     @ObservedObject var uiState: CanvasUIState
-    @State private var isDark = false
+    @State private var isDark = true            // 既定はダーク背景(M8.0c)
     @State private var angle: AngleConstraint = .free
     // スナップ種別のON/OFF(将来は環境設定ウィンドウに移設)
     @State private var snapEndpoint = true
@@ -396,35 +396,85 @@ struct ContentView: View {
             .background(.bar)
         }
         .toolbar {
-            // 作図ツール(モックの左パレット簡易版)
+            // ツール(UI整理 M8.0c): 選択は常設、基本作図と設備は折りたたみメニューに。
+            // メニューのラベルには今そのグループで使っているツール名を出す
             ToolbarItemGroup {
-                Picker("ツール", selection: Binding(
-                    get: { uiState.tool },
-                    set: { newTool in
-                        uiState.tool = newTool
-                        controller.selectTool(newTool)
-                    }
-                )) {
-                    ForEach(ToolKind.allCases, id: \.self) { kind in
-                        Image(systemName: toolIcon(kind))
-                            .help(kind.rawValue)
-                            .tag(kind)
-                    }
+                Toggle(isOn: Binding(get: { uiState.tool == .select },
+                                     set: { _ in selectTool(.select) })) {
+                    Image(systemName: toolIcon(.select))
                 }
-                .pickerStyle(.segmented)
+                .toggleStyle(.button)
+                .help("選択(esc)")
+
+                Menu {
+                    ForEach(ContentView.drawingTools, id: \.self) { kind in
+                        Button { selectTool(kind) } label: {
+                            Label(toolMenuTitle(kind), systemImage: toolIcon(kind))
+                        }
+                    }
+                } label: {
+                    Label(groupLabel(ContentView.drawingTools, fallback: "作図"),
+                          systemImage: groupIcon(ContentView.drawingTools, fallback: "pencil.and.ruler"))
+                }
+                .help("基本作図: 線分・矩形・円・円弧・2線・中心線・点・文字・ハッチング・寸法・引出線")
+
+                Menu {
+                    ForEach(ContentView.equipmentTools, id: \.self) { kind in
+                        Button { selectTool(kind) } label: {
+                            Label(toolMenuTitle(kind), systemImage: toolIcon(kind))
+                        }
+                    }
+                    Divider()
+                    Button {
+                        controller.startBlockify()
+                    } label: {
+                        Label("機器登録(選択をブロック化)…", systemImage: "square.stack.3d.up")
+                    }
+                    Button {
+                        controller.showMaterialReport()
+                    } label: {
+                        Label("材料集計…(配管の延長拾い)", systemImage: "list.bullet.rectangle")
+                    }
+                    Button {
+                        openFittingPreviewWindow(uiState: uiState)
+                    } label: {
+                        Label("継手プレビュー…", systemImage: "eye")
+                    }
+                } label: {
+                    Label(groupLabel(ContentView.equipmentTools, fallback: "設備"),
+                          systemImage: groupIcon(ContentView.equipmentTools, fallback: "wrench.and.screwdriver"))
+                }
+                .help("設備: 配管 / 機器登録 / 材料集計 / 継手プレビュー")
             }
 
-            // 角度拘束パレット(常設・マウスだけで切替。表記を短くして幅を節約)
+            // 角度拘束+スナップ種別(折りたたみ。ラベルに現在の角度拘束を出す)
             ToolbarItemGroup {
-                Picker("角度拘束", selection: $angle) {
-                    ForEach(AngleConstraint.allCases, id: \.self) { constraint in
-                        Text(constraint == .free ? "自由"
-                             : constraint.rawValue.replacingOccurrences(of: "°", with: ""))
-                            .tag(constraint)
+                Menu {
+                    Section("角度拘束(作図・移動・複写)") {
+                        ForEach(AngleConstraint.allCases, id: \.self) { constraint in
+                            Button((angle == constraint ? "✓ " : "   ") + constraint.rawValue) {
+                                angle = constraint
+                            }
+                        }
                     }
+                    Section("スナップ") {
+                        Toggle("端点", isOn: $snapEndpoint)
+                            .onChange(of: snapEndpoint) { _, v in controller.snapEngine.settings.endpoint = v }
+                        Toggle("交点", isOn: $snapIntersection)
+                            .onChange(of: snapIntersection) { _, v in controller.snapEngine.settings.intersection = v }
+                        Toggle("中点", isOn: $snapMidpoint)
+                            .onChange(of: snapMidpoint) { _, v in controller.snapEngine.settings.midpoint = v }
+                        Toggle("円の中心", isOn: $snapCenter)
+                            .onChange(of: snapCenter) { _, v in controller.snapEngine.settings.center = v }
+                        Toggle("線上", isOn: $snapOnLine)
+                            .onChange(of: snapOnLine) { _, v in controller.snapEngine.settings.onLine = v }
+                        Toggle("接続口(配管・機器)", isOn: $snapPort)
+                            .onChange(of: snapPort) { _, v in controller.snapEngine.settings.port = v }
+                    }
+                } label: {
+                    Label(angle == .free ? "角度 自由" : "角度 " + angle.rawValue, systemImage: "angle")
                 }
-                .pickerStyle(.segmented)
-                .help("角度拘束: 作図・移動・複写の方向を丸める(自由/90°/45°/15°)")
+                .help("角度拘束(自由/90°/45°/15°)とスナップ種別")
                 .onChange(of: angle) { _, newValue in
                     // 作図と移動・複写の両方に効かせる
                     controller.setAngleConstraint(newValue)
@@ -463,33 +513,11 @@ struct ContentView: View {
 
                 // 設定(パネル固定・背景色・スナップ種別)
                 Menu {
-                    Button("材料集計…(配管の延長拾い)") {
-                        controller.showMaterialReport()
-                    }
-                    Button("継手プレビュー…(パラメトリック部品の確認)") {
-                        openFittingPreviewWindow(uiState: uiState)
-                    }
-                    Divider()
                     Toggle("パネルを固定表示", isOn: $uiState.panelPinned)
                     Button(isDark ? "背景をライトに" : "背景をダークに") {
                         controller.toggleTheme()
                         isDark.toggle()
                         uiState.updatePalette(from: controller.theme)
-                    }
-                    Divider()
-                    Section("スナップ") {
-                        Toggle("端点", isOn: $snapEndpoint)
-                            .onChange(of: snapEndpoint) { _, v in controller.snapEngine.settings.endpoint = v }
-                        Toggle("交点", isOn: $snapIntersection)
-                            .onChange(of: snapIntersection) { _, v in controller.snapEngine.settings.intersection = v }
-                        Toggle("中点", isOn: $snapMidpoint)
-                            .onChange(of: snapMidpoint) { _, v in controller.snapEngine.settings.midpoint = v }
-                        Toggle("円の中心", isOn: $snapCenter)
-                            .onChange(of: snapCenter) { _, v in controller.snapEngine.settings.center = v }
-                        Toggle("線上", isOn: $snapOnLine)
-                            .onChange(of: snapOnLine) { _, v in controller.snapEngine.settings.onLine = v }
-                        Toggle("接続口(配管・機器)", isOn: $snapPort)
-                            .onChange(of: snapPort) { _, v in controller.snapEngine.settings.port = v }
                     }
                     Divider()
                     Section("配管") {
@@ -501,7 +529,7 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "gearshape")
                 }
-                .help("設定: パネル固定 / 背景色 / スナップ種別 / 配管の伸縮")
+                .help("設定: パネル固定 / 背景色 / 配管の伸縮")
             }
         }
         .onChange(of: uiState.panelPinned) { _, pinned in
@@ -674,6 +702,32 @@ struct ContentView: View {
             uiState.updatePalette(from: controller.theme)
             controller.publishInitialState()
         }
+    }
+
+    // MARK: - ツールの折りたたみ(M8.0c)
+
+    /// 基本作図のツール(折りたたみメニュー「作図」)
+    static let drawingTools: [ToolKind] = [.line, .rect, .circle, .arc, .doubleLine, .centerline,
+                                           .point, .text, .hatch, .dimension, .leader]
+    /// 設備のツール(折りたたみメニュー「設備」)
+    static let equipmentTools: [ToolKind] = [.pipe]
+
+    private func selectTool(_ kind: ToolKind) {
+        uiState.tool = kind
+        controller.selectTool(kind)
+    }
+
+    private func toolMenuTitle(_ kind: ToolKind) -> String {
+        (uiState.tool == kind ? "✓ " : "   ") + kind.rawValue
+    }
+
+    /// グループのラベル: そのグループのツールを使用中ならツール名、そうでなければグループ名
+    private func groupLabel(_ tools: [ToolKind], fallback: String) -> String {
+        tools.contains(uiState.tool) ? uiState.tool.rawValue : fallback
+    }
+
+    private func groupIcon(_ tools: [ToolKind], fallback: String) -> String {
+        tools.contains(uiState.tool) ? toolIcon(uiState.tool) : fallback
     }
 
     // MARK: - パネル自動格納
