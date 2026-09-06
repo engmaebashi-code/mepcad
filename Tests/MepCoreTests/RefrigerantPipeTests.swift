@@ -57,10 +57,48 @@ final class RefrigerantPipeTests: XCTestCase {
                 return false
             }
         }
-        XCTAssertTrue(touches(Vec2(3000 - u * 0.866, 0)))
-        XCTAssertTrue(touches(Vec2(3000, u / 2)))
-        XCTAssertTrue(touches(Vec2(3000, -u / 2)))
+        // 底辺は分岐点から上流へ1.0u、頂点はさらに0.866u上流(M8.0b)
+        XCTAssertTrue(touches(Vec2(3000 - u * 1.866, 0)))
+        XCTAssertTrue(touches(Vec2(3000 - u, u / 2)))
+        XCTAssertTrue(touches(Vec2(3000 - u, -u / 2)))
         XCTAssertFalse(touches(Vec2(3000 + u * 0.866, 0)))
+    }
+
+    /// 本管の単線は三角の中(頂点〜底辺)で切れる(M8.0b)
+    func testHostRunIsCutInsideTriangle() {
+        let main = refrigerant([Vec3(0, 0, 0), Vec3(6000, 0, 0)], liquid: "9.52", gas: "15.88")
+        let branch = refrigerant([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)])
+        let tees = PipeNetwork.junctions(in: [main, branch])[main.id] ?? []
+        guard case .pipe(let pts, let a) = main.kind else { return XCTFail() }
+        let u = a.effectiveSymbolSize
+        let runs = PipeSymbols.singleLineRuns(points: pts, attrs: a, junctions: tees)
+        XCTAssertEqual(runs.count, 2)
+        XCTAssertEqual(runs[0].first!, Vec2(0, 0))
+        XCTAssertEqual(runs[0].last!.x, 3000 - u * 1.866, accuracy: 1e-6)     // 頂点で止まる
+        XCTAssertEqual(runs[1].first!.x, 3000 - u, accuracy: 1e-6)            // 底辺から再開
+        XCTAssertEqual(runs[1].last!, Vec2(6000, 0))
+    }
+
+    /// 枝の単線は三角の底辺(枝側へ0.2u)から下流へ平行に出て、曲げRで枝の線に乗る(M8.0b)
+    func testBranchRunLeavesFromTriangleBase() {
+        let main = refrigerant([Vec3(0, 0, 0), Vec3(6000, 0, 0)], liquid: "9.52", gas: "15.88")
+        let branch = refrigerant([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)])
+        let js = PipeNetwork.junctions(in: [main, branch])[branch.id] ?? []
+        guard case .pipe(let pts, let a) = branch.kind else { return XCTFail() }
+        let u = a.effectiveSymbolSize
+        let runs = PipeSymbols.singleLineRuns(points: pts, attrs: a, junctions: js)
+        XCTAssertEqual(runs.count, 1)
+        let run = runs[0]
+        // 始点は底辺(x=3000−u)の枝側0.2u
+        XCTAssertEqual(run.first!.x, 3000 - u, accuracy: 1e-6)
+        XCTAssertEqual(run.first!.y, u * 0.2, accuracy: 1e-6)
+        // 終点は元の端
+        XCTAssertEqual(run.last!, Vec2(3000, 2000))
+        // 曲げの弧が入って点が増え、途中の点は本管の芯線(y=0)に触れない
+        XCTAssertGreaterThan(run.count, 3)
+        XCTAssertTrue(run.allSatisfy { $0.y > 1e-6 })
+        // 引き出しの直線部は本管と平行(始点の次の点も y=0.2u)
+        XCTAssertEqual(run[1].y, u * 0.2, accuracy: 1e-6)
     }
 
     /// 「継手を反転」(branchReversed)で三角の頂点が反対側(下流側)へ移る
@@ -74,7 +112,7 @@ final class RefrigerantPipeTests: XCTestCase {
         guard case .pipe(let pts, let a) = main.kind else { return XCTFail() }
         let els = PipeSymbols.elements(points: pts, attrs: a, junctions: tees)
         let u = a.effectiveSymbolSize
-        let apex = Vec2(3000 + u * 0.866, 0)
+        let apex = Vec2(3000 + u * 1.866, 0)
         XCTAssertTrue(els.contains {
             if case .segment(let p, let q) = $0 { return p.distance(to: apex) < 1e-6 || q.distance(to: apex) < 1e-6 }
             return false

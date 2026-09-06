@@ -85,14 +85,102 @@ public enum PipeSymbols {
     }
 
     /// 「))」記号: 傾いた受口(45°立ち下がり/上がり)の縁。方向dirへ膨らむ円弧2本(半径0.6u)
-    /// 冷媒の分岐管記号: 分岐点を底辺の中点(底辺は本管に直交・長さu)とし、
-    /// 上流方向へ高さ0.87u(正三角形)の三角の輪郭 — Y分岐管の入口側が細い形。M8.0
+    // MARK: - 冷媒の分岐管(M8.0b)
+    //
+    // 形はユーザー指示の見本に合わせる: 本管上に三角(底辺=本管に直交・長さu、頂点は上流側へ0.87u)、
+    // 三角の中は本管の線を切る。枝は底辺の(枝側へ0.2u寄った)点から下流へ本管と平行に出て、
+    // 曲げRで枝の線に乗る。枝の線(分岐点から直角に出る線)は底辺の1.0u下流にある
+
+    /// 三角の底辺の中心: 分岐点(枝の線と本管の交点)から上流へ1.0u
+    static let branchKitBaseOffset = 1.0
+    /// 枝の出口の底辺からの横ずれ(枝側へ)
+    static let branchKitLeadOffset = 0.2
+
+    /// 分岐管記号(三角の輪郭)。p=分岐点、upstream=上流方向(単位)
     static func branchKitMarks(at p: Vec2, upstream: Vec2, unit u: Double) -> [PipeSymbolElement] {
         let n = Vec2(-upstream.y, upstream.x)
-        let a = p + n * (u / 2)
-        let b = p - n * (u / 2)
-        let apex = p + upstream * (u * 0.866)
+        let base = p + upstream * (u * branchKitBaseOffset)
+        let a = base + n * (u / 2)
+        let b = base - n * (u / 2)
+        let apex = base + upstream * (u * 0.866)
         return [.segment(a, b), .segment(b, apex), .segment(apex, a)]
+    }
+
+    /// 冷媒配管の単線ラン: 本管側は三角の中(底辺〜頂点)で線を切り、枝側は端を「底辺から出て
+    /// 下流へ平行に走る引き出し」に置き換える(曲げRはこの後の PipeBend.centerline がかける)
+    static func refrigerantRuns(_ runs: [[Vec2]], attrs: PipeAttributes,
+                                junctions: [PipeJunction]) -> [[Vec2]] {
+        let u = unit(attrs)
+        let tol = PipeNetwork.joinTolerance
+        var out = runs
+        for j in junctions {
+            switch j.kind {
+            case .tee(_, _, _, _, let along, _, _):
+                // 本管: 三角の底辺〜頂点の間を切る
+                let base = j.position - along * (u * branchKitBaseOffset)
+                let apex = base - along * (u * 0.866)
+                out = out.flatMap { cutRun($0, from: apex, to: base, near: j.position) }
+            case .teeBranch(let host, _, let vertical):
+                guard !vertical else { continue }
+                for ri in out.indices where out[ri].count >= 2 {
+                    let n = out[ri].count
+                    let atStart = out[ri][0].distance(to: j.position) <= tol
+                    let atEnd = out[ri][n - 1].distance(to: j.position) <= tol
+                    guard atStart || atEnd else { continue }
+                    let end = atStart ? out[ri][0] : out[ri][n - 1]
+                    let next = atStart ? out[ri][1] : out[ri][n - 2]
+                    let dv = next - end
+                    let len = dv.length
+                    guard len > 1e-9 else { continue }
+                    let d = dv * (1 / len)
+                    // 本管の法線を枝側へ向ける
+                    var nrm = Vec2(-host.y, host.x)
+                    let dot = nrm.x * d.x + nrm.y * d.y
+                    if dot < 0 { nrm = Vec2(-nrm.x, -nrm.y) }
+                    let sinb = max(abs(dot), 0.5)
+                    let base = end - host * (u * branchKitBaseOffset)
+                    let b = base + nrm * (u * branchKitLeadOffset)
+                    let c = end + d * (u * branchKitLeadOffset / sinb)
+                    // 枝が短くて c が次の頂点を越えるなら引き出しは付けない
+                    guard c.distance(to: end) < len else { continue }
+                    if atStart {
+                        out[ri].replaceSubrange(0...0, with: [b, c])
+                    } else {
+                        out[ri].replaceSubrange((n - 1)...(n - 1), with: [c, b])
+                    }
+                }
+            default:
+                break
+            }
+        }
+        return out
+    }
+
+    /// 折れ線ptsのうち、点jを含む区間から a〜b の部分(aが上流側=区間の手前)を取り除いて2本にする。
+    /// a・bが区間の外に出るときは区間の端で止める。jを含まなければそのまま
+    static func cutRun(_ pts: [Vec2], from a: Vec2, to b: Vec2, near j: Vec2) -> [[Vec2]] {
+        let tol = PipeNetwork.joinTolerance
+        guard pts.count >= 2 else { return [pts] }
+        for i in 0..<(pts.count - 1) {
+            let p = pts[i], q = pts[i + 1]
+            let seglen = p.distance(to: q)
+            guard seglen > 1e-9 else { continue }
+            let foot = HitGeometry.closestPointOnSegment(j, p, q)
+            guard foot.distance(to: j) <= tol else { continue }
+            let dir = (q - p) * (1 / seglen)
+            func param(_ x: Vec2) -> Double { ((x - p).x * dir.x + (x - p).y * dir.y) }
+            var ta = param(a), tb = param(b)
+            if ta > tb { swap(&ta, &tb) }
+            ta = max(0, min(seglen, ta))
+            tb = max(0, min(seglen, tb))
+            guard tb - ta > 1e-6 else { return [pts] }
+            var first = Array(pts[0...i])
+            if ta > 1e-6 { first.append(p + dir * ta) } else if first.count < 2 { first = [] }
+            var second = Array(pts[(i + 1)...])
+            if seglen - tb > 1e-6 { second.insert(p + dir * tb, at: 0) } else if second.count < 2 { second = [] }
+            return [first, second].filter { $0.count >= 2 }
+        }
+        return [pts]
     }
 
     static func tiltMarks(at p: Vec2, dir: Vec2, unit u: Double) -> [PipeSymbolElement] {
@@ -133,7 +221,11 @@ public enum PipeSymbols {
         var runs = PipeGeometry.planRuns(points: points).map { $0.map(\.xy) }
         // 可撓管: 折れ点を曲げ半径で丸めた芯線(継手の記号は出ない)。M7.9
         if attrs.isBent {
-            return runs.map { PipeBend.centerline($0, radius: attrs.bendRadius) }
+            // 冷媒(ペア管)は分岐管の三角の中で本管を切り、枝は三角の底辺から出て曲げRで枝の線へ。
+            // 曲げRは管種の最小曲げ半径(M7.9)だが、細い管では紙面上で角に見えるので0.4u以上にする。M8.0b
+            let radius = attrs.isPair ? max(attrs.bendRadius, 0.4 * unit(attrs)) : attrs.bendRadius
+            if attrs.isPair { runs = refrigerantRuns(runs, attrs: attrs, junctions: junctions) }
+            return runs.map { PipeBend.centerline($0, radius: radius) }
         }
         guard attrs.autoFittings, isDrainStyle(attrs) else { return runs }
         let u = unit(attrs)
