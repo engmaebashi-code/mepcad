@@ -63,12 +63,33 @@ public struct PipeSize: Identifiable, Equatable, Sendable {
     }
 }
 
+/// 冷媒配管のペア(液管×ガス管)。M8.0
+public struct RefrigerantPair: Identifiable, Equatable, Sendable {
+    public let liquid: String   // 液管の呼び径(CURの呼び径キー "6.35")
+    public let gas: String      // ガス管の呼び径 "12.7"
+    public let note: String     // 用途の目安
+    public var id: String { "\(liquid)x\(gas)" }
+    public var label: String { "φ\(liquid)×φ\(gas)" }
+
+    public init(liquid: String, gas: String, note: String = "") {
+        self.liquid = liquid
+        self.gas = gas
+        self.note = note
+    }
+}
+
 /// 配管マスタ(CSV読込・参照API)
 public final class PipeMaster {
 
     public let usages: [PipeUsage]
     public let materials: [PipeMaterial]
     public let sizes: [PipeSize]
+    /// 冷媒配管のペア一覧(refrigerant_pairs.csv。液の細い順)。M8.0
+    public let refrigerantPairs: [RefrigerantPair]
+    /// 冷媒配管の管種id(ペア管として描く管種)
+    public static let refrigerantMaterial = "CUR"
+    /// 冷媒の用途id
+    public static let refrigerantUsage = "R"
 
     private let sizesByMaterial: [String: [PipeSize]]
     private let materialByID: [String: PipeMaterial]
@@ -88,12 +109,13 @@ public final class PipeMaster {
         }
         return PipeMaster(usagesCSV: load("pipe_usages.csv"),
                           materialsCSV: load("pipe_materials.csv"),
-                          sizesCSV: load("pipe_sizes.csv"))
+                          sizesCSV: load("pipe_sizes.csv"),
+                          pairsCSV: load("refrigerant_pairs.csv"))
     }()
 
     /// CSV文字列から構築(テスト・将来のユーザーマスタ差し替え用)。
     /// 行形式は各CSVのヘッダコメント参照。#始まりと空行は無視
-    public init(usagesCSV: String, materialsCSV: String, sizesCSV: String) {
+    public init(usagesCSV: String, materialsCSV: String, sizesCSV: String, pairsCSV: String = "") {
         func rows(_ text: String) -> [[String]] {
             text.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
                 .map(String.init)
@@ -117,6 +139,10 @@ public final class PipeMaster {
         sizes = rows(sizesCSV).compactMap { f in
             guard f.count >= 4, let od = Double(f[3]) else { return nil }
             return PipeSize(material: f[0], size: f[1], label: f[2], outerDiameter: od)
+        }
+        refrigerantPairs = rows(pairsCSV).compactMap { f in
+            guard f.count >= 2, !f[0].isEmpty, !f[1].isEmpty else { return nil }
+            return RefrigerantPair(liquid: f[0], gas: f[1], note: f.count >= 3 ? f[2] : "")
         }
         sizesByMaterial = Dictionary(grouping: sizes, by: \.material)
         materialByID = Dictionary(uniqueKeysWithValues: materials.map { ($0.id, $0) })
@@ -202,6 +228,18 @@ public enum PipeAggregator {
                     case .teeBranch: break
                     }
                 }
+            }
+            if attrs.isPair {
+                // ペア管(冷媒): 液管・ガス管を別の行に(延長は同じ)。分岐管は液管の行で数える。M8.0
+                let liquid = Key(usage: attrs.usageName, material: attrs.materialLabel,
+                                 size: attrs.sizeLabel + "(液)", series: "", sizeKey: attrs.size)
+                let gas = Key(usage: attrs.usageName, material: attrs.materialLabel,
+                              size: attrs.pairSizeLabel + "(ガス)", series: "", sizeKey: "")
+                let cl = lengths[liquid] ?? (0, 0, 0, 0, 0, 0, 0)
+                lengths[liquid] = (cl.length + len, cl.count + 1, 0, 0, cl.tee + tee, 0, 0)
+                let cg = lengths[gas] ?? (0, 0, 0, 0, 0, 0, 0)
+                lengths[gas] = (cg.length + len, cg.count + 1, 0, 0, 0, 0, 0)
+                continue
             }
             let key = Key(usage: attrs.usageName, material: attrs.materialLabel,
                           size: attrs.sizeLabel, series: attrs.fittingSeries, sizeKey: attrs.size)

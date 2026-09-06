@@ -1610,6 +1610,29 @@ extension CanvasController {
             let material = PipeMaster.standard.material(size.material)
             attrs.bendRadius = (material?.isFlexible ?? false)
                 ? (material?.bendRadiusFactor ?? 0) * size.outerDiameter : 0
+            // 冷媒以外へ変えたらペア管ではなくなる(M8.0)
+            if size.material != PipeMaster.refrigerantMaterial {
+                attrs.pairSizeLabel = ""
+                attrs.pairOuterDiameter = 0
+            }
+        }
+    }
+
+    /// 冷媒ペア管(液×ガス)の一括変更。選択中の配管を冷媒用銅管のペア管にする。M8.0
+    func applyPipePair(liquid: PipeSize, gas: PipeSize) {
+        let master = PipeMaster.standard
+        let material = master.material(liquid.material)
+        updateSelectedPipes(name: "配管を冷媒\(liquid.label)×\(gas.label)に変更") { attrs, _, _ in
+            attrs.material = liquid.material
+            attrs.materialLabel = material?.shortLabel ?? liquid.material
+            attrs.size = liquid.size
+            attrs.sizeLabel = liquid.label
+            attrs.outerDiameter = liquid.outerDiameter
+            attrs.pairSizeLabel = gas.label
+            attrs.pairOuterDiameter = gas.outerDiameter
+            attrs.fittingSeries = ""
+            attrs.fittingDims = PipeFittingDims()
+            attrs.bendRadius = (material?.bendRadiusFactor ?? 0) * liquid.outerDiameter
         }
     }
 

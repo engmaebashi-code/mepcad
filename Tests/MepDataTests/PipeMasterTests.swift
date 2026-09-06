@@ -189,6 +189,49 @@ final class PipeMasterTests: XCTestCase {
         XCTAssertEqual(totals[0].teeCount, 1)
     }
 
+    /// 冷媒のマスタ: 用途R/ドレンD、被覆銅管CUR(可撓・4D)、呼び径、ペア表(M8.0)
+    func testRefrigerantMasterLoads() {
+        let m = PipeMaster.standard
+        XCTAssertEqual(m.usage("R")?.name, "冷媒")
+        XCTAssertEqual(m.usage("R")?.defaultMaterial, "CUR")
+        XCTAssertEqual(m.usage("D")?.name, "ドレン")
+        let cur = m.material("CUR")
+        XCTAssertEqual(cur?.isFlexible, true)
+        XCTAssertEqual(cur?.bendRadiusFactor ?? 0, 4, accuracy: 1e-9)
+        XCTAssertEqual(m.size(material: "CUR", size: "6.35")?.outerDiameter ?? 0, 6.35, accuracy: 1e-9)
+        XCTAssertEqual(m.size(material: "CUR", size: "12.7")?.label, "φ12.7")
+        XCTAssertGreaterThanOrEqual(m.refrigerantPairs.count, 8)
+        XCTAssertEqual(m.refrigerantPairs.first?.label, "φ6.35×φ9.52")
+        XCTAssertTrue(m.refrigerantPairs.contains { $0.liquid == "9.52" && $0.gas == "15.88" })
+    }
+
+    /// ペア管は液・ガスを別の行に集計し、分岐管は液の行で数える(M8.0)
+    func testAggregatePairPipeSplitsLiquidAndGas() {
+        func ref(_ pts: [Vec2], liquid: String, gas: String) -> Entity {
+            Entity(layer: LayerAddress(0, 0),
+                   kind: .pipe(points: pts.map { Vec3($0, z: 0) },
+                               attrs: PipeAttributes(usage: "R", usageName: "冷媒",
+                                                     material: "CUR", materialLabel: "Cu",
+                                                     size: liquid, sizeLabel: "φ" + liquid,
+                                                     outerDiameter: Double(liquid) ?? 0,
+                                                     bendRadius: 40,
+                                                     pairSizeLabel: "φ" + gas,
+                                                     pairOuterDiameter: Double(gas) ?? 0)))
+        }
+        let main = ref([Vec2(0, 0), Vec2(6000, 0), Vec2(6000, 4000)], liquid: "9.52", gas: "15.88")
+        let branch = ref([Vec2(3000, 0), Vec2(3000, 2000)], liquid: "6.35", gas: "12.7")
+        let totals = PipeAggregator.aggregate([main, branch])
+        XCTAssertEqual(totals.count, 4)
+        let liquidMain = totals.first { $0.sizeLabel == "φ9.52(液)" }
+        let gasMain = totals.first { $0.sizeLabel == "φ15.88(ガス)" }
+        XCTAssertEqual(liquidMain?.lengthMeters ?? 0, 10.0, accuracy: 1e-9)
+        XCTAssertEqual(gasMain?.lengthMeters ?? 0, 10.0, accuracy: 1e-9)
+        XCTAssertEqual(liquidMain?.teeCount, 1)          // 分岐管は液の行
+        XCTAssertEqual(gasMain?.teeCount, 0)
+        XCTAssertEqual(liquidMain?.elbow90Count, 0)      // 折れ点は曲げ
+        XCTAssertEqual(totals.first { $0.sizeLabel == "φ12.7(ガス)" }?.lengthMeters ?? 0, 2.0, accuracy: 1e-9)
+    }
+
     /// 管種マスタの可撓管には最小曲げ半径の倍率がある(M7.9)
     func testFlexibleMaterialsHaveBendRadiusFactor() {
         let m = PipeMaster.standard

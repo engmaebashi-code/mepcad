@@ -491,9 +491,24 @@ struct PropertyPanelView: View {
                         HStack(spacing: 6) {
                             Menu {
                                 ForEach(PipeMaster.standard.materials) { material in
-                                    Menu(material.shortLabel) {
-                                        ForEach(PipeMaster.standard.sizes(for: material.id)) { size in
-                                            Button(size.label) { controller.applyPipeSize(size) }
+                                    if material.id == PipeMaster.refrigerantMaterial {
+                                        // 冷媒はペア(液×ガス)で選ぶ(M8.0)
+                                        Menu(material.shortLabel + "(冷媒 液×ガス)") {
+                                            ForEach(PipeMaster.standard.refrigerantPairs) { pair in
+                                                Button(pair.label) {
+                                                    let m = PipeMaster.standard
+                                                    if let l = m.size(material: material.id, size: pair.liquid),
+                                                       let g = m.size(material: material.id, size: pair.gas) {
+                                                        controller.applyPipePair(liquid: l, gas: g)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Menu(material.shortLabel) {
+                                            ForEach(PipeMaster.standard.sizes(for: material.id)) { size in
+                                                Button(size.label) { controller.applyPipeSize(size) }
+                                            }
                                         }
                                     }
                                 }

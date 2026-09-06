@@ -61,6 +61,11 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     /// 折れ点に継手を作らず、この半径で曲げて描く(脚が短ければ収まる半径まで小さくする)。
     /// 分岐(チーズ)・端部・口径変更の継手は従来どおり位置関係から発生する。M7.9
     public var bendRadius: Double
+    /// ペア管(冷媒配管: 液管+ガス管を1本の線で描く)のガス管の傍記("φ12.7")。空なら単管。M8.0
+    /// sizeLabel/outerDiameterは液管。集計では液・ガスを別の行に出す
+    public var pairSizeLabel: String
+    /// ガス管の外径(mm。ペア管のみ)
+    public var pairOuterDiameter: Double
 
     public init(usage: String = "CW", usageName: String = "給水",
                 material: String = "HIVP", materialLabel: String = "HIVP",
@@ -73,7 +78,8 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
                 capEnds: Bool = false, symbolSize: Double = 0,
                 longRadius: Bool = false, annotateMaterial: Bool = true,
                 branchKind: String = "DT", branchReversed: Bool = false,
-                bendRadius: Double = 0) {
+                bendRadius: Double = 0,
+                pairSizeLabel: String = "", pairOuterDiameter: Double = 0) {
         self.usage = usage
         self.usageName = usageName
         self.material = material
@@ -96,7 +102,12 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         self.branchKind = branchKind
         self.branchReversed = branchReversed
         self.bendRadius = bendRadius
+        self.pairSizeLabel = pairSizeLabel
+        self.pairOuterDiameter = pairOuterDiameter
     }
+
+    /// ペア管(冷媒配管)か
+    public var isPair: Bool { !pairSizeLabel.isEmpty }
 
     /// 可撓管(曲げで配管する管)か
     public var isBent: Bool { bendRadius > 0 }
@@ -278,8 +289,10 @@ public enum PipeGeometry {
 
     /// 傍記の内容("50" / "50 1FL+2500")。高さは指定区間のz
     public static func annotationText(_ attrs: PipeAttributes, z: Double) -> String {
+        // ペア管(冷媒)は「液×ガス」を併記(例: φ6.35×φ12.7)。M8.0
+        let size = attrs.isPair ? "\(attrs.sizeLabel)×\(attrs.pairSizeLabel)" : attrs.sizeLabel
         var s = attrs.annotateMaterial && !attrs.materialLabel.isEmpty
-            ? "\(attrs.materialLabel) \(attrs.sizeLabel)" : attrs.sizeLabel
+            ? "\(attrs.materialLabel) \(size)" : size
         if attrs.showLevel { s += " " + attrs.levelLabel(z) }
         return s
     }

@@ -85,6 +85,15 @@ public enum PipeSymbols {
     }
 
     /// 「))」記号: 傾いた受口(45°立ち下がり/上がり)の縁。方向dirへ膨らむ円弧2本(半径0.6u)
+    /// 冷媒の分岐管記号: 分岐点を底辺の中点とし、枝方向へ高さ0.87u(正三角形・辺u)の三角の輪郭。M8.0
+    static func branchKitMarks(at p: Vec2, dir: Vec2, unit u: Double) -> [PipeSymbolElement] {
+        let n = Vec2(-dir.y, dir.x)
+        let a = p + n * (u / 2)
+        let b = p - n * (u / 2)
+        let apex = p + dir * (u * 0.866)
+        return [.segment(a, b), .segment(b, apex), .segment(apex, a)]
+    }
+
     static func tiltMarks(at p: Vec2, dir: Vec2, unit u: Double) -> [PipeSymbolElement] {
         let base = atan2(dir.y, dir.x)
         let spread = Double.pi * 55 / 180
@@ -255,7 +264,10 @@ public enum PipeSymbols {
             case .tee(let bdir, _, _, _, let along, let vertical, let branchKind):
                 // 枝の傾き(主管軸方向成分)。|cos|>0.5なら45°Y
                 let c = bdir.x * along.x + bdir.y * along.y
-                if vertical {
+                if attrs.isPair {
+                    // 冷媒の分岐管(REFNET等): 分岐点に枝方向へ向く小さな三角(辺u)。M8.0
+                    out += branchKitMarks(at: j.position, dir: bdir, unit: u)
+                } else if vertical {
                     // 立てチーズ: 主管±uにティック、分岐点に直径uの円(閉)、枝uにティック
                     tick(at: j.position - along * u, along: along)
                     tick(at: j.position + along * u, along: along)
@@ -284,6 +296,7 @@ public enum PipeSymbols {
                     tick(at: j.position + bdir * u, along: bdir)
                 }
             case .cap(let dir):
+                guard !attrs.isPair else { break }     // 冷媒配管は端部記号を出さない(機器へ接続)
                 // ○の中に×(端部)
                 let rr = t * 0.8
                 let cc = j.position + dir * (rr * 0.2)
@@ -294,6 +307,7 @@ public enum PipeSymbols {
             case .teeBranch:
                 break
             case .reducer(let dir, _, _, _):
+                guard !attrs.isPair else { break }     // 冷媒配管のサイズ変更は分岐管で吸収(記号なし)
                 // ▷: 大径側にティック(長さu)、その両端から小径側u先の頂点へ
                 let n = Vec2(-dir.y, dir.x)
                 let base = j.position - dir * (u * 0.5)

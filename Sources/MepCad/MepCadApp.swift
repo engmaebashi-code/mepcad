@@ -81,6 +81,7 @@ final class CanvasUIState: ObservableObject {
     @Published var pipeUsage = "CW"
     @Published var pipeMaterial = "HIVP"
     @Published var pipeSize = "20"
+    @Published var pipeGasSize = "12.7"          // 冷媒ペア管のガス管呼び径(液管はpipeSize)M8.0
     @Published var pipeAnnotate = true
     @Published var pipeTextSize: Double = 2.5   // 紙面mm
     // M6.1/M6.2: 高さ・複線・継手・基準面
@@ -313,9 +314,12 @@ struct ContentView: View {
                 // 用紙サイズ(クリックで変更。枠=作図範囲)
                 Menu {
                     ForEach(PaperSize.allCases, id: \.self) { size in
-                        Button((uiState.paperSize == size ? "✓ " : "   ") + "\(size.label)(横)  \(Int(size.widthMm))×\(Int(size.heightMm))") {
+                        let mark = uiState.paperSize == size ? "✓ " : "   "
+                        let dimensions = "\(Int(size.widthMm))×\(Int(size.heightMm))"
+                        let title: String = mark + size.label + "(横)  " + dimensions
+                        Button(title, action: {
                             controller.setPaperSize(size)
-                        }
+                        })
                     }
                 } label: {
                     Text("用紙 \(uiState.paperSize.label)")
@@ -595,9 +599,15 @@ struct ContentView: View {
                 let material = master.material(uiState.pipeMaterial)
                     ?? PipeMaterial(id: uiState.pipeMaterial, name: uiState.pipeMaterial,
                                     shortLabel: uiState.pipeMaterial)
+                let availableSizes = master.sizes(for: material.id)
                 let size = master.size(material: material.id, size: uiState.pipeSize)
-                    ?? master.sizes(for: material.id).first
+                    ?? availableSizes.first
                     ?? PipeSize(material: material.id, size: "20", label: "20", outerDiameter: 26)
+                // 冷媒(CUR)はペア管: 液管=size、ガス管=pipeGasSize を1本の線で描く(M8.0)
+                let isPair = material.id == PipeMaster.refrigerantMaterial
+                let gas = isPair
+                    ? (master.size(material: material.id, size: uiState.pipeGasSize) ?? availableSizes.first)
+                    : nil
                 // 継手の規格シリーズと寸法(fittings.csv)。無ければ外径概算にフォールバック
                 let series = FittingMaster.series(material: material.id, usage: usage.id)
                 let dims = FittingMaster.standard.dims(series: series, size: size.size)
@@ -623,7 +633,9 @@ struct ContentView: View {
                                           branchKind: drainStyle ? uiState.pipeBranchKind : "DT",
                                           // 可撓管は折れ点を最小曲げ半径(外径×倍率)で曲げる(M7.9)
                                           bendRadius: material.isFlexible
-                                              ? material.bendRadiusFactor * size.outerDiameter : 0),
+                                              ? material.bendRadiusFactor * size.outerDiameter : 0,
+                                          pairSizeLabel: gas?.label ?? "",
+                                          pairOuterDiameter: gas?.outerDiameter ?? 0),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
                     z: uiState.pipeLevel, drop45: uiState.pipeDrop45,
                     rigidAngles: !material.isFlexible)   // 直管は継手角度を90°/45°に拘束(M7.7)
@@ -849,23 +861,60 @@ struct PipePropertyCard: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
 
-                Text("口径")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                Menu {
-                    ForEach(master.sizes(for: uiState.pipeMaterial)) { size in
-                        Button((uiState.pipeSize == size.size ? "✓ " : "   ") + size.label) {
-                            uiState.pipeSize = size.size
+                if uiState.pipeMaterial == PipeMaster.refrigerantMaterial {
+                    // 冷媒: 液×ガスのペアで選ぶ(M8.0)。個別に変えるサブメニューも
+                    Text("液×ガス")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Menu {
+                        ForEach(master.refrigerantPairs) { pair in
+                            Button(pairMenuTitle(pair)) {
+                                uiState.pipeSize = pair.liquid
+                                uiState.pipeGasSize = pair.gas
+                            }
                         }
+                        Divider()
+                        Menu("液管だけ変更") {
+                            ForEach(master.sizes(for: uiState.pipeMaterial)) { size in
+                                Button((uiState.pipeSize == size.size ? "✓ " : "   ") + size.label) {
+                                    uiState.pipeSize = size.size
+                                }
+                            }
+                        }
+                        Menu("ガス管だけ変更") {
+                            ForEach(master.sizes(for: uiState.pipeMaterial)) { size in
+                                Button((uiState.pipeGasSize == size.size ? "✓ " : "   ") + size.label) {
+                                    uiState.pipeGasSize = size.size
+                                }
+                            }
+                        }
+                    } label: {
+                        Text("φ\(uiState.pipeSize)×φ\(uiState.pipeGasSize)")
+                            .font(.system(size: 11))
+                            .monospacedDigit()
                     }
-                } label: {
-                    Text(master.size(material: uiState.pipeMaterial, size: uiState.pipeSize)?.label
-                         ?? uiState.pipeSize)
-                        .font(.system(size: 11))
-                        .monospacedDigit()
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("液管×ガス管。目安は代表的な組合せ — 機種ごとの正しいサイズは据付説明書で")
+                } else {
+                    Text("口径")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Menu {
+                        ForEach(master.sizes(for: uiState.pipeMaterial)) { size in
+                            Button((uiState.pipeSize == size.size ? "✓ " : "   ") + size.label) {
+                                uiState.pipeSize = size.size
+                            }
+                        }
+                    } label: {
+                        Text(master.size(material: uiState.pipeMaterial, size: uiState.pipeSize)?.label
+                             ?? uiState.pipeSize)
+                            .font(.system(size: 11))
+                            .monospacedDigit()
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
 
             }
 
@@ -1004,10 +1053,27 @@ struct PipePropertyCard: View {
         return s.isEmpty ? "概算" : s
     }
 
+    /// 冷媒ペアのメニュー表示(選択中は✓、用途の目安を添える)。M8.0
+    private func pairMenuTitle(_ pair: RefrigerantPair) -> String {
+        let on = uiState.pipeSize == pair.liquid && uiState.pipeGasSize == pair.gas
+        return (on ? "✓ " : "   ") + pair.label + (pair.note.isEmpty ? "" : "  — " + pair.note)
+    }
+
     /// 管種を変えたとき、同じ呼び径が無ければ近いもの(無ければ先頭)へ寄せる
     private func ensureSizeValid() {
         let sizes = master.sizes(for: uiState.pipeMaterial)
         guard !sizes.isEmpty else { return }
+        if uiState.pipeMaterial == PipeMaster.refrigerantMaterial {
+            // 冷媒に切り替えたら代表的なペア(φ6.35×φ12.7)から始める(M8.0)
+            if !sizes.contains(where: { $0.size == uiState.pipeSize })
+                || !sizes.contains(where: { $0.size == uiState.pipeGasSize }) {
+                let pair = master.refrigerantPairs.first { $0.liquid == "6.35" && $0.gas == "12.7" }
+                    ?? master.refrigerantPairs.first
+                uiState.pipeSize = pair?.liquid ?? sizes[0].size
+                uiState.pipeGasSize = pair?.gas ?? sizes[min(2, sizes.count - 1)].size
+            }
+            return
+        }
         if sizes.contains(where: { $0.size == uiState.pipeSize }) { return }
         let current = Double(uiState.pipeSize) ?? 0
         let nearest = sizes.min {
