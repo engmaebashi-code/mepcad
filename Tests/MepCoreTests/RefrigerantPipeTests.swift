@@ -47,16 +47,38 @@ final class RefrigerantPipeTests: XCTestCase {
         guard case .pipe(let pts, let a) = main.kind else { return XCTFail() }
         let els = PipeSymbols.elements(points: pts, attrs: a, junctions: tees)
         XCTAssertEqual(els.count, 3)
-        // 三角の頂点は枝の方向(+y)に u·0.866 の位置
+        // 三角は本管に沿い、頂点は上流(本管の作図方向+xの手前=−x)に u·0.866、底辺は分岐点で本管に直交
         let u = a.effectiveSymbolSize
-        let apex = Vec2(3000, u * 0.866)
-        let touchesApex = els.contains {
-            if case .segment(let p, let q) = $0 {
-                return p.distance(to: apex) < 1e-6 || q.distance(to: apex) < 1e-6
+        func touches(_ pt: Vec2) -> Bool {
+            els.contains {
+                if case .segment(let p, let q) = $0 {
+                    return p.distance(to: pt) < 1e-6 || q.distance(to: pt) < 1e-6
+                }
+                return false
             }
-            return false
         }
-        XCTAssertTrue(touchesApex)
+        XCTAssertTrue(touches(Vec2(3000 - u * 0.866, 0)))
+        XCTAssertTrue(touches(Vec2(3000, u / 2)))
+        XCTAssertTrue(touches(Vec2(3000, -u / 2)))
+        XCTAssertFalse(touches(Vec2(3000 + u * 0.866, 0)))
+    }
+
+    /// 「継手を反転」(branchReversed)で三角の頂点が反対側(下流側)へ移る
+    func testBranchKitFlipsWithReversedFlag() {
+        let main = refrigerant([Vec3(0, 0, 0), Vec3(6000, 0, 0)], liquid: "9.52", gas: "15.88")
+        var branch = refrigerant([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)])
+        guard case .pipe(let bp, var ba) = branch.kind else { return XCTFail() }
+        ba.branchReversed = true
+        branch.kind = .pipe(points: bp, attrs: ba)
+        let tees = PipeNetwork.junctions(in: [main, branch])[main.id] ?? []
+        guard case .pipe(let pts, let a) = main.kind else { return XCTFail() }
+        let els = PipeSymbols.elements(points: pts, attrs: a, junctions: tees)
+        let u = a.effectiveSymbolSize
+        let apex = Vec2(3000 + u * 0.866, 0)
+        XCTAssertTrue(els.contains {
+            if case .segment(let p, let q) = $0 { return p.distance(to: apex) < 1e-6 || q.distance(to: apex) < 1e-6 }
+            return false
+        })
     }
 
     /// 端部キャップ・口径変更の記号は冷媒配管では出さない

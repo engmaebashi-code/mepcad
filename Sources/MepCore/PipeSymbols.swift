@@ -85,12 +85,13 @@ public enum PipeSymbols {
     }
 
     /// 「))」記号: 傾いた受口(45°立ち下がり/上がり)の縁。方向dirへ膨らむ円弧2本(半径0.6u)
-    /// 冷媒の分岐管記号: 分岐点を底辺の中点とし、枝方向へ高さ0.87u(正三角形・辺u)の三角の輪郭。M8.0
-    static func branchKitMarks(at p: Vec2, dir: Vec2, unit u: Double) -> [PipeSymbolElement] {
-        let n = Vec2(-dir.y, dir.x)
+    /// 冷媒の分岐管記号: 分岐点を底辺の中点(底辺は本管に直交・長さu)とし、
+    /// 上流方向へ高さ0.87u(正三角形)の三角の輪郭 — Y分岐管の入口側が細い形。M8.0
+    static func branchKitMarks(at p: Vec2, upstream: Vec2, unit u: Double) -> [PipeSymbolElement] {
+        let n = Vec2(-upstream.y, upstream.x)
         let a = p + n * (u / 2)
         let b = p - n * (u / 2)
-        let apex = p + dir * (u * 0.866)
+        let apex = p + upstream * (u * 0.866)
         return [.segment(a, b), .segment(b, apex), .segment(apex, a)]
     }
 
@@ -265,8 +266,10 @@ public enum PipeSymbols {
                 // 枝の傾き(主管軸方向成分)。|cos|>0.5なら45°Y
                 let c = bdir.x * along.x + bdir.y * along.y
                 if attrs.isPair {
-                    // 冷媒の分岐管(REFNET等): 分岐点に枝方向へ向く小さな三角(辺u)。M8.0
-                    out += branchKitMarks(at: j.position, dir: bdir, unit: u)
+                    // 冷媒の分岐管(REFNET等): 本管に沿った三角。頂点は上流(室外機側=本管の作図方向の
+                    // 手前)、底辺は分岐点で本管に直交、枝はその底辺の中央から出る。M8.0/M8.0a
+                    // 上流は「継手を反転」(branchReversed)で入れ替わる
+                    out += branchKitMarks(at: j.position, upstream: Vec2(-along.x, -along.y), unit: u)
                 } else if vertical {
                     // 立てチーズ: 主管±uにティック、分岐点に直径uの円(閉)、枝uにティック
                     tick(at: j.position - along * u, along: along)
