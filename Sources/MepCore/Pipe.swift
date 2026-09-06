@@ -109,6 +109,43 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     /// ペア管(冷媒配管)か
     public var isPair: Bool { !pairSizeLabel.isEmpty }
 
+    // 後から足した項目は無くても読めるようにする(.mepcadの前方互換)。M8.1
+    private enum CodingKeys: String, CodingKey {
+        case usage, usageName, material, materialLabel, size, sizeLabel, outerDiameter
+        case annotate, textHeight, datum, showLevel, doubleLine, autoFittings
+        case fittingSeries, fittingDims, capEnds, symbolSize, longRadius, annotateMaterial
+        case branchKind, branchReversed, bendRadius, pairSizeLabel, pairOuterDiameter
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = PipeAttributes()
+        usage = try c.decodeIfPresent(String.self, forKey: .usage) ?? d.usage
+        usageName = try c.decodeIfPresent(String.self, forKey: .usageName) ?? d.usageName
+        material = try c.decodeIfPresent(String.self, forKey: .material) ?? d.material
+        materialLabel = try c.decodeIfPresent(String.self, forKey: .materialLabel) ?? d.materialLabel
+        size = try c.decodeIfPresent(String.self, forKey: .size) ?? d.size
+        sizeLabel = try c.decodeIfPresent(String.self, forKey: .sizeLabel) ?? d.sizeLabel
+        outerDiameter = try c.decodeIfPresent(Double.self, forKey: .outerDiameter) ?? d.outerDiameter
+        annotate = try c.decodeIfPresent(Bool.self, forKey: .annotate) ?? d.annotate
+        textHeight = try c.decodeIfPresent(Double.self, forKey: .textHeight) ?? d.textHeight
+        datum = try c.decodeIfPresent(String.self, forKey: .datum) ?? d.datum
+        showLevel = try c.decodeIfPresent(Bool.self, forKey: .showLevel) ?? d.showLevel
+        doubleLine = try c.decodeIfPresent(Bool.self, forKey: .doubleLine) ?? d.doubleLine
+        autoFittings = try c.decodeIfPresent(Bool.self, forKey: .autoFittings) ?? d.autoFittings
+        fittingSeries = try c.decodeIfPresent(String.self, forKey: .fittingSeries) ?? d.fittingSeries
+        fittingDims = try c.decodeIfPresent(PipeFittingDims.self, forKey: .fittingDims) ?? d.fittingDims
+        capEnds = try c.decodeIfPresent(Bool.self, forKey: .capEnds) ?? d.capEnds
+        symbolSize = try c.decodeIfPresent(Double.self, forKey: .symbolSize) ?? d.symbolSize
+        longRadius = try c.decodeIfPresent(Bool.self, forKey: .longRadius) ?? d.longRadius
+        annotateMaterial = try c.decodeIfPresent(Bool.self, forKey: .annotateMaterial) ?? d.annotateMaterial
+        branchKind = try c.decodeIfPresent(String.self, forKey: .branchKind) ?? d.branchKind
+        branchReversed = try c.decodeIfPresent(Bool.self, forKey: .branchReversed) ?? d.branchReversed
+        bendRadius = try c.decodeIfPresent(Double.self, forKey: .bendRadius) ?? d.bendRadius
+        pairSizeLabel = try c.decodeIfPresent(String.self, forKey: .pairSizeLabel) ?? d.pairSizeLabel
+        pairOuterDiameter = try c.decodeIfPresent(Double.self, forKey: .pairOuterDiameter) ?? d.pairOuterDiameter
+    }
+
     /// 可撓管(曲げで配管する管)か
     public var isBent: Bool { bendRadius > 0 }
 

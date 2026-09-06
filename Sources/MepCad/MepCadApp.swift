@@ -82,6 +82,7 @@ final class CanvasUIState: ObservableObject {
     @Published var pipeMaterial = "HIVP"
     @Published var pipeSize = "20"
     @Published var pipeGasSize = "12.7"          // 冷媒ペア管のガス管呼び径(液管はpipeSize)M8.0
+    @Published var documentName = "無題"         // ウィンドウタイトル(保存ファイル名)M8.1
     @Published var pipeAnnotate = true
     @Published var pipeTextSize: Double = 2.5   // 紙面mm
     // M6.1/M6.2: 高さ・複線・継手・基準面
@@ -503,13 +504,17 @@ struct ContentView: View {
                     Button("新規図面…(用紙・縮尺を指定)") {
                         controller.newDrawingPanel()
                     }
-                    Button("開く…(JWW / DXF)") {
+                    Button("開く…(MepCad / JWW / DXF)") {
                         controller.openJwwPanel()
                     }
+                    Divider()
+                    Button("保存(⌘S)") { controller.save() }
+                    Button("名前を付けて保存…(⇧⌘S)") { controller.saveAs() }
+                    Button("JWW形式で保存…") { controller.exportJww() }
                 } label: {
                     Image(systemName: "folder")
                 }
-                .help("ファイル: 新規図面(⌘N)/ 開く(⌘O)")
+                .help("ファイル: 新規(⌘N)/ 開く(⌘O)/ 保存(⌘S)/ 名前を付けて保存(⇧⌘S)/ JWW形式で保存")
 
                 // 設定(パネル固定・背景色・スナップ種別)
                 Menu {
@@ -570,6 +575,9 @@ struct ContentView: View {
             }
             controller.onGridChanged = { visible in
                 uiState.gridOn = visible
+            }
+            controller.onDocumentURLChanged = { url in
+                uiState.documentName = url?.deletingPathExtension().lastPathComponent ?? "無題"
             }
             controller.onGridSpacingChanged = { spacing in
                 uiState.gridSpacing = spacing
@@ -1569,8 +1577,9 @@ struct MepCadApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("MepCad — M5") {
+        WindowGroup("MepCad") {
             ContentView(controller: controller, uiState: uiState)
+                .navigationTitle(uiState.documentName)
         }
         .commands {
             // ファイルメニュー(⌘N/⌘Oのショートカットはここで一元管理)
@@ -1579,10 +1588,23 @@ struct MepCadApp: App {
                     controller.newDrawingPanel()
                 }
                 .keyboardShortcut("n", modifiers: .command)
-                Button("開く…(JWW / DXF)") {
+                Button("開く…(MepCad / JWW / DXF)") {
                     controller.openJwwPanel()
                 }
                 .keyboardShortcut("o", modifiers: .command)
+            }
+            CommandGroup(replacing: .saveItem) {
+                Button("保存") {
+                    controller.save()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                Button("名前を付けて保存…") {
+                    controller.saveAs()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                Button("JWW形式で保存…") {
+                    controller.exportJww()
+                }
             }
         }
     }

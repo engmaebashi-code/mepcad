@@ -256,6 +256,64 @@ public final class Document {
         entities.filter { ids.contains($0.id) }
     }
 
+    // MARK: - 保存・復元(.mepcad 自前形式)M8.1
+
+    /// 図面の保存用スナップショット(JSON)。レイヤ構造・用紙・高さ基準・ブロック定義・要素の全部
+    public struct Snapshot: Codable, Sendable {
+        /// 形式のバージョン(読込側が将来の変更を判定する)
+        public var format: Int = 1
+        public var paperSize: PaperSize
+        public var levelDatum: String
+        public var groups: [LayerGroup]
+        public var current: LayerAddress
+        public var showAuxiliary: Bool
+        public var blockDefinitions: [BlockDefinition]
+        public var entities: [Entity]
+    }
+
+    public func snapshot() -> Snapshot {
+        Snapshot(paperSize: paperSize, levelDatum: levelDatum, groups: groups, current: current,
+                 showAuxiliary: showAuxiliary, blockDefinitions: blockDefinitions, entities: entities)
+    }
+
+    /// スナップショットで図面全体を置き換える(開く)。onChangeは1回だけ
+    public func restore(_ snap: Snapshot) {
+        var g = snap.groups
+        while g.count < 16 { g.append(LayerGroup()) }
+        if g.count > 16 { g = Array(g.prefix(16)) }
+        for i in g.indices {
+            while g[i].layers.count < 16 { g[i].layers.append(Layer()) }
+            if g[i].layers.count > 16 { g[i].layers = Array(g[i].layers.prefix(16)) }
+        }
+        groups = g
+        current = snap.current
+        paperSize = snap.paperSize
+        levelDatum = snap.levelDatum.isEmpty ? "1FL" : snap.levelDatum
+        showAuxiliary = snap.showAuxiliary
+        blockDefinitions = snap.blockDefinitions
+        entities = snap.entities
+        onChange?()
+    }
+
+    /// JSONに書き出す(.mepcad)
+    public func serialize() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        // 空のBBox(±inf)などがJSONで落ちないように
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(
+            positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        return try encoder.encode(snapshot())
+    }
+
+    /// JSON(.mepcad)を読み込んで置き換える
+    public func load(from data: Data) throws {
+        let decoder = JSONDecoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        let snap = try decoder.decode(Snapshot.self, from: data)
+        restore(snap)
+    }
+
     // MARK: - デモ用サンプル(M1動作確認)
 
     /// 機械室風のサンプル図形を配置する(10m×8mの部屋+機器+配管ライン)

@@ -1126,6 +1126,7 @@ final class CanvasController: NSObject {
         tools.cancel()
         selection = []
         document.resetForNewDrawing(paperSize: paper, scaleDenominator: scaleDenominator)
+        documentURL = nil
         commandStack.clear()  // 前の図面へのUndoは残さない
         selectionDidChange()
         if let size = viewSizeProvider?() {
@@ -1290,17 +1291,91 @@ final class CanvasController: NSObject {
 
     func openJwwPanel() {
         let panel = NSOpenPanel()
-        panel.title = "図面ファイルを開く(JWW / DXF)"
+        panel.title = "図面ファイルを開く(MepCad / JWW / DXF)"
         var types: [UTType] = []
+        if let t = UTType(filenameExtension: "mepcad") { types.append(t) }
         if let jwwType = UTType(filenameExtension: "jww") { types.append(jwwType) }
         if let dxfType = UTType(filenameExtension: "dxf") { types.append(dxfType) }
         panel.allowedContentTypes = types
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        if url.pathExtension.lowercased() == "dxf" {
-            loadDxf(url: url)
-        } else {
-            loadJww(url: url)
+        switch url.pathExtension.lowercased() {
+        case "dxf": loadDxf(url: url)
+        case "mepcad": loadMepcad(url: url)
+        default: loadJww(url: url)
+        }
+    }
+
+    // MARK: - 保存(M8.1)
+
+    /// 現在の図面のファイル(.mepcad)。JWW/DXFを開いた直後や新規はnil(=名前を付けて保存になる)
+    var documentURL: URL? {
+        didSet { onDocumentURLChanged?(documentURL) }
+    }
+    var onDocumentURLChanged: ((URL?) -> Void)?
+
+    /// 上書き保存(⌘S)。まだファイル名が無ければ「名前を付けて保存」
+    func save() {
+        guard let url = documentURL else { saveAs(); return }
+        write(to: url)
+    }
+
+    /// 名前を付けて保存(⇧⌘S)。自前形式 .mepcad(属性・レイヤ・ブロックを無劣化で保持)
+    func saveAs() {
+        let panel = NSSavePanel()
+        panel.title = "名前を付けて保存"
+        if let t = UTType(filenameExtension: "mepcad") { panel.allowedContentTypes = [t] }
+        panel.nameFieldStringValue = (documentURL?.deletingPathExtension().lastPathComponent ?? "無題") + ".mepcad"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        write(to: url)
+    }
+
+    private func write(to url: URL) {
+        do {
+            let data = try document.serialize()
+            try data.write(to: url, options: .atomic)
+            documentURL = url
+            onInfo?("保存しました: \(url.lastPathComponent)(\(document.entities.count)要素)")
+        } catch {
+            onInfo?("保存エラー: \(error.localizedDescription)")
+        }
+    }
+
+    /// JWW形式で書き出す(Jw_cad 7/8互換。寸法・引出線・配管・ブロックは線・円弧・文字に分解)
+    func exportJww() {
+        let panel = NSSavePanel()
+        panel.title = "JWW形式で保存"
+        if let t = UTType(filenameExtension: "jww") { panel.allowedContentTypes = [t] }
+        panel.nameFieldStringValue = (documentURL?.deletingPathExtension().lastPathComponent ?? "無題") + ".jww"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let memo = url.deletingPathExtension().lastPathComponent
+        let data = JwwWriter(memo: memo).data(from: document)
+        do {
+            try data.write(to: url, options: .atomic)
+            let kb = data.count / 1024
+            onInfo?("JWWで保存しました: \(url.lastPathComponent)(\(kb)KB。寸法・引出線・配管・ブロックは線と文字に分解)")
+        } catch {
+            onInfo?("JWW保存エラー: \(error.localizedDescription)")
+        }
+    }
+
+    /// 自前形式(.mepcad)を開く
+    func loadMepcad(url: URL) {
+        do {
+            let data = try Data(contentsOf: url)
+            selection = []
+            cancelGripDrag()
+            cancelEditOperation()
+            try document.load(from: data)
+            commandStack.clear()
+            selectionDidChange()
+            documentURL = url
+            if let size = viewSizeProvider?() { fit(viewSize: size) }
+            onInfo?("\(url.lastPathComponent) — \(document.entities.count)要素 / ブロック定義\(document.blockDefinitions.count)")
+        } catch {
+            onInfo?("読込エラー: \(error.localizedDescription)")
         }
     }
 
@@ -1321,6 +1396,7 @@ final class CanvasController: NSObject {
                     self.cancelEditOperation()
                     let stats = DxfReader.importDrawing(drawing, into: self.document)
                     self.commandStack.clear()   // 前の図面へのUndoは残さない
+                    self.documentURL = nil      // 保存は .mepcad へ名前を付けて(M8.1)
                     self.selectionDidChange()
                     if let size = self.viewSizeProvider?() {
                         self.fit(viewSize: size)
@@ -1364,6 +1440,7 @@ final class CanvasController: NSObject {
                     self.cancelEditOperation()
                     let stats = JwwReader.importDrawingWithStats(drawing, into: self.document)
                     self.commandStack.clear()   // 前の図面へのUndoは残さない
+                    self.documentURL = nil      // 保存は .mepcad へ名前を付けて(M8.1)
                     self.selectionDidChange()
                     if let size = self.viewSizeProvider?() {
                         self.fit(viewSize: size)
