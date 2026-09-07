@@ -35,6 +35,8 @@ public struct PipeJunction: Equatable, Sendable {
     public let position: Vec2
     public let z: Double
     public let kind: Kind
+    /// 相手(本管)の外径・平面幅(teeBranchのとき。ダクトの枝を本ダクトの壁で止めるのに使う)。M9.0
+    public var hostOD: Double = 0
 }
 
 public enum PipeNetwork {
@@ -113,7 +115,8 @@ public enum PipeNetwork {
                             PipeJunction(pipeID: p.id, position: foot, z: a.z,
                                          kind: .teeBranch(hostDirection: mainDir,
                                                           hostLongRadius: p.attrs.branchKind == "LT",
-                                                          vertical: end.vertical)))
+                                                          vertical: end.vertical),
+                                         hostOD: other.attrs.outerDiameter))
                         // 同じ点に両側から枝管が来る場合(=クロス)は1つのティーズにまとめる
                         if (result[other.id] ?? []).contains(where: {
                             if case .tee = $0.kind, $0.position.distance(to: foot) <= tol { return true }
@@ -164,6 +167,8 @@ public enum PipeNetwork {
     /// - レデューサ: 大径受口→テーパ→小径受口(接続点から小径側へ)
     /// - キャップ: 受口深さぶん被せる
     public static func junctionShapes(_ j: PipeJunction, attrs: PipeAttributes) -> [PipeFittingShape] {
+        // ダクトの分岐・変形は DuctGeometry.layout 側で壁ごと描く(ここでは何も出さない)。M9.0
+        if attrs.isDuct { return [] }
         let dims = attrs.effectiveFittingDims
         let r = attrs.outerDiameter / 2
         let s = max(dims.socketOD / 2, r * 1.05)

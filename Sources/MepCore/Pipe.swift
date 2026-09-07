@@ -10,6 +10,48 @@ import Foundation
 // M6.2: 頂点にz(高さ)。隣接頂点が平面上同一点でzが違えば「立管」=立上り/立下り記号を
 //       自動発生し、延長は3Dで拾う。基準面(1FL/2FL/GL)は属性datumに保持。
 
+/// ダクトの仕様(配管エンティティにこれが付くとダクトとして描く)。M9.0
+/// 平面幅(角はW・丸/フレキはD)は PipeAttributes.outerDiameter にも入れる(複線幅・接続判定・当たりが共用できる)
+public struct DuctSpec: Equatable, Codable, Sendable {
+    public enum Shape: String, Codable, CaseIterable, Sendable {
+        case rect = "角"
+        case round = "丸"
+        case flex = "フレキ"
+        case canvas = "キャンバス"
+    }
+    public var shape: Shape
+    /// 角: W(平面幅) / 丸・フレキ: 直径D / キャンバス: 接続するダクトの幅
+    public var width: Double
+    /// 角: H(高さ) / 丸系: 0
+    public var height: Double
+    /// 枝ダクトとして本ダクトに取り付くとき、ホッパー分岐(45°の広がり)にする。falseは直付け(チーズ)
+    public var hopperBranch: Bool
+
+    public init(shape: Shape, width: Double, height: Double = 0, hopperBranch: Bool = false) {
+        self.shape = shape
+        self.width = width
+        self.height = height
+        self.hopperBranch = hopperBranch
+    }
+
+    /// 断面が丸か(角以外。キャンバスはHが0なら丸)
+    public var isRound: Bool {
+        switch shape {
+        case .rect: return false
+        case .round, .flex: return true
+        case .canvas: return height <= 0
+        }
+    }
+    /// 傍記("600×300" / "φ300")
+    public var sizeLabel: String {
+        isRound ? "φ\(Int(width.rounded()))" : "\(Int(width.rounded()))×\(Int(height.rounded()))"
+    }
+    /// 周長(mm。表面積の拾い用)
+    public var perimeter: Double {
+        isRound ? .pi * width : 2 * (width + height)
+    }
+}
+
 /// 配管の属性。文字サイズは実寸mm(文字と同じく記入時に紙面mm×縮尺で換算)
 public struct PipeAttributes: Equatable, Codable, Sendable {
     /// 用途id("CW"等。マスタ参照キー)
@@ -66,6 +108,8 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
     public var pairSizeLabel: String
     /// ガス管の外径(mm。ペア管のみ)
     public var pairOuterDiameter: Double
+    /// ダクト仕様(非nilならダクトとして描く・集計する)。M9.0
+    public var duct: DuctSpec?
 
     public init(usage: String = "CW", usageName: String = "給水",
                 material: String = "HIVP", materialLabel: String = "HIVP",
@@ -79,7 +123,8 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
                 longRadius: Bool = false, annotateMaterial: Bool = true,
                 branchKind: String = "DT", branchReversed: Bool = false,
                 bendRadius: Double = 0,
-                pairSizeLabel: String = "", pairOuterDiameter: Double = 0) {
+                pairSizeLabel: String = "", pairOuterDiameter: Double = 0,
+                duct: DuctSpec? = nil) {
         self.usage = usage
         self.usageName = usageName
         self.material = material
@@ -104,17 +149,20 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         self.bendRadius = bendRadius
         self.pairSizeLabel = pairSizeLabel
         self.pairOuterDiameter = pairOuterDiameter
+        self.duct = duct
     }
 
     /// ペア管(冷媒配管)か
     public var isPair: Bool { !pairSizeLabel.isEmpty }
+    /// ダクトか(M9.0)
+    public var isDuct: Bool { duct != nil }
 
     // 後から足した項目は無くても読めるようにする(.mepcadの前方互換)。M8.1
     private enum CodingKeys: String, CodingKey {
         case usage, usageName, material, materialLabel, size, sizeLabel, outerDiameter
         case annotate, textHeight, datum, showLevel, doubleLine, autoFittings
         case fittingSeries, fittingDims, capEnds, symbolSize, longRadius, annotateMaterial
-        case branchKind, branchReversed, bendRadius, pairSizeLabel, pairOuterDiameter
+        case branchKind, branchReversed, bendRadius, pairSizeLabel, pairOuterDiameter, duct
     }
 
     public init(from decoder: Decoder) throws {
@@ -144,6 +192,7 @@ public struct PipeAttributes: Equatable, Codable, Sendable {
         bendRadius = try c.decodeIfPresent(Double.self, forKey: .bendRadius) ?? d.bendRadius
         pairSizeLabel = try c.decodeIfPresent(String.self, forKey: .pairSizeLabel) ?? d.pairSizeLabel
         pairOuterDiameter = try c.decodeIfPresent(Double.self, forKey: .pairOuterDiameter) ?? d.pairOuterDiameter
+        duct = try c.decodeIfPresent(DuctSpec.self, forKey: .duct)
     }
 
     /// 可撓管(曲げで配管する管)か
@@ -327,7 +376,13 @@ public enum PipeGeometry {
     /// 傍記の内容("50" / "50 1FL+2500")。高さは指定区間のz
     public static func annotationText(_ attrs: PipeAttributes, z: Double) -> String {
         // ペア管(冷媒)は「液×ガス」を併記(例: φ6.35×φ12.7)。M8.0
-        let size = attrs.isPair ? "\(attrs.sizeLabel)×\(attrs.pairSizeLabel)" : attrs.sizeLabel
+        var size = attrs.isPair ? "\(attrs.sizeLabel)×\(attrs.pairSizeLabel)" : attrs.sizeLabel
+        if let duct = attrs.duct {
+            // ダクト: 600×300 / φ300。フレキ・キャンバスは種別を添える(M9.0)
+            size = duct.sizeLabel
+            if duct.shape == .flex { size += " フレキ" }
+            if duct.shape == .canvas { size += " キャンバス" }
+        }
         var s = attrs.annotateMaterial && !attrs.materialLabel.isEmpty
             ? "\(attrs.materialLabel) \(size)" : size
         if attrs.showLevel { s += " " + attrs.levelLabel(z) }
@@ -835,9 +890,14 @@ public enum PipeGeometry {
     /// 複線レイアウト(平面図)。継手ありなら区間ごとの外形線を継手の受口底まで切り詰め、
     /// 折れ点に実形状のエルボ、立管の付け根に水平側の受口を置く。
     /// 継手なしならランごとにマイター(急角度はベベル)
-    public static func doubleLineLayout(points: [Vec3], attrs: PipeAttributes)
+    public static func doubleLineLayout(points: [Vec3], attrs: PipeAttributes,
+                                        junctions: [PipeJunction] = [])
         -> PipeDoubleLineLayout? {
         guard points.count >= 2, attrs.outerDiameter > 1e-9 else { return nil }
+        // ダクトは専用のレイアウト(エルボ=内R付き、分岐の開口、変形、フレキ、キャンバス)。M9.0
+        if attrs.isDuct {
+            return DuctGeometry.layout(points: points, attrs: attrs, junctions: junctions)
+        }
         let r = attrs.outerDiameter / 2
         let dims = attrs.effectiveFittingDims
         let s = max(dims.socketOD / 2, r * 1.05)

@@ -175,7 +175,7 @@ private struct FittingCanvas: View {
                 let fill = GraphicsContext.Shading.color(Color(nsColor: .textBackgroundColor))
                 for (e, p) in zip(entities, pipes) {
                     let js = junctions[e.id] ?? []
-                    if doubleLine, let layout = PipeGeometry.doubleLineLayout(points: p.points, attrs: p.attrs) {
+                    if doubleLine, let layout = PipeGeometry.doubleLineLayout(points: p.points, attrs: p.attrs, junctions: js) {
                         var path = Path()
                         for run in layout.runs {
                             for line in [run.left, run.right] where line.count >= 2 {

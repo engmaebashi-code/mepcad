@@ -232,6 +232,39 @@ final class PipeMasterTests: XCTestCase {
         XCTAssertEqual(totals.first { $0.sizeLabel == "φ12.7(ガス)" }?.lengthMeters ?? 0, 2.0, accuracy: 1e-9)
     }
 
+    /// ダクト集計: 用途×形状×サイズごとの延長と表面積(M9.0)。配管の集計には混ざらない
+    func testDuctAggregate() {
+        func duct(_ pts: [Vec2], shape: DuctSpec.Shape, w: Double, h: Double) -> Entity {
+            let spec = DuctSpec(shape: shape, width: w, height: h)
+            return Entity(layer: LayerAddress(0, 0),
+                          kind: .pipe(points: pts.map { Vec3($0, z: 0) },
+                                      attrs: PipeAttributes(usage: "SA", usageName: "給気", material: "DUCT",
+                                                            size: spec.sizeLabel, sizeLabel: spec.sizeLabel,
+                                                            outerDiameter: w, doubleLine: true, duct: spec)))
+        }
+        let a = duct([Vec2(0, 0), Vec2(10000, 0)], shape: .rect, w: 400, h: 250)
+        let b = duct([Vec2(0, 0), Vec2(5000, 0)], shape: .round, w: 300, h: 0)
+        let totals = DuctAggregator.aggregate([a, b])
+        XCTAssertEqual(totals.count, 2)
+        let rect = totals.first { $0.shape == .rect }
+        XCTAssertEqual(rect?.sizeLabel, "400×250")
+        XCTAssertEqual(rect?.lengthMeters ?? 0, 10, accuracy: 1e-9)
+        XCTAssertEqual(rect?.areaM2 ?? 0, 2 * 0.65 * 10, accuracy: 1e-9)
+        let round = totals.first { $0.shape == .round }
+        XCTAssertEqual(round?.areaM2 ?? 0, .pi * 0.3 * 5, accuracy: 1e-9)
+        XCTAssertTrue(PipeAggregator.aggregate([a, b]).isEmpty)
+        XCTAssertTrue(DuctAggregator.reportText(totals).contains("400×250"))
+    }
+
+    /// ダクトのマスタ: 用途と丸ダクト径(M9.0)
+    func testDuctMasterLoads() {
+        let m = PipeMaster.standard
+        XCTAssertEqual(m.ductUsages.first?.id, "SA")
+        XCTAssertTrue(m.ductUsages.contains { $0.id == "EA" && $0.name == "排気" })
+        XCTAssertEqual(m.ductRoundSizes.first ?? 0, 100, accuracy: 1e-9)
+        XCTAssertTrue(m.ductRoundSizes.contains(300))
+    }
+
     /// 管種マスタの可撓管には最小曲げ半径の倍率がある(M7.9)
     func testFlexibleMaterialsHaveBendRadiusFactor() {
         let m = PipeMaster.standard

@@ -86,6 +86,10 @@ public final class PipeMaster {
     public let sizes: [PipeSize]
     /// 冷媒配管のペア一覧(refrigerant_pairs.csv。液の細い順)。M8.0
     public let refrigerantPairs: [RefrigerantPair]
+    /// ダクトの用途(duct_usages.csv: SA/RA/EA/OA…)。M9.0
+    public let ductUsages: [PipeUsage]
+    /// 丸ダクトの呼び径(duct_round_sizes.csv、細い順)。M9.0
+    public let ductRoundSizes: [Double]
     /// 冷媒配管の管種id(ペア管として描く管種)
     public static let refrigerantMaterial = "CUR"
     /// 冷媒の用途id
@@ -110,12 +114,15 @@ public final class PipeMaster {
         return PipeMaster(usagesCSV: load("pipe_usages.csv"),
                           materialsCSV: load("pipe_materials.csv"),
                           sizesCSV: load("pipe_sizes.csv"),
-                          pairsCSV: load("refrigerant_pairs.csv"))
+                          pairsCSV: load("refrigerant_pairs.csv"),
+                          ductUsagesCSV: load("duct_usages.csv"),
+                          ductRoundSizesCSV: load("duct_round_sizes.csv"))
     }()
 
     /// CSV文字列から構築(テスト・将来のユーザーマスタ差し替え用)。
     /// 行形式は各CSVのヘッダコメント参照。#始まりと空行は無視
-    public init(usagesCSV: String, materialsCSV: String, sizesCSV: String, pairsCSV: String = "") {
+    public init(usagesCSV: String, materialsCSV: String, sizesCSV: String, pairsCSV: String = "",
+                ductUsagesCSV: String = "", ductRoundSizesCSV: String = "") {
         func rows(_ text: String) -> [[String]] {
             text.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
                 .map(String.init)
@@ -144,6 +151,11 @@ public final class PipeMaster {
             guard f.count >= 2, !f[0].isEmpty, !f[1].isEmpty else { return nil }
             return RefrigerantPair(liquid: f[0], gas: f[1], note: f.count >= 3 ? f[2] : "")
         }
+        ductUsages = rows(ductUsagesCSV).compactMap { f in
+            guard f.count >= 4, let color = Int(f[2]), let lt = Int(f[3]) else { return nil }
+            return PipeUsage(id: f[0], name: f[1], colorIndex: color, lineType: lt, defaultMaterial: "")
+        }
+        ductRoundSizes = rows(ductRoundSizesCSV).compactMap { f in f.first.flatMap(Double.init) }
         sizesByMaterial = Dictionary(grouping: sizes, by: \.material)
         materialByID = Dictionary(uniqueKeysWithValues: materials.map { ($0.id, $0) })
         usageByID = Dictionary(uniqueKeysWithValues: usages.map { ($0.id, $0) })
@@ -208,7 +220,7 @@ public enum PipeAggregator {
                             tee: Int, cap: Int, red: Int)] = [:]
         let junctions = PipeNetwork.junctions(in: entities)
         for e in entities {
-            guard case .pipe(let points, let attrs) = e.kind, points.count >= 2 else { continue }
+            guard case .pipe(let points, let attrs) = e.kind, points.count >= 2, !attrs.isDuct else { continue }
             let len = PipeGeometry.length(of: points)
             var e90 = 0, e45 = 0, tee = 0, cap = 0, red = 0
             if attrs.autoFittings {
@@ -291,6 +303,60 @@ public enum PipeAggregator {
                          + "\t\(t.teeCount)\t\(part("tee"))"
                          + "\t\(t.capCount)\t\(part("cap"))"
                          + "\t\(t.reducerCount)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - ダクト集計(M9.0)
+
+/// ダクトの集計行: 用途×形状×サイズごとの延長と表面積
+public struct DuctTotal: Equatable, Sendable {
+    public let usageName: String
+    public let shape: DuctSpec.Shape
+    public let sizeLabel: String
+    public let totalLengthMm: Double
+    /// 表面積(m²): 周長×延長(角=2(W+H)L、丸=πDL)
+    public let areaM2: Double
+    public let runCount: Int
+
+    public var lengthMeters: Double { (totalLengthMm / 100).rounded(.up) / 10 }
+}
+
+public enum DuctAggregator {
+
+    public static func aggregate(_ entities: [Entity]) -> [DuctTotal] {
+        struct Key: Hashable {
+            let usage: String
+            let shape: DuctSpec.Shape
+            let size: String
+        }
+        var acc: [Key: (length: Double, area: Double, count: Int)] = [:]
+        for e in entities {
+            guard case .pipe(let points, let attrs) = e.kind, points.count >= 2,
+                  let duct = attrs.duct else { continue }
+            let len = PipeGeometry.length(of: points)
+            let key = Key(usage: attrs.usageName, shape: duct.shape, size: duct.sizeLabel)
+            let cur = acc[key] ?? (0, 0, 0)
+            acc[key] = (cur.length + len, cur.area + duct.perimeter * len / 1_000_000, cur.count + 1)
+        }
+        return acc.map { key, v in
+            DuctTotal(usageName: key.usage, shape: key.shape, sizeLabel: key.size,
+                      totalLengthMm: v.length, areaM2: v.area, runCount: v.count)
+        }
+        .sorted {
+            ($0.usageName, $0.shape.rawValue, $0.sizeLabel.count, $0.sizeLabel)
+                < ($1.usageName, $1.shape.rawValue, $1.sizeLabel.count, $1.sizeLabel)
+        }
+    }
+
+    /// 表形式テキスト(タブ区切り)
+    public static func reportText(_ totals: [DuctTotal]) -> String {
+        var lines = ["用途\t形状\tサイズ\t延長(m)\t表面積(m²)\t本数"]
+        for t in totals {
+            lines.append("\(t.usageName)\t\(t.shape.rawValue)\t\(t.sizeLabel)\t"
+                         + String(format: "%.1f\t%.2f", t.lengthMeters, t.areaM2)
+                         + "\t\(t.runCount)")
         }
         return lines.joined(separator: "\n")
     }

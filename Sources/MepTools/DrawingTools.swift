@@ -16,6 +16,10 @@ public enum ToolKind: String, CaseIterable, Sendable {
     case dimension = "寸法"
     case leader = "引出線"
     case pipe = "配管"
+    case duct = "ダクト"
+
+    /// 配管と同じ操作(ルート連続クリック・高さ・立管)で描くツールか。M9.0
+    public var isPipeLike: Bool { self == .pipe || self == .duct }
 }
 
 /// 配管ツールの現在設定(プロパティカードの値。文字は紙面mm→実寸mm換算済み)
@@ -237,7 +241,7 @@ public final class DrawingToolController {
             || !hatchPoints.isEmpty || dimA != nil || leaderTip != nil
             || !pipePoints.isEmpty || !numericBuffer.isEmpty {
             // 配管は途中キャンセルでもそれまでの区間を確定する(引き直しの手間を防ぐ)
-            if kind == .pipe {
+            if kind.isPipeLike {
                 commitPipe()
             }
             resetPoints()
@@ -293,7 +297,7 @@ public final class DrawingToolController {
             guard let tip = leaderTip else { return .none }
             let style = delegate?.toolLeaderStyle() ?? LeaderToolStyle()
             return .leader(tip, cursor, style.attrs)
-        case .pipe:
+        case .pipe, .duct:
             guard let last = pipePoints.last else { return .none }
             let c = constrained(from: last.xy, to: cursor, active: shiftDown)
             return .polyline(pipePoints.map(\.xy), rigidCorner(from: last.xy, to: c))
@@ -387,7 +391,7 @@ public final class DrawingToolController {
                 dimB = nil
             }
 
-        case .pipe:
+        case .pipe, .duct:
             // 連続クリックでルートを引き、⏎か右クリック(esc)で1本の配管として確定。
             // 高さ(カード)が前の頂点と違えば、その位置で立管を挟んでから進む
             let z = delegate?.toolPipeStyle().z ?? 0
@@ -463,7 +467,7 @@ public final class DrawingToolController {
 
     /// 配管の確定(2点以上あればエンティティ化。確定後は次のルートへ)
     public func commitPipe() {
-        guard kind == .pipe, pipePoints.count >= 2 else {
+        guard kind.isPipeLike, pipePoints.count >= 2 else {
             pipePoints = []
             return
         }
@@ -513,7 +517,7 @@ public final class DrawingToolController {
             numericCapable = true   // 振分は始点前でも変更できる
         case .hatch:
             numericCapable = hatchPoints.count >= 3   // ⏎=閉じて確定
-        case .pipe:
+        case .pipe, .duct:
             numericCapable = !pipePoints.isEmpty      // 数値=次の頂点 / ⏎=確定
         default:
             numericCapable = false
@@ -528,7 +532,7 @@ public final class DrawingToolController {
         if character == "\r" || character == "\n" {
             if kind == .hatch {
                 commitHatch()
-            } else if kind == .pipe, numericBuffer.isEmpty {
+            } else if kind.isPipeLike, numericBuffer.isEmpty {
                 commitPipe()
             } else {
                 applyNumericInput()
@@ -583,7 +587,7 @@ public final class DrawingToolController {
                 applyRectSize(Vec2(abs(w), abs(w)))
             }
 
-        case .pipe:
+        case .pipe, .duct:
             guard let last = pipePoints.last,
                   let target = numericTarget(from: last.xy, comps: comps) else { return }
             let next = rigidCorner(from: last.xy, to: target)
@@ -787,11 +791,13 @@ public final class DrawingToolController {
                 return "引出線: 指示点(矢印の先端)をクリック — タイプ・矢印は左上のカード"
             }
             return "引出線: 文字位置をクリック → その場で文字を入力(バルーンは , 区切りで二段・三段 / ⏎確定 / esc中止)"
-        case .pipe:
+        case .pipe, .duct:
+            let name = kind == .duct ? "ダクト" : "配管"
+            let prop = kind == .duct ? "用途・形状・サイズ" : "用途・口径"
             if pipePoints.isEmpty {
-                return "配管: ルートの始点を指示 — 用途・口径は左上のカード" + constraint
+                return "\(name): ルートの始点を指示 — \(prop)は左上のカード" + constraint
             }
-            return "配管: 次点を指示(\(pipePoints.count)点)— 数値=距離 / x,y=相対 / 高さを変えると立管(45°指定なら勾配) / ⏎で確定" + constraint + num
+            return "\(name): 次点を指示(\(pipePoints.count)点)— 数値=距離 / x,y=相対 / 高さを変えると立管(45°指定なら勾配) / ⏎で確定" + constraint + num
         }
     }
 }

@@ -83,6 +83,13 @@ final class CanvasUIState: ObservableObject {
     @Published var pipeSize = "20"
     @Published var pipeGasSize = "12.7"          // 冷媒ペア管のガス管呼び径(液管はpipeSize)M8.0
     @Published var documentName = "無題"         // ウィンドウタイトル(保存ファイル名)M8.1
+    // ダクトツール(M9.0)
+    @Published var ductUsage = "SA"
+    @Published var ductShape: DuctSpec.Shape = .rect
+    @Published var ductWidth: Double = 400       // 角: W / 丸系: D
+    @Published var ductHeight: Double = 250      // 角: H
+    @Published var ductHopper = false            // 分岐をホッパーに
+    @Published var ductAnnotate = true
     @Published var pipeAnnotate = true
     @Published var pipeTextSize: Double = 2.5   // 紙面mm
     // M6.1/M6.2: 高さ・複線・継手・基準面
@@ -176,6 +183,7 @@ private func toolIcon(_ kind: ToolKind) -> String {
     case .dimension: return "ruler"
     case .leader: return "text.bubble"
     case .pipe: return "point.3.connected.trianglepath.dotted"
+    case .duct: return "rectangle.split.2x1"
     }
 }
 
@@ -239,6 +247,20 @@ struct ContentView: View {
                     VStack {
                         HStack {
                             PipePropertyCard(controller: controller, uiState: uiState)
+                                .onHover { controller.uiHovering = $0 }
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // ダクトプロパティカード(用途・形状・サイズ・高さ)M9.0
+                if uiState.tool == .duct {
+                    VStack {
+                        HStack {
+                            DuctPropertyCard(controller: controller, uiState: uiState)
                                 .onHover { controller.uiHovering = $0 }
                             Spacer()
                         }
@@ -676,6 +698,38 @@ struct ContentView: View {
                     z: uiState.pipeLevel, drop45: uiState.pipeDrop45,
                     rigidAngles: !material.isFlexible)   // 直管は継手角度を90°/45°に拘束(M7.7)
             }
+            // ダクトツールの現在設定(M9.0)。複線幅=平面幅(角W/丸D)、傍記はW×H/φD
+            controller.ductStyleProvider = { [weak controller, weak uiState] in
+                guard let controller, let uiState else { return PipeToolStyle() }
+                let master = PipeMaster.standard
+                let scale = controller.document.currentScale
+                let usage = master.ductUsages.first { $0.id == uiState.ductUsage }
+                    ?? PipeUsage(id: uiState.ductUsage, name: uiState.ductUsage, colorIndex: 2,
+                                 lineType: 0, defaultMaterial: "")
+                let shape = uiState.ductShape
+                let width = max(uiState.ductWidth, 50)
+                let height = shape == .rect || shape == .canvas ? max(uiState.ductHeight, 0) : 0
+                let spec = DuctSpec(shape: shape, width: width, height: height,
+                                    hopperBranch: uiState.ductHopper)
+                let flexible = shape == .flex || shape == .canvas
+                return PipeToolStyle(
+                    attrs: PipeAttributes(usage: usage.id, usageName: usage.name,
+                                          material: "DUCT", materialLabel: "",
+                                          size: spec.sizeLabel, sizeLabel: spec.sizeLabel,
+                                          outerDiameter: width,
+                                          annotate: uiState.ductAnnotate,
+                                          textHeight: max(uiState.pipeTextSize, 0.5) * scale,
+                                          datum: controller.document.levelDatum,
+                                          showLevel: uiState.pipeShowLevel,
+                                          doubleLine: true, autoFittings: true,
+                                          annotateMaterial: false,
+                                          branchKind: uiState.ductHopper ? "H" : "T",
+                                          bendRadius: flexible ? width : 0,
+                                          duct: spec),
+                    style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
+                    z: uiState.pipeLevel, drop45: false,
+                    rigidAngles: !flexible)
+            }
             // 既存の接続口から配管を描き始めたら、その口に合わせて設定を引き継ぐ(M7)
             controller.onPipePortPicked = { [weak uiState] port in
                 guard let uiState else { return }
@@ -718,7 +772,7 @@ struct ContentView: View {
     static let drawingTools: [ToolKind] = [.line, .rect, .circle, .arc, .doubleLine, .centerline,
                                            .point, .text, .hatch, .dimension, .leader]
     /// 設備のツール(折りたたみメニュー「設備」)
-    static let equipmentTools: [ToolKind] = [.pipe]
+    static let equipmentTools: [ToolKind] = [.pipe, .duct]
 
     private func selectTool(_ kind: ToolKind) {
         uiState.tool = kind
@@ -1142,6 +1196,149 @@ struct PipePropertyCard: View {
             abs((Double($0.size) ?? 0) - current) < abs((Double($1.size) ?? 0) - current)
         }
         uiState.pipeSize = (nearest ?? sizes[0]).size
+    }
+}
+
+/// ダクトツール中に出るプロパティカード(用途・形状・サイズ・高さ・分岐)M9.0
+struct DuctPropertyCard: View {
+    let controller: CanvasController
+    @ObservedObject var uiState: CanvasUIState
+    private let master = PipeMaster.standard
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("ダクト — ルートを連続クリック、⏎か右クリックで確定")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Text("用途")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(master.ductUsages) { usage in
+                        Button {
+                            uiState.ductUsage = usage.id
+                        } label: {
+                            Label {
+                                Text("\(usage.id) \(usage.name)")
+                            } icon: {
+                                Image(nsImage: uiState.colorSwatch(usage.colorIndex))
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        if let usage = master.ductUsages.first(where: { $0.id == uiState.ductUsage }) {
+                            Circle().fill(uiState.paletteColor(usage.colorIndex))
+                                .frame(width: 9, height: 9)
+                            Text("\(usage.id) \(usage.name)")
+                        } else {
+                            Text(uiState.ductUsage)
+                        }
+                    }
+                    .font(.system(size: 11))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("系統(SA給気/RA還気/EA排気/OA外気…)。色はマスタの既定")
+
+                Picker("", selection: $uiState.ductShape) {
+                    ForEach(DuctSpec.Shape.allCases, id: \.self) { shape in
+                        Text(shape.rawValue).tag(shape)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .help("角: W×H / 丸: スパイラル φD / フレキ: 波線(曲げR=D) / キャンバス: 機器接続部のジグザグ")
+
+                if uiState.ductShape == .rect || uiState.ductShape == .canvas {
+                    Text("W")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    TextField("", value: $uiState.ductWidth, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .frame(width: 52)
+                        .selectAllOnFocus()
+                        .onSubmit { roundSizes() }
+                    Text("×H")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    TextField("", value: $uiState.ductHeight, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .frame(width: 52)
+                        .selectAllOnFocus()
+                        .onSubmit { roundSizes() }
+                        .help("角ダクトは50mm刻み(⏎で丸め)。キャンバスでHを0にすると丸")
+                } else {
+                    Text("φ")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Menu {
+                        ForEach(master.ductRoundSizes, id: \.self) { d in
+                            Button((abs(uiState.ductWidth - d) < 0.5 ? "✓ " : "   ") + "φ\(Int(d))") {
+                                uiState.ductWidth = d
+                            }
+                        }
+                    } label: {
+                        Text("φ\(Int(uiState.ductWidth))")
+                            .font(.system(size: 11))
+                            .monospacedDigit()
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("スパイラルダクトの呼び径(JIS)")
+                }
+            }
+
+            HStack(spacing: 6) {
+                Text("高さ")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Text(uiState.levelDatum)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                TextField("", value: $uiState.pipeLevel, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 58)
+                    .selectAllOnFocus()
+                    .help("芯の高さ(mm)。作図中に変えると次の頂点で立上り/立下りが発生します")
+                Text("mm")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Toggle("傍記", isOn: $uiState.ductAnnotate)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                Toggle("高さ併記", isOn: $uiState.pipeShowLevel)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                Toggle("分岐をホッパーに", isOn: $uiState.ductHopper)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                    .help("本ダクトへ取り付く枝の端を45°で広げる(ホッパー分岐)。OFFは直付け(チーズ)")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 3)
+    }
+
+    /// 角ダクトのW・Hを50mm刻みに丸める(最小100)
+    private func roundSizes() {
+        uiState.ductWidth = max((uiState.ductWidth / 50).rounded() * 50, 100)
+        if uiState.ductShape == .rect {
+            uiState.ductHeight = max((uiState.ductHeight / 50).rounded() * 50, 100)
+        } else {
+            uiState.ductHeight = max((uiState.ductHeight / 50).rounded() * 50, 0)
+        }
     }
 }
 

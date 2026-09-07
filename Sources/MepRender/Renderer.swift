@@ -336,7 +336,7 @@ public struct Renderer {
             }
             let baseWidth = max(1, weight * transform.scale * 10)
             let layout = attrs.doubleLine
-                ? PipeGeometry.doubleLineLayout(points: points, attrs: attrs) : nil
+                ? PipeGeometry.doubleLineLayout(points: points, attrs: attrs, junctions: junctions) : nil
 
             if pipePass == 0 {
                 // ---- パス0: 管体 ----
@@ -433,7 +433,42 @@ public struct Renderer {
             // 立上り/立下り記号(FILDER流): 立上り=閉じた円、立下り=管側が開いたC形。
             // 複線=受口外径の円(開きは管の太さぶん)、単線=直径uの円(開き60°)
             let risers = PipeGeometry.risers(points: points)
-            if !risers.isEmpty {
+            if !risers.isEmpty, let duct = attrs.duct {
+                // ダクトの立上り/立下り: 平面に見える断面(角=W×H、丸=φD)。立上り=対角線1本、立下り=×(M9.0)
+                ctx.setLineWidth(baseWidth * 1.15)
+                for (idx, riser) in risers.enumerated() {
+                    let c = transform.toScreen(riser.position)
+                    let lead = PipeSymbols.riserLead(points: points, riserIndex: idx)
+                    let toward = lead?.toward ?? Vec2(1, 0)
+                    let a0 = atan2(toward.y, toward.x)
+                    let wpx = max(attrs.outerDiameter * transform.scale, 4)
+                    let hpx = duct.isRound ? wpx : max(duct.height * transform.scale, 4)
+                    ctx.saveGState()
+                    ctx.translateBy(x: c.x, y: c.y)
+                    ctx.rotate(by: -a0)      // 画面はY反転なので角度符号を反転
+                    if duct.isRound {
+                        let rect = CGRect(x: -wpx / 2, y: -wpx / 2, width: wpx, height: wpx)
+                        ctx.setFillColor(theme.background)
+                        ctx.fillEllipse(in: rect)
+                        ctx.strokeEllipse(in: rect)
+                    } else {
+                        // 進行方向に沿った辺がH、直交する辺がW
+                        let rect = CGRect(x: -hpx / 2, y: -wpx / 2, width: hpx, height: wpx)
+                        ctx.setFillColor(theme.background)
+                        ctx.fill(rect)
+                        ctx.stroke(rect)
+                    }
+                    ctx.move(to: CGPoint(x: -hpx / 2, y: -wpx / 2))
+                    ctx.addLine(to: CGPoint(x: hpx / 2, y: wpx / 2))
+                    if !riser.isUp {
+                        ctx.move(to: CGPoint(x: -hpx / 2, y: wpx / 2))
+                        ctx.addLine(to: CGPoint(x: hpx / 2, y: -wpx / 2))
+                    }
+                    ctx.strokePath()
+                    ctx.restoreGState()
+                }
+                ctx.setLineWidth(baseWidth)
+            } else if !risers.isEmpty {
                 let rs = PipeGeometry.riserSymbolRadius(attrs) * transform.scale
                 let r = max(rs, 3)
                 if attrs.doubleLine { ctx.setLineWidth(baseWidth * 1.15) }
@@ -604,7 +639,9 @@ public struct Renderer {
                 var outlines: [[Vec2]] = []
                 if attrs.doubleLine,
                    let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
-                    for run in layout.runs { outlines.append(run.left); outlines.append(run.right) }
+                    for run in layout.runs where !run.left.isEmpty || !run.right.isEmpty {
+                        outlines.append(run.left); outlines.append(run.right)
+                    }
                 } else {
                     outlines = PipeGeometry.planRuns(points: points).map { $0.map(\.xy) }
                 }

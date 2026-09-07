@@ -165,7 +165,8 @@ public struct JwwWriter {
                             add: (Prim, Int?) -> Void,
                             seg: (Vec2, Vec2, Int?) -> Void,
                             poly: ([Vec2], Bool, Int?) -> Void) {
-        if attrs.doubleLine, let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs) {
+        if attrs.doubleLine, let layout = PipeGeometry.doubleLineLayout(points: points, attrs: attrs,
+                                                                         junctions: junctions) {
             for run in layout.runs {
                 poly(run.left, false, 1)
                 poly(run.right, false, 1)
@@ -200,9 +201,25 @@ public struct JwwWriter {
                 }
             }
         }
-        // 立上り/立下り記号(立上り=閉じた円、立下り=管側が開いたC形)
+        // 立上り/立下り記号(立上り=閉じた円、立下り=管側が開いたC形)。ダクトは断面(角/丸)+対角線
         let risers = PipeGeometry.risers(points: points)
-        if !risers.isEmpty {
+        if !risers.isEmpty, let duct = attrs.duct {
+            for (idx, riser) in risers.enumerated() {
+                let c = riser.position
+                let toward = PipeSymbols.riserLead(points: points, riserIndex: idx)?.toward ?? Vec2(1, 0)
+                let d = toward, nrm = Vec2(-d.y, d.x)
+                let hw = attrs.outerDiameter / 2
+                let hh = duct.isRound ? hw : max(duct.height / 2, 2)
+                if duct.isRound {
+                    add(.circle(c, hw, flatness: 1), 1)
+                } else {
+                    let corners = [c - d * hh - nrm * hw, c + d * hh - nrm * hw, c + d * hh + nrm * hw, c - d * hh + nrm * hw]
+                    poly(corners, true, 1)
+                }
+                seg(c - d * hh - nrm * hw, c + d * hh + nrm * hw, 1)
+                if !riser.isUp { seg(c - d * hh + nrm * hw, c + d * hh - nrm * hw, 1) }
+            }
+        } else if !risers.isEmpty {
             let rs = PipeGeometry.riserSymbolRadius(attrs)
             let suppressed: [Vec2] = junctions.compactMap {
                 if case .teeBranch(_, _, let v) = $0.kind, v { return $0.position }

@@ -146,6 +146,8 @@ final class CanvasController: NSObject {
     var leaderStyleProvider: (() -> LeaderToolStyle)?
     /// 配管設定の提供(プロパティカードの値。用途の色・線種込み)
     var pipeStyleProvider: (() -> PipeToolStyle)?
+    /// ダクトツールの現在設定(用途・形状・サイズ・高さ)。M9.0
+    var ductStyleProvider: (() -> PipeToolStyle)?
     /// 配管を既存の接続口から描き始めたときの通知(M7)。
     /// 受け側(UI)が口径・管種・用途・高さをコマンドプロパティへ反映する
     var onPipePortPicked: ((PipePort) -> Void)?
@@ -1645,7 +1647,8 @@ extension CanvasController: DrawingToolDelegate {
     }
 
     func toolPipeStyle() -> PipeToolStyle {
-        pipeStyleProvider?()
+        if tools.kind == .duct, let duct = ductStyleProvider?() { return duct }
+        return pipeStyleProvider?()
             ?? PipeToolStyle(attrs: PipeAttributes(textHeight: 2.5 * document.currentScale,
                                                    datum: document.levelDatum),
                              style: Style(colorIndex: 2, lineType: 0), z: 0)
@@ -1929,16 +1932,20 @@ extension CanvasController {
         }
         let targets = hasSelectedPipes ? selectedEntities : document.entities
         let totals = PipeAggregator.aggregate(targets)
-        let scopeName = hasSelectedPipes ? "選択中の配管" : "図面全体"
-        guard !totals.isEmpty else {
-            onInfo?("配管がありません(配管ツールで作図したものが集計対象です)")
+        let ductTotals = DuctAggregator.aggregate(targets)
+        let scopeName = hasSelectedPipes ? "選択中の配管・ダクト" : "図面全体"
+        guard !totals.isEmpty || !ductTotals.isEmpty else {
+            onInfo?("配管・ダクトがありません(配管/ダクトツールで作図したものが集計対象です)")
             return
         }
-        let text = PipeAggregator.reportText(totals)
+        var sections: [String] = []
+        if !totals.isEmpty { sections.append("【配管】\n" + PipeAggregator.reportText(totals)) }
+        if !ductTotals.isEmpty { sections.append("【ダクト】\n" + DuctAggregator.reportText(ductTotals)) }
+        let text = sections.joined(separator: "\n\n")
 
         let alert = NSAlert()
         alert.messageText = "材料集計 — \(scopeName)"
-        alert.informativeText = "配管の延長を用途×管種×呼び径で集計しました(0.1m単位切り上げ)"
+        alert.informativeText = "配管は用途×管種×呼び径の延長、ダクトは用途×形状×サイズの延長と表面積(0.1m単位切り上げ)"
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 260))
         let textView = NSTextView(frame: scroll.bounds)
         textView.isEditable = false
