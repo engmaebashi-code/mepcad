@@ -88,7 +88,7 @@ final class CanvasUIState: ObservableObject {
     @Published var ductShape: DuctSpec.Shape = .rect
     @Published var ductWidth: Double = 400       // 角: W / 丸系: D
     @Published var ductHeight: Double = 250      // 角: H
-    @Published var ductHopper = false            // 分岐をホッパーに
+    @Published var ductBranch: DuctSpec.BranchStyle = .direct   // 分岐の形(枝側)M9.2
     @Published var ductAnnotate = true
     @Published var pipeAnnotate = true
     @Published var pipeTextSize: Double = 2.5   // 紙面mm
@@ -710,7 +710,7 @@ struct ContentView: View {
                 let width = max(uiState.ductWidth, 50)
                 let height = shape == .rect || shape == .canvas ? max(uiState.ductHeight, 0) : 0
                 let spec = DuctSpec(shape: shape, width: width, height: height,
-                                    hopperBranch: uiState.ductHopper)
+                                    branchStyle: uiState.ductBranch)
                 let flexible = shape == .flex || shape == .canvas
                 return PipeToolStyle(
                     attrs: PipeAttributes(usage: usage.id, usageName: usage.name,
@@ -723,7 +723,7 @@ struct ContentView: View {
                                           showLevel: uiState.pipeShowLevel,
                                           doubleLine: true, autoFittings: true,
                                           annotateMaterial: false,
-                                          branchKind: uiState.ductHopper ? "H" : "T",
+                                          branchKind: uiState.ductBranch.code,
                                           bendRadius: flexible ? width : 0,
                                           duct: spec),
                     style: Style(colorIndex: usage.colorIndex, lineType: usage.lineType),
@@ -1315,10 +1315,17 @@ struct DuctPropertyCard: View {
                 Toggle("高さ併記", isOn: $uiState.pipeShowLevel)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 11))
-                Toggle("分岐をホッパーに", isOn: $uiState.ductHopper)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11))
-                    .help("本ダクトへ取り付く枝の端を45°で広げる(ホッパー分岐)。OFFは直付け(チーズ)")
+                Text("分岐")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $uiState.ductBranch) {
+                    ForEach(DuctSpec.BranchStyle.allCases, id: \.self) { style in
+                        Text(style.rawValue).tag(style)
+                    }
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+                .help("このダクトを枝として本ダクトへ付けたときの分岐の形: 直付け / 片テーパ(上流側150mm・45°) / ホッパー(両側45°) / 割込み(本ダクトを枝の幅ぶん絞る) / チャンバー(分岐点に箱)")
             }
         }
         .padding(.horizontal, 12)

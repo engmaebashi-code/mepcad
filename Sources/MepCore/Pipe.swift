@@ -24,14 +24,70 @@ public struct DuctSpec: Equatable, Codable, Sendable {
     public var width: Double
     /// 角: H(高さ) / 丸系: 0
     public var height: Double
-    /// 枝ダクトとして本ダクトに取り付くとき、ホッパー分岐(45°の広がり)にする。falseは直付け(チーズ)
-    public var hopperBranch: Bool
+    /// 枝ダクトとして本ダクトに取り付くときの分岐の形(枝側の属性)。M9.2
+    public enum BranchStyle: String, Codable, CaseIterable, Sendable {
+        /// 直付け(チーズ)
+        case direct = "直付け"
+        /// 片テーパ付き直付け: 上流側だけ150mm・45°で広げる(施工標準の標準形)
+        case taper = "片テーパ"
+        /// ホッパー: 両側を45°で広げる
+        case hopper = "ホッパー"
+        /// 割込み分岐: 本ダクトを枝の幅ぶん絞る(枝の下流側で本ダクトの壁が内側へ入る)
+        case split = "割込み"
+        /// チャンバー分岐: 分岐点にチャンバー(箱)を置き、そこから枝を出す
+        case chamber = "チャンバー"
 
-    public init(shape: Shape, width: Double, height: Double = 0, hopperBranch: Bool = false) {
+        /// 本ダクト側へ渡す印(PipeAttributes.branchKind)
+        public var code: String {
+            switch self {
+            case .direct: return "T"
+            case .taper: return "P"
+            case .hopper: return "H"
+            case .split: return "S"
+            case .chamber: return "C"
+            }
+        }
+    }
+    public var branchStyle: BranchStyle
+
+    public init(shape: Shape, width: Double, height: Double = 0, branchStyle: BranchStyle = .direct) {
         self.shape = shape
         self.width = width
         self.height = height
-        self.hopperBranch = hopperBranch
+        self.branchStyle = branchStyle
+    }
+
+    /// 互換(M9.0): hopperBranch=true はホッパー
+    public init(shape: Shape, width: Double, height: Double = 0, hopperBranch: Bool) {
+        self.init(shape: shape, width: width, height: height, branchStyle: hopperBranch ? .hopper : .direct)
+    }
+
+    /// ホッパー分岐か(互換)
+    public var hopperBranch: Bool {
+        get { branchStyle == .hopper }
+        set { branchStyle = newValue ? .hopper : .direct }
+    }
+
+    private enum CodingKeys: String, CodingKey { case shape, width, height, branchStyle, hopperBranch }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        shape = try c.decode(Shape.self, forKey: .shape)
+        width = try c.decode(Double.self, forKey: .width)
+        height = try c.decodeIfPresent(Double.self, forKey: .height) ?? 0
+        if let style = try c.decodeIfPresent(BranchStyle.self, forKey: .branchStyle) {
+            branchStyle = style
+        } else {
+            branchStyle = (try c.decodeIfPresent(Bool.self, forKey: .hopperBranch) ?? false) ? .hopper : .direct
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(shape, forKey: .shape)
+        try c.encode(width, forKey: .width)
+        try c.encode(height, forKey: .height)
+        try c.encode(branchStyle, forKey: .branchStyle)
     }
 
     /// 断面が丸か(角以外。キャンバスはHが0なら丸)

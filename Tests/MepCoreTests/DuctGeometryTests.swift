@@ -7,8 +7,9 @@ final class DuctGeometryTests: XCTestCase {
     let layer = LayerAddress(0, 0)
 
     private func duct(_ pts: [Vec3], shape: DuctSpec.Shape = .rect, w: Double = 600, h: Double = 300,
-                      hopper: Bool = false) -> Entity {
-        let spec = DuctSpec(shape: shape, width: w, height: h, hopperBranch: hopper)
+                      hopper: Bool = false, branch: DuctSpec.BranchStyle? = nil) -> Entity {
+        let style = branch ?? (hopper ? .hopper : .direct)
+        let spec = DuctSpec(shape: shape, width: w, height: h, branchStyle: style)
         return Entity(layer: layer,
                       kind: .pipe(points: pts,
                                   attrs: PipeAttributes(usage: "SA", usageName: "給気", material: "DUCT",
@@ -16,7 +17,7 @@ final class DuctGeometryTests: XCTestCase {
                                                         sizeLabel: spec.sizeLabel, outerDiameter: w,
                                                         annotate: true, doubleLine: true,
                                                         annotateMaterial: false,
-                                                        branchKind: hopper ? "H" : "T",
+                                                        branchKind: style.code,
                                                         bendRadius: shape == .flex ? w : 0, duct: spec)))
     }
 
@@ -182,6 +183,78 @@ final class DuctGeometryTests: XCTestCase {
         XCTAssertEqual(bl.runs[0].right.first!.y, 300, accuracy: 1e-6)
         XCTAssertEqual(bl.runs[0].left.first!.x, 3300 - 150 * s, accuracy: 1e-6)
         XCTAssertEqual(bl.runs[0].right.first!.x, 3300 + 150 * s, accuracy: 1e-6)
+    }
+
+    /// 片テーパ付き直付け: 上流側の壁だけ150mm・45°で広がる(M9.2)
+    func testTaperBranch() throws {
+        let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])
+        let branch = duct([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)], w: 300, h: 250, branch: .taper)
+        let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
+        let left = bl.runs[0].left, right = bl.runs[0].right
+        XCTAssertEqual(left[0].x, 2700, accuracy: 1e-6)          // 上流側(−x)の壁が150広がる
+        XCTAssertEqual(left[0].y, 300, accuracy: 1e-6)
+        XCTAssertEqual(left[1].x, 2850, accuracy: 1e-6)
+        XCTAssertEqual(left[1].y, 450, accuracy: 1e-6)
+        XCTAssertEqual(right[0].x, 3150, accuracy: 1e-6)         // 下流側は直付けのまま
+        XCTAssertEqual(right[0].y, 300, accuracy: 1e-6)
+        let hl = try XCTUnwrap(layout(host, in: [host, branch]))
+        let leftPieces = hl.runs.map(\.left).filter { !$0.isEmpty }
+        XCTAssertEqual(leftPieces[0].last!.x, 2700, accuracy: 1e-6)
+        XCTAssertEqual(leftPieces[1].first!.x, 3150, accuracy: 1e-6)
+    }
+
+    /// 割込み分岐(本ダクトを絞る): 枝の下流側から本ダクトの枝側の壁が枝の幅ぶん内側へ入る(M9.2)
+    func testSplitBranchNarrowsHost() throws {
+        let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])
+        let branch = duct([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)], w: 300, h: 250, branch: .split)
+        let hl = try XCTUnwrap(layout(host, in: [host, branch]))
+        let leftPieces = hl.runs.map(\.left).filter { !$0.isEmpty }
+        XCTAssertEqual(leftPieces.count, 2)
+        XCTAssertEqual(leftPieces[0].last!.x, 2850, accuracy: 1e-6)
+        let after = leftPieces[1]
+        XCTAssertEqual(after[0].x, 3150, accuracy: 1e-6); XCTAssertEqual(after[0].y, 300, accuracy: 1e-6)
+        XCTAssertEqual(after[1].x, 3150, accuracy: 1e-6); XCTAssertEqual(after[1].y, 0, accuracy: 1e-6)
+        XCTAssertEqual(after.last!.x, 6000, accuracy: 1e-6); XCTAssertEqual(after.last!.y, 0, accuracy: 1e-6)
+        // 反対側の壁はそのまま
+        XCTAssertEqual(hl.runs[0].right.last!.y, -300, accuracy: 1e-6)
+    }
+
+    /// チャンバー分岐: 分岐点に箱(枝幅+余裕 × 本ダクト幅+余裕)。本ダクトの両壁は箱の中で切れ、枝は箱の縁で止まる
+    func testChamberBranch() throws {
+        let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])
+        let branch = duct([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)], w: 300, h: 250, branch: .chamber)
+        let hl = try XCTUnwrap(layout(host, in: [host, branch]))
+        let boxes = hl.fittings.flatMap { $0.parts.compactMap { if case .polygon(let p) = $0 { return p }; return nil } }
+        XCTAssertEqual(boxes.count, 1)
+        let xs = boxes[0].map(\.x), ys = boxes[0].map(\.y)
+        XCTAssertEqual(xs.min()!, 2750, accuracy: 1e-6); XCTAssertEqual(xs.max()!, 3250, accuracy: 1e-6)
+        XCTAssertEqual(ys.min()!, -400, accuracy: 1e-6); XCTAssertEqual(ys.max()!, 400, accuracy: 1e-6)
+        let leftPieces = hl.runs.map(\.left).filter { !$0.isEmpty }
+        let rightPieces = hl.runs.map(\.right).filter { !$0.isEmpty }
+        XCTAssertEqual(leftPieces.count, 2)
+        XCTAssertEqual(rightPieces.count, 2)
+        XCTAssertEqual(leftPieces[0].last!.x, 2750, accuracy: 1e-6)
+        XCTAssertEqual(rightPieces[1].first!.x, 3250, accuracy: 1e-6)
+        let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
+        XCTAssertEqual(bl.runs[0].left.first!.y, 400, accuracy: 1e-6)   // 箱の縁で止まる
+        XCTAssertEqual(bl.endCaps.count, 1)
+    }
+
+    /// エルボの半径(施工標準): 角 W≤250は内R=W(芯1.5W)、W≥300は内R=W/2(芯W)。丸は φ250以下 R=D、φ275以上 1.5D
+    func testElbowRadiusRule() {
+        XCTAssertEqual(DuctGeometry.elbowRadius(spec: DuctSpec(shape: .rect, width: 200, height: 200), width: 200), 300)
+        XCTAssertEqual(DuctGeometry.elbowRadius(spec: DuctSpec(shape: .rect, width: 600, height: 300), width: 600), 600)
+        XCTAssertEqual(DuctGeometry.elbowRadius(spec: DuctSpec(shape: .round, width: 250), width: 250), 250)
+        XCTAssertEqual(DuctGeometry.elbowRadius(spec: DuctSpec(shape: .round, width: 400), width: 400), 600)
+    }
+
+    /// 旧形式(hopperBranch)の仕様も読める
+    func testDuctSpecDecodesLegacyHopper() throws {
+        let json = #"{"shape":"角","width":300,"height":250,"hopperBranch":true}"#
+        let spec = try JSONDecoder().decode(DuctSpec.self, from: Data(json.utf8))
+        XCTAssertEqual(spec.branchStyle, .hopper)
+        let back = try JSONDecoder().decode(DuctSpec.self, from: JSONEncoder().encode(spec))
+        XCTAssertEqual(back, spec)
     }
 
     /// ダクトには配管の継手形状(ソケット等)は出ない

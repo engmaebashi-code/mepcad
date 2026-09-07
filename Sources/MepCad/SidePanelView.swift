@@ -501,8 +501,13 @@ struct PropertyPanelView: View {
                                     }
                                 }
                                 Divider()
-                                Button("分岐をホッパーに") { controller.applyDuctHopper(true) }
-                                Button("分岐を直付け(チーズ)に") { controller.applyDuctHopper(false) }
+                                Menu("分岐の形(枝側)") {
+                                    ForEach(DuctSpec.BranchStyle.allCases, id: \.self) { style in
+                                        Button((sel.commonDuct?.branchStyle == style ? "✓ " : "   ") + style.rawValue) {
+                                            controller.applyDuctBranchStyle(style)
+                                        }
+                                    }
+                                }
                             } label: {
                                 Text(sel.commonDuct?.shape.rawValue ?? "形状").font(.system(size: 11))
                             }

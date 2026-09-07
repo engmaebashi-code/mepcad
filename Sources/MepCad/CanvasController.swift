@@ -1768,13 +1768,13 @@ extension CanvasController {
         }
     }
 
-    /// 分岐をホッパー/直付けに切替(枝ダクト側)。M9.1
-    func applyDuctHopper(_ on: Bool) {
-        updateSelectedPipes(name: on ? "分岐をホッパーに" : "分岐を直付けに") { attrs, _, _ in
+    /// 分岐の形の切替(枝ダクト側): 直付け/片テーパ/ホッパー/割込み/チャンバー。M9.2
+    func applyDuctBranchStyle(_ style: DuctSpec.BranchStyle) {
+        updateSelectedPipes(name: "分岐を\(style.rawValue)に") { attrs, _, _ in
             guard var spec = attrs.duct else { return }
-            spec.hopperBranch = on
+            spec.branchStyle = style
             attrs.duct = spec
-            attrs.branchKind = on ? "H" : "T"
+            attrs.branchKind = style.code
         }
     }
 

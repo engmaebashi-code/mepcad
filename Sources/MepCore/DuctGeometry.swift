@@ -14,11 +14,31 @@ import Foundation
 
 public enum DuctGeometry {
 
-    /// エルボの芯半径(内R = W/2)
-    public static func elbowRadius(width w: Double) -> Double { w }
+    /// エルボの芯半径(空気調和・給排水設備 施工標準 第4版):
+    /// 角ダクト W≤250: 内R=W(芯1.5W)、W≥300: 内R=W/2(芯W)。
+    /// 丸ダクト φ250以下(プレスベンド): R=1.0D、φ275以上(セクションベンド): R=1.5D
+    public static func elbowRadius(width w: Double) -> Double { w <= 250 ? 1.5 * w : w }
+    public static func elbowRadius(spec: DuctSpec, width w: Double) -> Double {
+        if spec.isRound { return w <= 250 ? w : 1.5 * w }
+        return elbowRadius(width: w)
+    }
 
     /// ホッパー分岐の広がり(片側)
     public static func hopperFlare(branchWidth w: Double) -> Double { min(w / 2, 150) }
+    /// 片テーパ付き直付け分岐の取出し: W3 = W2 + 150、θ=45°(施工標準)。上流側だけ広げる
+    public static let taperFlare: Double = 150
+    /// チャンバー分岐の箱: ダクトの外側へ出る余裕(片側)
+    public static let chamberMargin: Double = 100
+
+    /// 本ダクト側の開口の広がり(枝側の印から): 片側ずつ(上流側, 下流側)
+    static func openingExtra(branchKind: String, branchWidth: Double) -> (upstream: Double, downstream: Double) {
+        switch branchKind {
+        case "H": let h = hopperFlare(branchWidth: branchWidth); return (h, h)
+        case "P": return (taperFlare, 0)
+        case "C": return (chamberMargin, chamberMargin)
+        default: return (0, 0)
+        }
+    }
 
     /// 変形(レジューサ)の長さ: 片側30°の絞り
     public static func transitionLength(from w1: Double, to w2: Double) -> Double {
@@ -53,6 +73,9 @@ public enum DuctGeometry {
             var open = false               // 端を閉じない(分岐で本ダクトに開く)
             /// 本ダクトの壁の線(枝の壁の端をここへ揃える): 通過点と方向
             var hostWall: (point: Vec2, dir: Vec2)? = nil
+            /// 片テーパ: 上流側の壁だけ広げる。hostUpstream=本ダクトの上流方向
+            var taperUpstreamOnly = false
+            var hostUpstream = Vec2(0, 0)
         }
         /// p=端の位置、d=端から内側へ向かう枝の軸方向
         func endJoint(at p: Vec3, axis d: Vec2) -> EndJoint {
@@ -69,12 +92,21 @@ public enum DuctGeometry {
                     if nSide.x * d.x + nSide.y * d.y < 0 { nSide = Vec2(-nSide.x, -nSide.y) }
                     let cosb = max(nSide.x * d.x + nSide.y * d.y, 0.3)      // 軸と法線の余弦(直角なら1)
                     let depth = (p.xy - jn.position).x * nSide.x + (p.xy - jn.position).y * nSide.y
-                    // 端から本ダクトの壁までの軸方向距離(端が芯線上なら hostOD/2/cosb)
-                    let t = (jn.hostOD / 2 - depth) / cosb
-                    j.trim = max(j.trim, t)
+                    // 端から本ダクトの壁までの軸方向距離(端が芯線上なら hostOD/2/cosb)。
+                    // チャンバー分岐: 枝はチャンバーの箱の縁で止まる(壁より margin 外側)
+                    let wallOffset = jn.hostOD / 2 + (spec.branchStyle == .chamber ? chamberMargin : 0)
+                    j.trim = max(j.trim, (wallOffset - depth) / cosb)
                     j.open = true
-                    j.hostWall = (jn.position + nSide * (jn.hostOD / 2), hostDir)
-                    if spec.hopperBranch { j.flare = hopperFlare(branchWidth: w) }
+                    j.hostWall = (jn.position + nSide * wallOffset, hostDir)
+                    switch spec.branchStyle {
+                    case .hopper: j.flare = hopperFlare(branchWidth: w)
+                    case .taper:
+                        // 上流側(本ダクトの作図方向の手前側)の壁だけ広げる。どちらの壁かは後で決める
+                        j.flare = taperFlare
+                        j.taperUpstreamOnly = true
+                        j.hostUpstream = Vec2(-hostDir.x, -hostDir.y)
+                    default: break
+                    }
                 case .reducer(_, let otherOD, _, _):
                     guard jn.position.distance(to: p.xy) <= tol, otherOD < w - 0.01 else { continue }
                     j.trim = max(j.trim, transitionLength(from: w, to: otherOD))
@@ -118,7 +150,7 @@ public enum DuctGeometry {
             // 壁の線を書き直すときに「切り詰め後の芯の端」から正確に壁へ寄せる(snapToHostWall)
 
             // 曲がり: 角・丸・フレキは芯半径=幅、キャンバスは曲げない
-            let radius = spec.shape == .canvas ? 0 : elbowRadius(width: w)
+            let radius = spec.shape == .canvas ? 0 : elbowRadius(spec: spec, width: w)
             let pieces = PipeBend.pieces(pts, radius: radius)
             var left = PipeBend.polyline(pieces, offset: half)
             var right = PipeBend.polyline(pieces, offset: -half)
@@ -171,17 +203,25 @@ public enum DuctGeometry {
                     wall.insert(end + d * h, at: wall.count - 1)
                 }
             }
-            if startJoint.flare > 0 {
-                let nL = Vec2(-d0.y, d0.x)
-                flare(&left, atStart: true, outward: nL, axis: d0, h: startJoint.flare)
-                flare(&right, atStart: true, outward: Vec2(-nL.x, -nL.y), axis: d0, h: startJoint.flare)
+            /// 両壁(または片テーパなら上流側の壁だけ)を広げる
+            func applyFlare(_ j: EndJoint, atStart: Bool, axis d: Vec2) {
+                guard j.flare > 0 else { return }
+                // 左壁の外側: 始点では +perp(d)、終点では進行方向が逆なので −perp(d)
+                let nL = Vec2(-d.y, d.x)
+                let leftOut = atStart ? nL : Vec2(-nL.x, -nL.y)
+                let rightOut = Vec2(-leftOut.x, -leftOut.y)
+                var doLeft = true, doRight = true
+                if j.taperUpstreamOnly {
+                    // 上流側の壁 = 外向きが本ダクトの上流方向を向いている方
+                    let lu = leftOut.x * j.hostUpstream.x + leftOut.y * j.hostUpstream.y
+                    doLeft = lu > 0
+                    doRight = !doLeft
+                }
+                if doLeft { flare(&left, atStart: atStart, outward: leftOut, axis: d, h: j.flare) }
+                if doRight { flare(&right, atStart: atStart, outward: rightOut, axis: d, h: j.flare) }
             }
-            if endJointInfo.flare > 0 {
-                // 終点では進行方向が逆なので左壁の外側は −perp(d1)
-                let nL = Vec2(-d1.y, d1.x)
-                flare(&left, atStart: false, outward: Vec2(-nL.x, -nL.y), axis: d1, h: endJointInfo.flare)
-                flare(&right, atStart: false, outward: nL, axis: d1, h: endJointInfo.flare)
-            }
+            applyFlare(startJoint, atStart: true, axis: d0)
+            applyFlare(endJointInfo, atStart: false, axis: d1)
 
             // 変形(この側が太い): 絞りの斜線2本と、太い側の終わりの線。
             // travel=折れ線の進行方向(左壁はその左側)
@@ -233,8 +273,56 @@ public enum DuctGeometry {
                     let s = t * (bdir.x * along.x + bdir.y * along.y) + sign * (bod / 2) * (nb.x * along.x + nb.y * along.y)
                     ss.append(s)
                 }
-                let flareExtra = branchKind == "H" ? hopperFlare(branchWidth: bod) : 0
-                let a = pw + along * (ss.min()! - flareExtra), b = pw + along * (ss.max()! + flareExtra)
+                let extra = openingExtra(branchKind: branchKind, branchWidth: bod)
+                let s0 = ss.min()! - extra.upstream, s1 = ss.max()! + extra.downstream
+                if branchKind == "C" {
+                    // チャンバー分岐: 分岐点に箱(枝の幅+余裕 × ダクト幅+余裕)。両壁とも箱の中で切る
+                    let cw = half + chamberMargin
+                    let a = jn.position + along * s0, b = jn.position + along * s1
+                    parts.append(.polygon([a + nSide * cw, b + nSide * cw, b - nSide * cw, a - nSide * cw]))
+                    let nL = Vec2(-along.y, along.x)             // 本ダクトの左壁の側
+                    leftPieces = leftPieces.flatMap {
+                        PipeSymbols.cutRun($0, from: a + nL * half, to: b + nL * half, near: jn.position + nL * half)
+                    }
+                    rightPieces = rightPieces.flatMap {
+                        PipeSymbols.cutRun($0, from: a - nL * half, to: b - nL * half, near: jn.position - nL * half)
+                    }
+                    continue
+                }
+                let a = pw + along * s0, b = pw + along * s1
+                if branchKind == "S" {
+                    // 割込み分岐(本ダクトを絞る): 枝の下流側から先、枝側の壁が枝の幅ぶん内側へ入る。
+                    // 枝の下流側の壁を本ダクトの中まで延ばして絞りの段差にする
+                    let inset = nSide * (-bod)
+                    if side >= 0 {
+                        var pieces: [[Vec2]] = []
+                        for piece in leftPieces {
+                            let cut = PipeSymbols.cutRun(piece, from: a, to: b, near: pw)
+                            for (k, part) in cut.enumerated() {
+                                if cut.count >= 2, k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol {
+                                    pieces.append([b, b + inset] + part.dropFirst().map { $0 + inset })
+                                } else {
+                                    pieces.append(part)
+                                }
+                            }
+                        }
+                        leftPieces = pieces
+                    } else {
+                        var pieces: [[Vec2]] = []
+                        for piece in rightPieces {
+                            let cut = PipeSymbols.cutRun(piece, from: a, to: b, near: pw)
+                            for (k, part) in cut.enumerated() {
+                                if cut.count >= 2, k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol {
+                                    pieces.append([b, b + inset] + part.dropFirst().map { $0 + inset })
+                                } else {
+                                    pieces.append(part)
+                                }
+                            }
+                        }
+                        rightPieces = pieces
+                    }
+                    continue
+                }
                 if side >= 0 {
                     leftPieces = leftPieces.flatMap { PipeSymbols.cutRun($0, from: a, to: b, near: pw) }
                 } else {
