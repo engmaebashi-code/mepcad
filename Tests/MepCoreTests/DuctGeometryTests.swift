@@ -203,20 +203,51 @@ final class DuctGeometryTests: XCTestCase {
         XCTAssertEqual(leftPieces[1].first!.x, 3150, accuracy: 1e-6)
     }
 
-    /// 割込み分岐(本ダクトを絞る): 枝の下流側から本ダクトの枝側の壁が枝の幅ぶん内側へ入る(M9.2)
+    /// 割込み分岐(本ダクトを絞る、施工標準 図1(a)): 本ダクトの上流側の壁がエルボの外Rで枝へ曲がり、
+    /// 枝の下流側の壁が本ダクトの中まで延びた割込み点から先は枝の幅ぶん絞られた壁になる(M9.2)
     func testSplitBranchNarrowsHost() throws {
         let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])
         let branch = duct([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)], w: 300, h: 250, branch: .split)
+        // 枝300: 外R = 300(内R=W)+150 = 450。角(2850,300)から接線長450
         let hl = try XCTUnwrap(layout(host, in: [host, branch]))
         let leftPieces = hl.runs.map(\.left).filter { !$0.isEmpty }
         XCTAssertEqual(leftPieces.count, 2)
-        XCTAssertEqual(leftPieces[0].last!.x, 2850, accuracy: 1e-6)
+        let before = leftPieces[0]
+        XCTAssertTrue(before.contains { $0.distance(to: Vec2(2400, 300)) < 1e-6 })   // 曲がり始め
+        XCTAssertEqual(before.last!.x, 2850, accuracy: 1e-6)                          // 弧の終わり
+        XCTAssertEqual(before.last!.y, 750, accuracy: 1e-6)
+        let center = Vec2(2400, 750)
+        XCTAssertTrue(before.suffix(5).allSatisfy { abs($0.distance(to: center) - 450) < 1e-6 })
         let after = leftPieces[1]
-        XCTAssertEqual(after[0].x, 3150, accuracy: 1e-6); XCTAssertEqual(after[0].y, 300, accuracy: 1e-6)
-        XCTAssertEqual(after[1].x, 3150, accuracy: 1e-6); XCTAssertEqual(after[1].y, 0, accuracy: 1e-6)
+        XCTAssertEqual(after[0].x, 3150, accuracy: 1e-6); XCTAssertEqual(after[0].y, 0, accuracy: 1e-6)   // 割込み点
         XCTAssertEqual(after.last!.x, 6000, accuracy: 1e-6); XCTAssertEqual(after.last!.y, 0, accuracy: 1e-6)
-        // 反対側の壁はそのまま
-        XCTAssertEqual(hl.runs[0].right.last!.y, -300, accuracy: 1e-6)
+        XCTAssertEqual(hl.runs[0].right.last!.y, -300, accuracy: 1e-6)               // 反対側はそのまま
+        // 枝側: 上流側(左)の壁は弧の終わりから、下流側(右)の壁は割込み点から
+        let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
+        XCTAssertEqual(bl.runs[0].left.first!.x, 2850, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].left.first!.y, 750, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.x, 3150, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.y, 0, accuracy: 1e-6)
+        XCTAssertEqual(bl.endCaps.count, 1)
+    }
+
+    /// 45°の割込み分岐でも、枝の壁は弧の終わりと割込み点から始まり、本ダクトの絞りは枝の幅ぶん
+    func testObliqueSplitBranch() throws {
+        let host = duct([Vec3(0, 0, 0), Vec3(8000, 0, 0)])
+        let branch = duct([Vec3(3000, 0, 0), Vec3(6000, 3000, 0)], w: 300, h: 250, branch: .split)
+        let sg = try XCTUnwrap(DuctGeometry.splitGeometry(foot: Vec2(3000, 0), along: Vec2(1, 0), nSide: Vec2(0, 1),
+                                                          hostWidth: 600, bdir: Vec2(1, 1) * (1 / 2.0.squareRoot()),
+                                                          branchWidth: 300))
+        XCTAssertEqual(sg.q.y, 0, accuracy: 1e-6)                    // 割込み点は絞られた壁の高さ
+        XCTAssertEqual(sg.a1.y, 300, accuracy: 1e-6)                 // 曲がり始めは本ダクトの壁の上
+        let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
+        XCTAssertEqual(bl.runs[0].left.first!.distance(to: sg.a2), 0, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.distance(to: sg.q), 0, accuracy: 1e-6)
+        let hl = try XCTUnwrap(layout(host, in: [host, branch]))
+        let leftPieces = hl.runs.map(\.left).filter { !$0.isEmpty }
+        XCTAssertEqual(leftPieces.count, 2)
+        XCTAssertEqual(leftPieces[1].first!.distance(to: sg.q), 0, accuracy: 1e-6)
+        XCTAssertEqual(leftPieces[1].last!.y, 0, accuracy: 1e-6)
     }
 
     /// チャンバー分岐: 分岐点に箱(枝幅+余裕 × 本ダクト幅+余裕)。本ダクトの両壁は箱の中で切れ、枝は箱の縁で止まる

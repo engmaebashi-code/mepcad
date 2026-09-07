@@ -40,6 +40,52 @@ public enum DuctGeometry {
         }
     }
 
+    /// 割込み分岐の幾何(施工標準 図1(a)): 枝の上流側の壁は本ダクトの壁からエルボの外Rで曲がって枝へ、
+    /// 枝の下流側の壁は本ダクトの中まで延びて「絞られた本ダクトの壁」の始点(割込み点)になる。
+    /// foot=分岐点(本ダクト芯線上)、along=本ダクトの流れ方向、nSide=枝側の法線、bdir=枝の方向(単位)
+    struct SplitGeometry {
+        /// 本ダクトの上流側の壁が曲がり始める点
+        var a1: Vec2
+        /// 曲がり(弧)の点列(a1の次〜a2)
+        var arc: [Vec2]
+        /// 枝の上流側(外側)の壁の始点(弧の終わり)
+        var a2: Vec2
+        /// 割込み点: 枝の下流側の壁と、絞られた本ダクトの壁の交点
+        var q: Vec2
+    }
+    static func splitGeometry(foot: Vec2, along: Vec2, nSide: Vec2, hostWidth w: Double,
+                              bdir: Vec2, branchWidth w2: Double) -> SplitGeometry? {
+        let dn = bdir.x * nSide.x + bdir.y * nSide.y
+        guard dn > 0.2 else { return nil }
+        var nb = Vec2(-bdir.y, bdir.x)                 // 枝の法線を上流側へ向ける
+        if nb.x * along.x + nb.y * along.y > 0 { nb = Vec2(-nb.x, -nb.y) }
+        func hit(lineThrough p0: Vec2, level: Double) -> Vec2 {
+            // 枝方向の直線 p0 + bdir·τ が、本ダクトの法線方向の高さ level に達する点
+            let d0 = (p0 - foot).x * nSide.x + (p0 - foot).y * nSide.y
+            return p0 + bdir * ((level - d0) / dn)
+        }
+        let corner = hit(lineThrough: foot + nb * (w2 / 2), level: w / 2)
+        let q = hit(lineThrough: foot - nb * (w2 / 2), level: w / 2 - w2)
+        let cosPhi = max(-1, min(1, along.x * bdir.x + along.y * bdir.y))
+        let phi = acos(cosPhi)
+        guard phi > 0.05, phi < Double.pi - 0.05 else { return nil }
+        let ro = elbowRadius(width: w2) + w2 / 2           // エルボの外R(枝の幅で)
+        let t = ro * tan(phi / 2)
+        let a1 = corner - along * t
+        let a2 = corner + bdir * t
+        let center = a1 + nSide * ro
+        let start = atan2(a1.y - center.y, a1.x - center.x)
+        let side = along.x * bdir.y - along.y * bdir.x
+        let sweep = side >= 0 ? phi : -phi
+        let steps = max(2, Int((phi / PipeBend.arcStep).rounded(.up)))
+        var arc: [Vec2] = []
+        for k in 1...steps {
+            let ang = start + sweep * Double(k) / Double(steps)
+            arc.append(Vec2(center.x + cos(ang) * ro, center.y + sin(ang) * ro))
+        }
+        return SplitGeometry(a1: a1, arc: arc, a2: a2, q: q)
+    }
+
     /// 変形(レジューサ)の長さ: 片側30°の絞り
     public static func transitionLength(from w1: Double, to w2: Double) -> Double {
         max(abs(w1 - w2) / 2 / tan(Double.pi / 6), 50)
@@ -76,6 +122,9 @@ public enum DuctGeometry {
             /// 片テーパ: 上流側の壁だけ広げる。hostUpstream=本ダクトの上流方向
             var taperUpstreamOnly = false
             var hostUpstream = Vec2(0, 0)
+            /// 割込み: 上流側の壁の始点(弧の終わり)と下流側の壁の始点(割込み点)
+            var split: SplitGeometry? = nil
+            var hostDir = Vec2(1, 0)
         }
         /// p=端の位置、d=端から内側へ向かう枝の軸方向
         func endJoint(at p: Vec3, axis d: Vec2) -> EndJoint {
@@ -98,8 +147,12 @@ public enum DuctGeometry {
                     j.trim = max(j.trim, (wallOffset - depth) / cosb)
                     j.open = true
                     j.hostWall = (jn.position + nSide * wallOffset, hostDir)
+                    j.hostDir = hostDir
                     switch spec.branchStyle {
                     case .hopper: j.flare = hopperFlare(branchWidth: w)
+                    case .split:
+                        j.split = splitGeometry(foot: jn.position, along: hostDir, nSide: nSide,
+                                                hostWidth: jn.hostOD, bdir: d, branchWidth: w)
                     case .taper:
                         // 上流側(本ダクトの作図方向の手前側)の壁だけ広げる。どちらの壁かは後で決める
                         j.flare = taperFlare
@@ -189,6 +242,27 @@ public enum DuctGeometry {
                 snapToHostWall(&left, atStart: false, axis: d1, hostWall: hw)
                 snapToHostWall(&right, atStart: false, axis: d1, hostWall: hw)
             }
+            // 割込み: 上流側の壁は弧の終わり(a2)から、下流側の壁は割込み点(q)から始める
+            func applySplit(_ j: EndJoint, atStart: Bool, axis d: Vec2) {
+                guard let sg = j.split else { return }
+                let li = atStart ? 0 : left.count - 1
+                let ri = atStart ? 0 : right.count - 1
+                // 上流側 = 本ダクトの流れ方向の座標が小さい方の壁
+                let sl = left[li].x * j.hostDir.x + left[li].y * j.hostDir.y
+                let sr = right[ri].x * j.hostDir.x + right[ri].y * j.hostDir.y
+                // 弧の終わりが枝の最初の区間より先にあるときは付けない(短い枝)
+                let legL = atStart ? left[0].distance(to: left[1]) : left[left.count - 1].distance(to: left[left.count - 2])
+                let legR = atStart ? right[0].distance(to: right[1]) : right[right.count - 1].distance(to: right[right.count - 2])
+                let outerEnd = sl <= sr ? left[li] : right[ri]
+                guard outerEnd.distance(to: sg.a2) < min(legL, legR) else { return }
+                if sl <= sr {
+                    left[li] = sg.a2; right[ri] = sg.q
+                } else {
+                    right[ri] = sg.a2; left[li] = sg.q
+                }
+            }
+            applySplit(startJoint, atStart: true, axis: d0)
+            applySplit(endJointInfo, atStart: false, axis: d1)
 
             // ホッパー: 端の壁を外へ45°で広げる
             func flare(_ wall: inout [Vec2], atStart: Bool, outward: Vec2, axis d: Vec2, h: Double) {
@@ -291,36 +365,29 @@ public enum DuctGeometry {
                 }
                 let a = pw + along * s0, b = pw + along * s1
                 if branchKind == "S" {
-                    // 割込み分岐(本ダクトを絞る): 枝の下流側から先、枝側の壁が枝の幅ぶん内側へ入る。
-                    // 枝の下流側の壁を本ダクトの中まで延ばして絞りの段差にする
+                    // 割込み分岐(本ダクトを絞る): 上流側の壁はエルボの外Rで枝へ曲がり、
+                    // 割込み点から先は枝の幅ぶん内側に入った壁になる(施工標準 図1(a))
+                    guard let sg = splitGeometry(foot: jn.position, along: along, nSide: nSide,
+                                                 hostWidth: w, bdir: bdir, branchWidth: bod) else { continue }
                     let inset = nSide * (-bod)
-                    if side >= 0 {
-                        var pieces: [[Vec2]] = []
-                        for piece in leftPieces {
-                            let cut = PipeSymbols.cutRun(piece, from: a, to: b, near: pw)
+                    func rebuild(_ pieces: [[Vec2]]) -> [[Vec2]] {
+                        var out: [[Vec2]] = []
+                        for piece in pieces {
+                            let cut = PipeSymbols.cutRun(piece, from: sg.a1, to: b, near: pw)
+                            guard cut.count >= 2 else { out.append(piece); continue }
                             for (k, part) in cut.enumerated() {
-                                if cut.count >= 2, k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol {
-                                    pieces.append([b, b + inset] + part.dropFirst().map { $0 + inset })
+                                if k == 0, let l = part.last, l.distance(to: sg.a1) <= tol {
+                                    out.append(part + sg.arc)                       // 上流の壁+弧
+                                } else if k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol {
+                                    out.append([sg.q] + part.dropFirst().map { $0 + inset })  // 絞られた壁
                                 } else {
-                                    pieces.append(part)
+                                    out.append(part)
                                 }
                             }
                         }
-                        leftPieces = pieces
-                    } else {
-                        var pieces: [[Vec2]] = []
-                        for piece in rightPieces {
-                            let cut = PipeSymbols.cutRun(piece, from: a, to: b, near: pw)
-                            for (k, part) in cut.enumerated() {
-                                if cut.count >= 2, k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol {
-                                    pieces.append([b, b + inset] + part.dropFirst().map { $0 + inset })
-                                } else {
-                                    pieces.append(part)
-                                }
-                            }
-                        }
-                        rightPieces = pieces
+                        return out
                     }
+                    if side >= 0 { leftPieces = rebuild(leftPieces) } else { rightPieces = rebuild(rightPieces) }
                     continue
                 }
                 if side >= 0 {
