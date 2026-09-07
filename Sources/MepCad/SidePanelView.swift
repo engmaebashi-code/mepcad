@@ -295,6 +295,8 @@ struct LayerRowView: View {
 struct PropertyPanelView: View {
     let controller: CanvasController
     @ObservedObject var uiState: CanvasUIState
+    /// 配管の高さ欄(選択に追従。⏎で適用)M8.2
+    @State private var pipeLevelText = ""
 
     private let lineWeights: [(Double?, String)] = [
         (nil, "レイヤ既定"), (0.1, "0.1"), (0.15, "0.15"), (0.25, "0.25"),
@@ -568,6 +570,39 @@ struct PropertyPanelView: View {
                     }
                 }
 
+                // 配管の高さ(始点の芯高さ)。数値を変えて⏎で配管全体が上下する(M8.2)
+                if sel.pipeCount > 0 {
+                    propertyRow("高さ") {
+                        HStack(spacing: 4) {
+                            Text(uiState.levelDatum)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            TextField(sel.pipeLevel == nil ? "混在" : "", text: $pipeLevelText)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11))
+                                .frame(width: 62)
+                                .multilineTextAlignment(.trailing)
+                                .onSubmit {
+                                    let raw = pipeLevelText.replacingOccurrences(of: ",", with: "")
+                                        .trimmingCharacters(in: .whitespaces)
+                                    if let v = Double(raw) { controller.shiftSelectedPipes(toLevel: v) }
+                                }
+                                .help("配管の芯の高さ(mm・基準面から)。数値を変えて⏎で配管全体が上下します(立管・勾配はそのまま)")
+                            Text("mm")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                            if let r = sel.pipeLevelRange, r.max - r.min > 0.5 {
+                                Text(String(format: "(%.0f〜%.0f)", r.min, r.max))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                                    .help("立管や勾配を含む全頂点の高さの範囲")
+                            }
+                        }
+                    }
+                    .onAppear { syncPipeLevelText(sel) }
+                    .onChange(of: sel.pipeLevel) { _, _ in syncPipeLevelText(sel) }
+                }
+
                 if let blockName = sel.commonBlockName {
                     propertyRow("ブロック") {
                         Text(sel.blockCount > 1 ? "\(blockName) ×\(sel.blockCount)" : blockName)
@@ -639,6 +674,11 @@ struct PropertyPanelView: View {
     private func layerMenuTitle(_ address: LayerAddress, _ group: LayerGroup) -> String {
         let layer = group.layers.indices.contains(address.layer) ? group.layers[address.layer] : Layer()
         return layer.name.isEmpty ? address.description : "\(address.description) \(layer.name)"
+    }
+
+    /// 高さ欄の表示を選択内容に合わせる(混在なら空欄+プレースホルダ)
+    private func syncPipeLevelText(_ sel: SelectionSummary) {
+        pipeLevelText = sel.pipeLevel.map { String(format: "%.0f", $0) } ?? ""
     }
 
     private func propertyRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {

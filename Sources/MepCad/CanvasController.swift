@@ -27,6 +27,21 @@ struct SelectionSummary: Equatable {
     var commonLineType: Int??
     var commonLineWeight: Double??
     var commonLayer: LayerAddress?
+    /// 選択中の配管の高さ(始点の芯高さmm)。全部同じならその値、混在ならnil。配管が無ければnil。M8.2
+    var pipeLevel: Double?
+    /// 選択中の配管の高さの範囲(立管を含む全頂点の最小〜最大)。配管が無ければnil
+    var pipeLevelRange: (min: Double, max: Double)?
+
+    static func == (a: SelectionSummary, b: SelectionSummary) -> Bool {
+        a.count == b.count && a.lineCount == b.lineCount && a.circleCount == b.circleCount
+            && a.arcCount == b.arcCount && a.textCount == b.textCount && a.pointCount == b.pointCount
+            && a.blockCount == b.blockCount && a.hatchCount == b.hatchCount && a.dimCount == b.dimCount
+            && a.leaderCount == b.leaderCount && a.pipeCount == b.pipeCount
+            && a.commonBlockName == b.commonBlockName && a.commonColorIndex == b.commonColorIndex
+            && a.commonLineType == b.commonLineType && a.commonLineWeight == b.commonLineWeight
+            && a.commonLayer == b.commonLayer && a.pipeLevel == b.pipeLevel
+            && a.pipeLevelRange?.min == b.pipeLevelRange?.min && a.pipeLevelRange?.max == b.pipeLevelRange?.max
+    }
 }
 
 /// キャンバスの状態と操作を束ねるコントローラ(メインスレッド専用)。
@@ -330,6 +345,15 @@ final class CanvasController: NSObject {
             guard let first = values.first else { return nil }
             return values.allSatisfy { $0 == first } ? first : nil
         }
+        // 配管の高さ(始点の芯高さ)と全頂点の範囲(M8.2)
+        var pipeStarts: [Double] = []
+        var zMin = Double.infinity, zMax = -Double.infinity
+        for e in selectedEntities {
+            guard case .pipe(let pts, _) = e.kind, let first = pts.first else { continue }
+            pipeStarts.append(first.z)
+            for p in pts { zMin = min(zMin, p.z); zMax = max(zMax, p.z) }
+        }
+        let levelCommon = common(pipeStarts.map { ($0 * 10).rounded() / 10 })
         return SelectionSummary(
             count: selectedEntities.count,
             lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
@@ -339,7 +363,9 @@ final class CanvasController: NSObject {
             commonColorIndex: common(selectedEntities.map(\.style.colorIndex)),
             commonLineType: common(selectedEntities.map(\.style.lineType)),
             commonLineWeight: common(selectedEntities.map(\.style.lineWeight)),
-            commonLayer: common(selectedEntities.map(\.layer))
+            commonLayer: common(selectedEntities.map(\.layer)),
+            pipeLevel: levelCommon,
+            pipeLevelRange: pipeStarts.isEmpty ? nil : (zMin, zMax)
         )
     }
 
@@ -1876,6 +1902,23 @@ extension CanvasController {
         guard alert.runModal() == .alertFirstButtonReturn,
               let level = Double(field.stringValue.trimmingCharacters(in: .whitespaces)) else { return }
         applyPipeLevel(level, show: check.state == .on)
+    }
+
+    /// 配管の高さをプロパティパネルの数値で変更する(M8.2)。
+    /// 始点の芯高さが指定値になるように配管全体を上下させる(立管や勾配はそのまま保つ)。
+    /// 「高さ…」ダイアログ(全頂点を同じ高さに畳む)とは違い、形は変えない
+    func shiftSelectedPipes(toLevel level: Double) {
+        let doc = document
+        let changed = updateSelection(name: String(format: "配管の高さを%@%+.0fへ", doc.levelDatum, level)) { entity in
+            guard case .pipe(let points, var attrs) = entity.kind, let first = points.first else { return }
+            let delta = level - first.z
+            guard abs(delta) > 1e-9 else { return }
+            attrs.datum = doc.levelDatum
+            entity.kind = .pipe(points: points.map { Vec3($0.xy, z: $0.z + delta) }, attrs: attrs)
+        }
+        if changed {
+            onInfo?(String(format: "配管の高さを %@%+.0f にしました(⌘Zで取り消し)", doc.levelDatum, level))
+        }
     }
 
     /// 材料集計(選択があれば選択分・なければ図面全体)をパネルで表示
