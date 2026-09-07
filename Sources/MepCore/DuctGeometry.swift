@@ -51,19 +51,32 @@ public enum DuctGeometry {
             var flare: Double = 0          // ホッパーの広がり(片側)
             var transitionTo: Double? = nil // 変形の相手の幅
             var open = false               // 端を閉じない(分岐で本ダクトに開く)
+            /// 本ダクトの壁の線(枝の壁の端をここへ揃える): 通過点と方向
+            var hostWall: (point: Vec2, dir: Vec2)? = nil
         }
+        /// p=端の位置、d=端から内側へ向かう枝の軸方向
         func endJoint(at p: Vec3, axis d: Vec2) -> EndJoint {
             var j = EndJoint()
-            for jn in junctions where jn.position.distance(to: p.xy) <= tol && abs(jn.z - p.z) <= tol {
+            for jn in junctions where abs(jn.z - p.z) <= tol {
                 switch jn.kind {
                 case .teeBranch(let host, _, let vertical):
-                    guard !vertical, jn.hostOD > 0 else { continue }
-                    let sinb = max(abs(d.x * host.y - d.y * host.x), 0.3)
-                    j.trim = max(j.trim, jn.hostOD / 2 / sinb)
+                    // 枝の端は本ダクトの芯線上か、壁の内側(M9.1: 壁へスナップして描いた場合)
+                    guard !vertical, jn.hostOD > 0,
+                          jn.position.distance(to: p.xy) <= jn.hostOD / 2 + tol else { continue }
+                    let hostDir = unit(host)
+                    // 本ダクトの法線を枝側(軸の向き)へ向ける
+                    var nSide = Vec2(-hostDir.y, hostDir.x)
+                    if nSide.x * d.x + nSide.y * d.y < 0 { nSide = Vec2(-nSide.x, -nSide.y) }
+                    let cosb = max(nSide.x * d.x + nSide.y * d.y, 0.3)      // 軸と法線の余弦(直角なら1)
+                    let depth = (p.xy - jn.position).x * nSide.x + (p.xy - jn.position).y * nSide.y
+                    // 端から本ダクトの壁までの軸方向距離(端が芯線上なら hostOD/2/cosb)
+                    let t = (jn.hostOD / 2 - depth) / cosb
+                    j.trim = max(j.trim, t)
                     j.open = true
+                    j.hostWall = (jn.position + nSide * (jn.hostOD / 2), hostDir)
                     if spec.hopperBranch { j.flare = hopperFlare(branchWidth: w) }
                 case .reducer(_, let otherOD, _, _):
-                    guard otherOD < w - 0.01 else { continue }
+                    guard jn.position.distance(to: p.xy) <= tol, otherOD < w - 0.01 else { continue }
                     j.trim = max(j.trim, transitionLength(from: w, to: otherOD))
                     j.transitionTo = otherOD
                     j.open = true
@@ -102,6 +115,7 @@ public enum DuctGeometry {
             if endJointInfo.trim > 0, pts[n - 1].distance(to: pts[n - 2]) > endJointInfo.trim + 1 {
                 pts[n - 1] = pts[n - 1] + d1 * endJointInfo.trim
             }
+            // 壁の線を書き直すときに「切り詰め後の芯の端」から正確に壁へ寄せる(snapToHostWall)
 
             // 曲がり: 角・丸・フレキは芯半径=幅、キャンバスは曲げない
             let radius = spec.shape == .canvas ? 0 : elbowRadius(width: w)
@@ -120,6 +134,28 @@ public enum DuctGeometry {
                         }
                     }
                 }
+            }
+
+            // 分岐の枝側: 壁の端を本ダクトの壁の線に正確に揃える(斜め分岐でも隙間・食い込みが出ない)
+            func snapToHostWall(_ wall: inout [Vec2], atStart: Bool, axis d: Vec2, hostWall: (point: Vec2, dir: Vec2)) {
+                guard wall.count >= 2 else { return }
+                let idx = atStart ? 0 : wall.count - 1
+                let p = wall[idx]
+                // 壁の端から軸方向(内側→端は -d)へ進んで本ダクトの壁の線に当たる点
+                let nH = Vec2(-hostWall.dir.y, hostWall.dir.x)
+                let den = d.x * nH.x + d.y * nH.y
+                guard abs(den) > 1e-9 else { return }
+                let t = ((hostWall.point - p).x * nH.x + (hostWall.point - p).y * nH.y) / den
+                guard abs(t) < w * 2 else { return }
+                wall[idx] = p + d * t
+            }
+            if let hw = startJoint.hostWall {
+                snapToHostWall(&left, atStart: true, axis: d0, hostWall: hw)
+                snapToHostWall(&right, atStart: true, axis: d0, hostWall: hw)
+            }
+            if let hw = endJointInfo.hostWall {
+                snapToHostWall(&left, atStart: false, axis: d1, hostWall: hw)
+                snapToHostWall(&right, atStart: false, axis: d1, hostWall: hw)
             }
 
             // ホッパー: 端の壁を外へ45°で広げる
@@ -186,9 +222,19 @@ public enum DuctGeometry {
                 let side = along.x * bdir.y - along.y * bdir.x
                 let nSide = Vec2(-along.y, along.x) * (side >= 0 ? 1 : -1)
                 let pw = jn.position + nSide * half
-                var openHalf = bod / 2
-                if branchKind == "H" { openHalf += hopperFlare(branchWidth: bod) }
-                let a = pw - along * openHalf, b = pw + along * openHalf
+                // 枝の両壁(軸から±bod/2)が本ダクトの壁の線と交わる位置(本ダクト方向の座標)。
+                // 直角なら ±bod/2、斜めならその分広がる(M9.1)
+                let nb = Vec2(-bdir.y, bdir.x)
+                let dn = bdir.x * nSide.x + bdir.y * nSide.y
+                guard dn > 0.2 else { continue }
+                var ss: [Double] = []
+                for sign in [1.0, -1.0] {
+                    let t = (half - sign * (bod / 2) * (nb.x * nSide.x + nb.y * nSide.y)) / dn
+                    let s = t * (bdir.x * along.x + bdir.y * along.y) + sign * (bod / 2) * (nb.x * along.x + nb.y * along.y)
+                    ss.append(s)
+                }
+                let flareExtra = branchKind == "H" ? hopperFlare(branchWidth: bod) : 0
+                let a = pw + along * (ss.min()! - flareExtra), b = pw + along * (ss.max()! + flareExtra)
                 if side >= 0 {
                     leftPieces = leftPieces.flatMap { PipeSymbols.cutRun($0, from: a, to: b, near: pw) }
                 } else {

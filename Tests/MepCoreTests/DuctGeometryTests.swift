@@ -140,6 +140,50 @@ final class DuctGeometryTests: XCTestCase {
         XCTAssertEqual(DuctSpec(shape: .rect, width: 600, height: 300).perimeter, 1800, accuracy: 1e-9)
     }
 
+    /// 壁の線へスナップして描いた枝(端が芯線から本ダクトの半幅の位置)も分岐になる(M9.1)
+    func testBranchSnappedToWallConnects() throws {
+        let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])
+        let branch = duct([Vec3(3000, 300, 0), Vec3(3000, 2000, 0)], w: 300, h: 250)
+        let js = PipeNetwork.junctions(in: [host, branch])
+        XCTAssertEqual(js[host.id]?.count, 1)
+        XCTAssertEqual(js[branch.id]?.count, 1)
+        let hl = try XCTUnwrap(layout(host, in: [host, branch]))
+        let leftPieces = hl.runs.map(\.left).filter { !$0.isEmpty }
+        XCTAssertEqual(leftPieces.count, 2)
+        XCTAssertEqual(leftPieces[0].last!.x, 2850, accuracy: 1e-6)
+        let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
+        XCTAssertEqual(bl.runs[0].left.first!.y, 300, accuracy: 1e-6)       // 切り詰めなしで壁に揃う
+        XCTAssertEqual(bl.runs[0].left.last!.y, 2000, accuracy: 1e-6)
+        XCTAssertEqual(bl.endCaps.count, 1)
+    }
+
+    /// 配管同士は従来どおり芯線上でしか繋がらない(壁の緩和はダクト同士だけ)
+    func testPipesStillRequireCenterline() {
+        let a = Entity(layer: layer, kind: .pipe(points: [Vec3(0, 0, 0), Vec3(6000, 0, 0)],
+                                                  attrs: PipeAttributes(outerDiameter: 114, doubleLine: true)))
+        let b = Entity(layer: layer, kind: .pipe(points: [Vec3(3000, 40, 0), Vec3(3000, 2000, 0)],
+                                                  attrs: PipeAttributes(outerDiameter: 89, doubleLine: true)))
+        XCTAssertNil(PipeNetwork.junctions(in: [a, b])[a.id])
+    }
+
+    /// 45°の枝: 本ダクトの開口は枝の幅/sin45°に広がり、枝の壁の端は本ダクトの壁の線に揃う
+    func testObliqueBranch() throws {
+        let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])
+        let branch = duct([Vec3(3000, 0, 0), Vec3(5000, 2000, 0)], w: 300, h: 250)
+        let hl = try XCTUnwrap(layout(host, in: [host, branch]))
+        let leftPieces = hl.runs.map(\.left).filter { !$0.isEmpty }
+        XCTAssertEqual(leftPieces.count, 2)
+        let s = 2.0.squareRoot()
+        // 軸が壁と交わる x=3300 を中心に、幅 300·√2 の開口
+        XCTAssertEqual(leftPieces[0].last!.x, 3300 - 150 * s, accuracy: 1e-6)
+        XCTAssertEqual(leftPieces[1].first!.x, 3300 + 150 * s, accuracy: 1e-6)
+        let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
+        XCTAssertEqual(bl.runs[0].left.first!.y, 300, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.y, 300, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].left.first!.x, 3300 - 150 * s, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.x, 3300 + 150 * s, accuracy: 1e-6)
+    }
+
     /// ダクトには配管の継手形状(ソケット等)は出ない
     func testNoPipeFittingShapesForDuct() {
         let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])

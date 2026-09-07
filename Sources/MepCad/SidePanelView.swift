@@ -297,6 +297,9 @@ struct PropertyPanelView: View {
     @ObservedObject var uiState: CanvasUIState
     /// 配管の高さ欄(選択に追従。⏎で適用)M8.2
     @State private var pipeLevelText = ""
+    /// ダクトのサイズ欄(選択に追従。⏎で適用)M9.1
+    @State private var ductWidthText = ""
+    @State private var ductHeightText = ""
 
     private let lineWeights: [(Double?, String)] = [
         (nil, "レイヤ既定"), (0.1, "0.1"), (0.15, "0.15"), (0.25, "0.25"),
@@ -487,10 +490,69 @@ struct PropertyPanelView: View {
                     }
                 }
 
-                // 配管セクション(配管を選択中のみ。M6.0)
+                // ダクトセクション(ダクトを選択中のみ。M9.1): 形状とサイズの表示・変更
+                if sel.ductCount > 0 {
+                    propertyRow("ダクト") {
+                        HStack(spacing: 4) {
+                            Menu {
+                                ForEach(DuctSpec.Shape.allCases, id: \.self) { shape in
+                                    Button((sel.commonDuct?.shape == shape ? "✓ " : "   ") + shape.rawValue) {
+                                        controller.applyDuctShape(shape)
+                                    }
+                                }
+                                Divider()
+                                Button("分岐をホッパーに") { controller.applyDuctHopper(true) }
+                                Button("分岐を直付け(チーズ)に") { controller.applyDuctHopper(false) }
+                            } label: {
+                                Text(sel.commonDuct?.shape.rawValue ?? "形状").font(.system(size: 11))
+                            }
+                            .fixedSize()
+                            if let d = sel.commonDuct, !d.isRound {
+                                TextField("W", text: $ductWidthText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11))
+                                    .frame(width: 50)
+                                    .multilineTextAlignment(.trailing)
+                                    .onSubmit { submitDuctSize(sel) }
+                                Text("×").font(.system(size: 11)).foregroundStyle(.secondary)
+                                TextField("H", text: $ductHeightText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11))
+                                    .frame(width: 50)
+                                    .multilineTextAlignment(.trailing)
+                                    .onSubmit { submitDuctSize(sel) }
+                                    .help("角ダクトのW×H(mm)。⏎で適用")
+                            } else {
+                                Text("φ").font(.system(size: 11)).foregroundStyle(.secondary)
+                                TextField(sel.commonDuct == nil ? "混在" : "D", text: $ductWidthText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11))
+                                    .frame(width: 50)
+                                    .multilineTextAlignment(.trailing)
+                                    .onSubmit { submitDuctSize(sel) }
+                                    .help("丸ダクトの径(mm)。⏎で適用")
+                                Menu {
+                                    ForEach(PipeMaster.standard.ductRoundSizes, id: \.self) { d in
+                                        Button("φ\(Int(d))") { controller.applyDuctSize(width: d, height: nil) }
+                                    }
+                                } label: {
+                                    Image(systemName: "chevron.down").font(.system(size: 9))
+                                }
+                                .menuStyle(.borderlessButton)
+                                .fixedSize()
+                                .help("JISスパイラル径から選ぶ")
+                            }
+                        }
+                    }
+                    .onAppear { syncDuctText(sel) }
+                    .onChange(of: sel.commonDuct) { _, _ in syncDuctText(sel) }
+                }
+
+                // 配管セクション(配管を選択中のみ。M6.0)。全部ダクトなら口径メニューは出さない
                 if sel.pipeCount > 0 {
                     propertyRow("配管") {
                         HStack(spacing: 6) {
+                            if sel.ductCount < sel.pipeCount {
                             Menu {
                                 ForEach(PipeMaster.standard.materials) { material in
                                     if material.id == PipeMaster.refrigerantMaterial {
@@ -518,8 +580,10 @@ struct PropertyPanelView: View {
                                 Text("口径").font(.system(size: 11))
                             }
                             .fixedSize()
+                            }
                             Menu {
-                                ForEach(PipeMaster.standard.usages) { usage in
+                                ForEach(sel.ductCount == sel.pipeCount ? PipeMaster.standard.ductUsages
+                                                                        : PipeMaster.standard.usages) { usage in
                                     Button {
                                         controller.applyPipeUsage(usage)
                                     } label: {
@@ -674,6 +738,25 @@ struct PropertyPanelView: View {
     private func layerMenuTitle(_ address: LayerAddress, _ group: LayerGroup) -> String {
         let layer = group.layers.indices.contains(address.layer) ? group.layers[address.layer] : Layer()
         return layer.name.isEmpty ? address.description : "\(address.description) \(layer.name)"
+    }
+
+    /// ダクトのサイズ欄を選択内容に合わせる
+    private func syncDuctText(_ sel: SelectionSummary) {
+        if let d = sel.commonDuct {
+            ductWidthText = String(format: "%.0f", d.width)
+            ductHeightText = d.isRound ? "" : String(format: "%.0f", d.height)
+        } else {
+            ductWidthText = ""
+            ductHeightText = ""
+        }
+    }
+
+    /// ダクトのサイズ欄の⏎: 数値なら適用(角はW×H、丸系はD)
+    private func submitDuctSize(_ sel: SelectionSummary) {
+        let w = Double(ductWidthText.trimmingCharacters(in: .whitespaces))
+        let h = Double(ductHeightText.trimmingCharacters(in: .whitespaces))
+        guard let w else { return }
+        controller.applyDuctSize(width: w, height: h)
     }
 
     /// 高さ欄の表示を選択内容に合わせる(混在なら空欄+プレースホルダ)

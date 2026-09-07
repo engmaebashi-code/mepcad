@@ -31,6 +31,9 @@ struct SelectionSummary: Equatable {
     var pipeLevel: Double?
     /// 選択中の配管の高さの範囲(立管を含む全頂点の最小〜最大)。配管が無ければnil
     var pipeLevelRange: (min: Double, max: Double)?
+    /// 選択中のダクト(配管のうちDuctSpec付き)の数と、全部同じならその仕様。M9.1
+    var ductCount: Int = 0
+    var commonDuct: DuctSpec?
 
     static func == (a: SelectionSummary, b: SelectionSummary) -> Bool {
         a.count == b.count && a.lineCount == b.lineCount && a.circleCount == b.circleCount
@@ -41,6 +44,7 @@ struct SelectionSummary: Equatable {
             && a.commonLineType == b.commonLineType && a.commonLineWeight == b.commonLineWeight
             && a.commonLayer == b.commonLayer && a.pipeLevel == b.pipeLevel
             && a.pipeLevelRange?.min == b.pipeLevelRange?.min && a.pipeLevelRange?.max == b.pipeLevelRange?.max
+            && a.ductCount == b.ductCount && a.commonDuct == b.commonDuct
     }
 }
 
@@ -356,7 +360,11 @@ final class CanvasController: NSObject {
             for p in pts { zMin = min(zMin, p.z); zMax = max(zMax, p.z) }
         }
         let levelCommon = common(pipeStarts.map { ($0 * 10).rounded() / 10 })
-        return SelectionSummary(
+        let ductSpecs = selectedEntities.compactMap { e -> DuctSpec? in
+            if case .pipe(_, let a) = e.kind { return a.duct }
+            return nil
+        }
+        var summary = SelectionSummary(
             count: selectedEntities.count,
             lineCount: lines, circleCount: circles, arcCount: arcs, textCount: texts,
             pointCount: points, blockCount: blocks, hatchCount: hatches, dimCount: dims,
@@ -369,6 +377,9 @@ final class CanvasController: NSObject {
             pipeLevel: levelCommon,
             pipeLevelRange: pipeStarts.isEmpty ? nil : (zMin, zMax)
         )
+        summary.ductCount = ductSpecs.count
+        summary.commonDuct = common(ductSpecs)
+        return summary
     }
 
     // MARK: - 選択オブジェクトの属性変更(プロパティパネルから)
@@ -1722,6 +1733,48 @@ extension CanvasController {
                 attrs.pairSizeLabel = ""
                 attrs.pairOuterDiameter = 0
             }
+        }
+    }
+
+    /// ダクトのサイズ変更(プロパティパネル)。角はW×H、丸系はD。平面幅・傍記も引き直す。M9.1
+    func applyDuctSize(width: Double, height: Double?) {
+        let w = max(width, 50)
+        updateSelectedPipes(name: "ダクトのサイズを変更") { attrs, _, _ in
+            guard var spec = attrs.duct else { return }
+            spec.width = w
+            if spec.shape == .rect { spec.height = max(height ?? spec.height, 50) }
+            else if spec.shape == .canvas { spec.height = max(height ?? spec.height, 0) }
+            else { spec.height = 0 }
+            attrs.duct = spec
+            attrs.outerDiameter = w
+            attrs.size = spec.sizeLabel
+            attrs.sizeLabel = spec.sizeLabel
+            attrs.bendRadius = (spec.shape == .flex || spec.shape == .canvas) ? w : 0
+        }
+    }
+
+    /// ダクトの形状変更(角⇄丸⇄フレキ⇄キャンバス)。角→丸はWを径に、丸→角はH=Wにする。M9.1
+    func applyDuctShape(_ shape: DuctSpec.Shape) {
+        updateSelectedPipes(name: "ダクトを\(shape.rawValue)に変更") { attrs, _, _ in
+            guard var spec = attrs.duct else { return }
+            let wasRound = spec.isRound
+            spec.shape = shape
+            if shape == .rect, wasRound { spec.height = spec.width }
+            if shape == .round || shape == .flex { spec.height = 0 }
+            attrs.duct = spec
+            attrs.size = spec.sizeLabel
+            attrs.sizeLabel = spec.sizeLabel
+            attrs.bendRadius = (shape == .flex || shape == .canvas) ? spec.width : 0
+        }
+    }
+
+    /// 分岐をホッパー/直付けに切替(枝ダクト側)。M9.1
+    func applyDuctHopper(_ on: Bool) {
+        updateSelectedPipes(name: on ? "分岐をホッパーに" : "分岐を直付けに") { attrs, _, _ in
+            guard var spec = attrs.duct else { return }
+            spec.hopperBranch = on
+            attrs.duct = spec
+            attrs.branchKind = on ? "H" : "T"
         }
     }
 

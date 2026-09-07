@@ -99,7 +99,11 @@ public enum PipeNetwork {
                         let b = other.points[i + 1]
                         guard a.xy.distance(to: b.xy) > PipeGeometry.planEpsilon else { continue }
                         let foot = HitGeometry.closestPointOnSegment(end.point.xy, a.xy, b.xy)
-                        guard foot.distance(to: end.point.xy) <= tol else { continue }
+                        // ダクト同士は芯線が描かれないので、枝の端が本ダクトの壁の内側(平面幅の半分まで)に
+                        // あれば分岐とみなす(壁の線へスナップして描いても繋がる)。配管は従来どおり芯線上のみ。M9.1
+                        let reach = (p.attrs.isDuct && other.attrs.isDuct)
+                            ? other.attrs.outerDiameter / 2 + tol : tol
+                        guard foot.distance(to: end.point.xy) <= reach else { continue }
                         // 端点(=接続点として別途処理)は除く
                         if foot.distance(to: a.xy) <= tol || foot.distance(to: b.xy) <= tol { continue }
                         // 高さ: 水平区間はa.z、立管でない前提でaのzと比較
