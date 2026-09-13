@@ -52,6 +52,12 @@ public enum DuctGeometry {
         var a2: Vec2
         /// 割込み点: 枝の下流側の壁と、絞られた本ダクトの壁の交点
         var q: Vec2
+        /// 曲り分岐の下流側の内角のR: 枝の壁側の接点 → 弧の点列 → 本ダクトの壁側の接点(M9.3a)
+        var innerTangentBranch: Vec2
+        var innerArc: [Vec2]
+        var innerTangentHost: Vec2
+        /// 内角のRの接線長(枝の壁の端をこれだけ枝側へ寄せる)
+        var innerTangent: Double
     }
     static func splitGeometry(foot: Vec2, along: Vec2, nSide: Vec2, hostWidth w: Double,
                               bdir: Vec2, branchWidth w2: Double) -> SplitGeometry? {
@@ -83,7 +89,26 @@ public enum DuctGeometry {
             let ang = start + sweep * Double(k) / Double(steps)
             arc.append(Vec2(center.x + cos(ang) * ro, center.y + sin(ang) * ro))
         }
-        return SplitGeometry(a1: a1, arc: arc, a2: a2, q: q)
+        // 下流側の内角のR(FILDERの取出しと同じく内側にも小さいR): 枝幅のエルボの内R
+        let cornerDown = hit(lineThrough: foot - nb * (w2 / 2), level: w / 2)
+        let ri = max(elbowRadius(width: w2) - w2 / 2, 1)
+        let ti = ri / tan(phi / 2)                           // 内角φの頂点から接点までの距離
+        let th = cornerDown + along * ti
+        let tb = cornerDown + bdir * ti
+        let ic = th + nSide * ri
+        let is0 = atan2(tb.y - ic.y, tb.x - ic.x)
+        var isweep = atan2(th.y - ic.y, th.x - ic.x) - is0
+        while isweep > Double.pi { isweep -= 2 * Double.pi }
+        while isweep < -Double.pi { isweep += 2 * Double.pi }
+        let isteps = max(2, Int((abs(isweep) / PipeBend.arcStep).rounded(.up)))
+        var innerArc: [Vec2] = []
+        for k in 0...isteps {
+            let ang = is0 + isweep * Double(k) / Double(isteps)
+            innerArc.append(Vec2(ic.x + cos(ang) * ri, ic.y + sin(ang) * ri))
+        }
+        return SplitGeometry(a1: a1, arc: arc, a2: a2, q: q,
+                             innerTangentBranch: tb, innerArc: innerArc, innerTangentHost: th,
+                             innerTangent: ti)
     }
 
     /// 変形(レジューサ)の長さ: 片側30°の絞り
@@ -261,10 +286,10 @@ public enum DuctGeometry {
                 guard outerEnd.distance(to: sg.a2) < min(legL, legR) else { return }
                 if sl <= sr {
                     left[li] = sg.a2
-                    if j.splitNarrows { right[ri] = sg.q }
+                    right[ri] = j.splitNarrows ? sg.q : sg.innerTangentBranch
                 } else {
                     right[ri] = sg.a2
-                    if j.splitNarrows { left[li] = sg.q }
+                    left[li] = j.splitNarrows ? sg.q : sg.innerTangentBranch
                 }
                 // 曲り分岐: 弧の終わりの高さで枝を横切る継目(取出し部品と直管の境)
                 if !j.splitNarrows {
@@ -394,6 +419,9 @@ public enum DuctGeometry {
                                     out.append(part + sg.arc)                       // 上流の壁+弧
                                 } else if narrows, k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol {
                                     out.append([sg.q] + part.dropFirst().map { $0 + inset })  // 絞られた壁
+                                } else if !narrows, k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol,
+                                          part.count >= 2, f.distance(to: part[1]) > sg.innerTangent + 1 {
+                                    out.append(sg.innerArc + part.dropFirst())     // 内角のR+下流の壁
                                 } else {
                                     out.append(part)
                                 }

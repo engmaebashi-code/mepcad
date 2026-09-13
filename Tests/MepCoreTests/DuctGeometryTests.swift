@@ -241,15 +241,25 @@ final class DuctGeometryTests: XCTestCase {
         XCTAssertEqual(leftPieces.count, 2)
         XCTAssertEqual(leftPieces[0].last!.x, 2850, accuracy: 1e-6)
         XCTAssertEqual(leftPieces[0].last!.y, 750, accuracy: 1e-6)
-        XCTAssertEqual(leftPieces[1].first!.x, 3150, accuracy: 1e-6)    // 下流側は直付け・幅そのまま
-        XCTAssertEqual(leftPieces[1].first!.y, 300, accuracy: 1e-6)
-        XCTAssertEqual(leftPieces[1].last!.y, 300, accuracy: 1e-6)
+        // 下流側の内角: 枝幅300のエルボ内R=150。枝の壁側の接点(3150,450)→弧→本ダクトの壁側の接点(3300,300)
+        let down = leftPieces[1]
+        XCTAssertEqual(down.first!.x, 3150, accuracy: 1e-6)
+        XCTAssertEqual(down.first!.y, 450, accuracy: 1e-6)
+        XCTAssertTrue(down.contains { $0.distance(to: Vec2(3300, 300)) < 1e-6 })
+        let ic = Vec2(3300, 450)
+        XCTAssertTrue(down.prefix(5).allSatisfy { abs($0.distance(to: ic) - 150) < 1e-6 })
+        XCTAssertEqual(down.last!.y, 300, accuracy: 1e-6)                 // 本ダクトは絞らない
         let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
         XCTAssertEqual(bl.runs[0].left.first!.y, 750, accuracy: 1e-6)
-        XCTAssertEqual(bl.runs[0].right.first!.y, 300, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.x, 3150, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.y, 450, accuracy: 1e-6)    // 内角のRの接点から
         let seams = polylines(bl)
         XCTAssertTrue(seams.contains { $0.count == 2 && $0[0].distance(to: Vec2(2850, 750)) < 1e-6
                                         && $0[1].distance(to: Vec2(3150, 750)) < 1e-6 })
+        // 割込み・直付けの幾何は変わらない(内角のRは曲りだけ)
+        let direct = duct([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)], w: 300, h: 250, branch: .direct)
+        let dl = try XCTUnwrap(layout(direct, in: [host, direct]))
+        XCTAssertEqual(dl.runs[0].right.first!.y, 300, accuracy: 1e-6)
     }
 
     /// 壁の少し外(枝幅の1/4以内)で止めた枝も分岐になり、壁の端が本ダクトの壁まで延びる(M9.3)
