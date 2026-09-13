@@ -88,7 +88,7 @@ final class CanvasUIState: ObservableObject {
     @Published var ductShape: DuctSpec.Shape = .rect
     @Published var ductWidth: Double = 400       // 角: W / 丸系: D
     @Published var ductHeight: Double = 250      // 角: H
-    @Published var ductBranch: DuctSpec.BranchStyle = .direct   // 分岐の形(枝側)M9.2
+    @Published var ductBranch: DuctSpec.BranchStyle = .radius   // 分岐の形(枝側)M9.2/M9.3 既定は曲り
     @Published var ductAnnotate = true
     @Published var pipeAnnotate = true
     @Published var pipeTextSize: Double = 2.5   // 紙面mm
@@ -1325,7 +1325,7 @@ struct DuctPropertyCard: View {
                 }
                 .pickerStyle(.menu)
                 .fixedSize()
-                .help("このダクトを枝として本ダクトへ付けたときの分岐の形: 直付け / 片テーパ(上流側150mm・45°) / ホッパー(両側45°) / 割込み(本ダクトを枝の幅ぶん絞る) / チャンバー(分岐点に箱)")
+                .help("このダクトを枝として本ダクトへ付けたときの分岐の形: 曲り(上流側がRで曲がる。FILDER標準) / 直付け / 片テーパ(上流側150mm・45°) / ホッパー(両側45°) / 割込み(本ダクトを枝の幅ぶん絞る) / チャンバー(分岐点に箱)")
             }
         }
         .padding(.horizontal, 12)

@@ -122,8 +122,9 @@ public enum DuctGeometry {
             /// 片テーパ: 上流側の壁だけ広げる。hostUpstream=本ダクトの上流方向
             var taperUpstreamOnly = false
             var hostUpstream = Vec2(0, 0)
-            /// 割込み: 上流側の壁の始点(弧の終わり)と下流側の壁の始点(割込み点)
+            /// 割込み・曲り: 上流側の壁の始点(弧の終わり)と、割込みなら下流側の壁の始点(割込み点)
             var split: SplitGeometry? = nil
+            var splitNarrows = false
             var hostDir = Vec2(1, 0)
         }
         /// p=端の位置、d=端から内側へ向かう枝の軸方向
@@ -134,7 +135,8 @@ public enum DuctGeometry {
                 case .teeBranch(let host, _, let vertical):
                     // 枝の端は本ダクトの芯線上か、壁の内側(M9.1: 壁へスナップして描いた場合)
                     guard !vertical, jn.hostOD > 0,
-                          jn.position.distance(to: p.xy) <= jn.hostOD / 2 + tol else { continue }
+                          jn.position.distance(to: p.xy) <= jn.hostOD / 2 + max(25, min(100, w / 4)) + tol
+                    else { continue }
                     let hostDir = unit(host)
                     // 本ダクトの法線を枝側(軸の向き)へ向ける
                     var nSide = Vec2(-hostDir.y, hostDir.x)
@@ -150,9 +152,11 @@ public enum DuctGeometry {
                     j.hostDir = hostDir
                     switch spec.branchStyle {
                     case .hopper: j.flare = hopperFlare(branchWidth: w)
-                    case .split:
+                    case .split, .radius:
+                        // 曲り分岐も上流側の壁は同じ弧。割込みだけ下流側を割込み点から始める
                         j.split = splitGeometry(foot: jn.position, along: hostDir, nSide: nSide,
                                                 hostWidth: jn.hostOD, bdir: d, branchWidth: w)
+                        j.splitNarrows = spec.branchStyle == .split
                     case .taper:
                         // 上流側(本ダクトの作図方向の手前側)の壁だけ広げる。どちらの壁かは後で決める
                         j.flare = taperFlare
@@ -256,9 +260,17 @@ public enum DuctGeometry {
                 let outerEnd = sl <= sr ? left[li] : right[ri]
                 guard outerEnd.distance(to: sg.a2) < min(legL, legR) else { return }
                 if sl <= sr {
-                    left[li] = sg.a2; right[ri] = sg.q
+                    left[li] = sg.a2
+                    if j.splitNarrows { right[ri] = sg.q }
                 } else {
-                    right[ri] = sg.a2; left[li] = sg.q
+                    right[ri] = sg.a2
+                    if j.splitNarrows { left[li] = sg.q }
+                }
+                // 曲り分岐: 弧の終わりの高さで枝を横切る継目(取出し部品と直管の境)
+                if !j.splitNarrows {
+                    let inner = sl <= sr ? right[ri] : left[li]
+                    let along = (sg.a2 - inner).x * d.x + (sg.a2 - inner).y * d.y
+                    parts.append(.polyline([sg.a2, inner + d * along]))
                 }
             }
             applySplit(startJoint, atStart: true, axis: d0)
@@ -364,12 +376,14 @@ public enum DuctGeometry {
                     continue
                 }
                 let a = pw + along * s0, b = pw + along * s1
-                if branchKind == "S" {
+                if branchKind == "S" || branchKind == "R" {
                     // 割込み分岐(本ダクトを絞る): 上流側の壁はエルボの外Rで枝へ曲がり、
-                    // 割込み点から先は枝の幅ぶん内側に入った壁になる(施工標準 図1(a))
+                    // 割込み点から先は枝の幅ぶん内側に入った壁になる(施工標準 図1(a))。
+                    // 曲り分岐(FILDER標準): 同じ弧で枝へ曲がるが、本ダクトは絞らない
                     guard let sg = splitGeometry(foot: jn.position, along: along, nSide: nSide,
                                                  hostWidth: w, bdir: bdir, branchWidth: bod) else { continue }
-                    let inset = nSide * (-bod)
+                    let narrows = branchKind == "S"
+                    let inset = narrows ? nSide * (-bod) : Vec2(0, 0)
                     func rebuild(_ pieces: [[Vec2]]) -> [[Vec2]] {
                         var out: [[Vec2]] = []
                         for piece in pieces {
@@ -378,7 +392,7 @@ public enum DuctGeometry {
                             for (k, part) in cut.enumerated() {
                                 if k == 0, let l = part.last, l.distance(to: sg.a1) <= tol {
                                     out.append(part + sg.arc)                       // 上流の壁+弧
-                                } else if k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol {
+                                } else if narrows, k == cut.count - 1, let f = part.first, f.distance(to: b) <= tol {
                                     out.append([sg.q] + part.dropFirst().map { $0 + inset })  // 絞られた壁
                                 } else {
                                     out.append(part)

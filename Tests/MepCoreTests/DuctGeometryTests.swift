@@ -231,6 +231,37 @@ final class DuctGeometryTests: XCTestCase {
         XCTAssertEqual(bl.endCaps.count, 1)
     }
 
+    /// 曲り分岐(FILDER標準・既定): 上流側の壁が弧で枝へ曲がり、本ダクトは絞らない。弧の終わりに継目(M9.3)
+    func testRadiusBranch() throws {
+        let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])
+        let branch = duct([Vec3(3000, 0, 0), Vec3(3000, 2000, 0)], w: 300, h: 250, branch: .radius)
+        XCTAssertEqual(DuctSpec(shape: .rect, width: 300, height: 250).branchStyle, .radius)
+        let hl = try XCTUnwrap(layout(host, in: [host, branch]))
+        let leftPieces = hl.runs.map(\.left).filter { !$0.isEmpty }
+        XCTAssertEqual(leftPieces.count, 2)
+        XCTAssertEqual(leftPieces[0].last!.x, 2850, accuracy: 1e-6)
+        XCTAssertEqual(leftPieces[0].last!.y, 750, accuracy: 1e-6)
+        XCTAssertEqual(leftPieces[1].first!.x, 3150, accuracy: 1e-6)    // 下流側は直付け・幅そのまま
+        XCTAssertEqual(leftPieces[1].first!.y, 300, accuracy: 1e-6)
+        XCTAssertEqual(leftPieces[1].last!.y, 300, accuracy: 1e-6)
+        let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
+        XCTAssertEqual(bl.runs[0].left.first!.y, 750, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.y, 300, accuracy: 1e-6)
+        let seams = polylines(bl)
+        XCTAssertTrue(seams.contains { $0.count == 2 && $0[0].distance(to: Vec2(2850, 750)) < 1e-6
+                                        && $0[1].distance(to: Vec2(3150, 750)) < 1e-6 })
+    }
+
+    /// 壁の少し外(枝幅の1/4以内)で止めた枝も分岐になり、壁の端が本ダクトの壁まで延びる(M9.3)
+    func testBranchSlightlyOutsideWallConnects() throws {
+        let host = duct([Vec3(0, 0, 0), Vec3(6000, 0, 0)])
+        let branch = duct([Vec3(3000, 360, 0), Vec3(3000, 2000, 0)], w: 300, h: 250, branch: .direct)
+        XCTAssertEqual(PipeNetwork.junctions(in: [host, branch])[host.id]?.count, 1)
+        let bl = try XCTUnwrap(layout(branch, in: [host, branch]))
+        XCTAssertEqual(bl.runs[0].left.first!.y, 300, accuracy: 1e-6)
+        XCTAssertEqual(bl.runs[0].right.first!.y, 300, accuracy: 1e-6)
+    }
+
     /// 45°の割込み分岐でも、枝の壁は弧の終わりと割込み点から始まり、本ダクトの絞りは枝の幅ぶん
     func testObliqueSplitBranch() throws {
         let host = duct([Vec3(0, 0, 0), Vec3(8000, 0, 0)])

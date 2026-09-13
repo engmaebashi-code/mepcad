@@ -26,6 +26,8 @@ public struct DuctSpec: Equatable, Codable, Sendable {
     public var height: Double
     /// 枝ダクトとして本ダクトに取り付くときの分岐の形(枝側の属性)。M9.2
     public enum BranchStyle: String, Codable, CaseIterable, Sendable {
+        /// 曲り分岐(FILDERの標準形): 上流側の壁がエルボのRで枝へ曲がり、下流側は直付け。本ダクトは絞らない
+        case radius = "曲り"
         /// 直付け(チーズ)
         case direct = "直付け"
         /// 片テーパ付き直付け: 上流側だけ150mm・45°で広げる(施工標準の標準形)
@@ -40,6 +42,7 @@ public struct DuctSpec: Equatable, Codable, Sendable {
         /// 本ダクト側へ渡す印(PipeAttributes.branchKind)
         public var code: String {
             switch self {
+            case .radius: return "R"
             case .direct: return "T"
             case .taper: return "P"
             case .hopper: return "H"
@@ -50,7 +53,7 @@ public struct DuctSpec: Equatable, Codable, Sendable {
     }
     public var branchStyle: BranchStyle
 
-    public init(shape: Shape, width: Double, height: Double = 0, branchStyle: BranchStyle = .direct) {
+    public init(shape: Shape, width: Double, height: Double = 0, branchStyle: BranchStyle = .radius) {
         self.shape = shape
         self.width = width
         self.height = height
